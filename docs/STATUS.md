@@ -1,15 +1,15 @@
 # Status — 2026-09-07
 
-Migration update: 2026-09-07. The current native source builds and passes its
-isolated Debug and Release checks on the Pi. The production service remains on
-the preserved legacy runtime until the native cutover and live telemetry check
-complete.
+Migration update: 2026-09-07. The Pi now runs the validated native C++ dashboard
+and recorder. Isolated Debug and Release checks passed before cutover; live
+simulator acceptance remains open.
 
 ## Last verified
 
-- Pi `rapid.service`, `rapid-display.service`, and `rapid-log-status.service` are active.
-  The native `rapid-pi` cutover remains pending final validation.
-- The native dashboard source has Drive, Timing, Vehicle, Tyres, and Graphs touch pages. Graphs retain 30 seconds of pedal and G-force history in the dashboard browser; deployment remains pending validation.
+- Pi `rapid.service`, `rapid-display.service`, and `rapid-log-status.service` are active
+  with zero restarts after cutover. `rapid.service` runs C++ `rapid-pi`.
+- The deployed dashboard has Drive, Timing, Vehicle, Tyres, and Graphs touch pages.
+  Graphs retain 30 seconds of pedal and G-force history in the dashboard browser.
 - `\\rapid\Telemetry` is the working authenticated SMB location for finalized bundles.
 - Native Windows companion source builds and passes its synthetic LD self-test.
 - Current commit `85ff713` passed all five Pi Debug CTest targets: network,
@@ -31,7 +31,7 @@ to 100 MB and 14 days.
 
 - Lap files are produced when a session bundle finalizes, not after each completed lap.
 - Fallback sectors are distance thirds where canonical sector loops are unavailable.
-- Native Pi/archive implementation is present; production cutover and live
-  telemetry acceptance remain pending.
+- Native Pi/archive implementation is present. Live simulator and archive
+  acceptance remain pending.
 - Hosted CI results are available through GitHub Actions after publication.
 - Four-simulator live acceptance and immediate lap publication remain open.
