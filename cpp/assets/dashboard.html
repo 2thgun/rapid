@@ -59,8 +59,8 @@
   .lap-count strong { color: #f6b91a; font-size: 18px; }
   .page { display: none; min-height: 0; }
   .page.active { display: grid; }
-  .touch-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
-  .touch-nav button { border: 1px solid #27323a; border-radius: 3px; background: #10161b; color: #aab7c0; font-size: 13px; font-weight: 800; letter-spacing: .05em; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .touch-nav { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .touch-nav button { border: 1px solid #27323a; border-radius: 3px; background: #10161b; color: #aab7c0; font-size: 11px; font-weight: 800; letter-spacing: .04em; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .touch-nav button.active { border-color: #f6b91a; color: #f6b91a; background: #221c0d; }
   .telemetry-page { grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .telemetry-page .card { display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
@@ -70,6 +70,14 @@
   .tyre-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; align-content: center; }
   .tyre { padding: 7px; background: #0c1115; border-top: 3px solid #27323a; }
   .tyre strong { display: block; margin-top: 4px; font-size: 16px; }
+  .graph-page { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .graph-card { display: grid; grid-template-rows: auto 1fr auto; gap: 5px; padding: 7px; overflow: hidden; }
+  .graph-head { display: flex; align-items: baseline; justify-content: space-between; gap: 5px; }
+  .graph-value { color: #f4f7f9; font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .graph-canvas { width: 100%; height: 100%; min-height: 0; background: #0c1115; border: 1px solid #202a31; }
+  .graph-legend { display: flex; flex-wrap: wrap; gap: 7px; color: #aab7c0; font-size: 9px; font-weight: 700; }
+  .graph-key { display: inline-flex; align-items: center; gap: 3px; }
+  .graph-key::before { content: ''; width: 8px; height: 2px; background: var(--line); }
 </style>
 <main class="shell">
   <header><div id="status">Waiting for daemon connection…</div><div class="header-right"><div id="sim">raPId</div><div id="log-status" role="status" aria-live="polite"></div><div id="power-status">PWR …</div></div></header>
@@ -142,7 +150,19 @@
     <div class="card"><span class="label">SUSPENSION</span><div class="value-grid"><div class="metric"><span class="label">FRONT</span><strong id="suspension-front">â€”</strong></div><div class="metric"><span class="label">REAR</span><strong id="suspension-rear">â€”</strong></div></div></div>
     <div class="card"><span class="label">STATUS</span><div class="value-grid"><div class="metric"><span class="label">SOURCE</span><strong id="tyre-source">LIVE</strong></div></div></div>
   </section>
-  <nav class="touch-nav" aria-label="Dashboard pages"><button class="active" data-page="drive">DRIVE</button><button data-page="timing">TIMING</button><button data-page="vehicle">VEHICLE</button><button data-page="tyres">TYRES</button></nav>
+  <section id="graphs" class="graph-page page">
+    <div class="card graph-card">
+      <div class="graph-head"><span class="label">PEDAL HISTORY</span><span class="graph-value" id="pedal-graph-value">--</span></div>
+      <canvas class="graph-canvas" id="pedal-graph" aria-label="Throttle and brake history"></canvas>
+      <div class="graph-legend"><span class="graph-key" style="--line:#20cf75">THROTTLE</span><span class="graph-key" style="--line:#ef4458">BRAKE</span><span>30 SEC</span></div>
+    </div>
+    <div class="card graph-card">
+      <div class="graph-head"><span class="label">G FORCE HISTORY</span><span class="graph-value" id="g-graph-value">--</span></div>
+      <canvas class="graph-canvas" id="g-graph" aria-label="Lateral and longitudinal G force history"></canvas>
+      <div class="graph-legend"><span class="graph-key" style="--line:#34bdf2">LATERAL</span><span class="graph-key" style="--line:#f6b91a">LONG.</span><span>&plusmn;2.5G</span></div>
+    </div>
+  </section>
+  <nav class="touch-nav" aria-label="Dashboard pages"><button class="active" data-page="drive">DRIVE</button><button data-page="timing">TIMING</button><button data-page="vehicle">VEHICLE</button><button data-page="tyres">TYRES</button><button data-page="graphs">GRAPHS</button></nav>
 </main>
 <script>
 const fields = {};
@@ -159,10 +179,53 @@ const formatTime = milliseconds => milliseconds == null ? '—' :
 
 const touchPages = [...document.querySelectorAll('.page')];
 const touchButtons = [...document.querySelectorAll('.touch-nav button')];
-function showPage(name) { touchPages.forEach(page => page.classList.toggle('active', page.id === name)); touchButtons.forEach(button => button.classList.toggle('active', button.dataset.page === name)); }
+function showPage(name) { touchPages.forEach(page => page.classList.toggle('active', page.id === name)); touchButtons.forEach(button => button.classList.toggle('active', button.dataset.page === name)); if (name === 'graphs') requestAnimationFrame(redrawGraphs); }
 touchButtons.forEach(button => button.addEventListener('pointerdown', event => { event.preventDefault(); showPage(button.dataset.page); }));
 const setMetric = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = value == null ? '--' : value; };
 const pair = (left, right, unit = '') => left == null || right == null ? '--' : `${Math.round(left)} / ${Math.round(right)}${unit}`;
+
+const graphHistory = [];
+const graphWindowMs = 30000;
+function drawGraph(canvas, series, minimum, maximum) {
+  const bounds = canvas.getBoundingClientRect();
+  if (bounds.width < 2 || bounds.height < 2) return;
+  const density = window.devicePixelRatio || 1;
+  const width = Math.round(bounds.width * density), height = Math.round(bounds.height * density);
+  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+  const context = canvas.getContext('2d');
+  context.setTransform(density, 0, 0, density, 0, 0);
+  context.clearRect(0, 0, bounds.width, bounds.height);
+  context.strokeStyle = '#29343b'; context.lineWidth = 1;
+  for (let index = 1; index < 4; index += 1) { const y = Math.round(bounds.height * index / 4) + .5; context.beginPath(); context.moveTo(0, y); context.lineTo(bounds.width, y); context.stroke(); }
+  const now = performance.now();
+  for (const line of series) {
+    context.beginPath(); context.strokeStyle = line.color; context.lineWidth = 2; let drawing = false;
+    for (const sample of graphHistory) {
+      const value = sample[line.key];
+      if (value == null || !Number.isFinite(value)) { drawing = false; continue; }
+      const x = bounds.width * (1 - (now - sample.time) / graphWindowMs);
+      const y = bounds.height * (1 - clamp((value - minimum) / (maximum - minimum), 0, 1));
+      if (!drawing) { context.moveTo(x, y); drawing = true; } else context.lineTo(x, y);
+    }
+    context.stroke();
+  }
+}
+function redrawGraphs() {
+  drawGraph(document.getElementById('pedal-graph'), [{key: 'throttle', color: '#20cf75'}, {key: 'brake', color: '#ef4458'}], 0, 100);
+  drawGraph(document.getElementById('g-graph'), [{key: 'lateral', color: '#34bdf2'}, {key: 'longitudinal', color: '#f6b91a'}], -2.5, 2.5);
+}
+function addGraphSample(state) {
+  const numberOrNull = value => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
+  graphHistory.push({ time: performance.now(), throttle: numberOrNull(state.throttle) == null ? null : clamp(Number(state.throttle), 0, 1) * 100,
+    brake: numberOrNull(state.brake) == null ? null : clamp(Number(state.brake), 0, 1) * 100,
+    lateral: numberOrNull(state.g_x), longitudinal: numberOrNull(state.g_z) });
+  const oldest = performance.now() - graphWindowMs;
+  while (graphHistory.length && graphHistory[0].time < oldest) graphHistory.shift();
+  setMetric('pedal-graph-value', state.throttle == null || state.brake == null ? null : `${Math.round(clamp(Number(state.throttle), 0, 1) * 100)} / ${Math.round(clamp(Number(state.brake), 0, 1) * 100)}%`);
+  setMetric('g-graph-value', state.g_x == null || state.g_z == null ? null : `${Number(state.g_x).toFixed(2)} / ${Number(state.g_z).toFixed(2)}g`);
+  redrawGraphs();
+}
+new ResizeObserver(redrawGraphs).observe(document.querySelector('.shell'));
 
 let lastLogSequence = null;
 let logNoticeTimer;
@@ -218,6 +281,7 @@ async function tick() {
     fields['g-dot'].style.top = `${50 + clamp(gz / 2, -1, 1) * 42}%`;
     fields['g-value'].textContent = state.g_x == null ? '—' : `${Math.hypot(gx, gz).toFixed(2)}g`;
     fields['lap-number'].textContent = state.lap_number ?? '—';
+    addGraphSample(state);
     setMetric('timing-lap', formatTime(state.current_lap_ms)); setMetric('timing-last', formatTime(state.completed_lap_ms));
     setMetric('timing-best', formatTime(state.best_lap_ms));
     setMetric('timing-delta', state.delta_ms == null ? null : `${state.delta_ms > 0 ? '+' : ''}${formatTime(Math.abs(state.delta_ms))}`);

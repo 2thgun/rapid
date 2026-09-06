@@ -4,7 +4,8 @@ raPId is a Raspberry Pi racing dashboard, Windows telemetry companion, and MoTeC
 
 ## Features
 
-- 480×320 Raspberry Pi touch dashboard with Drive, Timing, Vehicle and Tyres pages.
+- 480×320 Raspberry Pi touch dashboard with Drive, Timing, Vehicle, Tyres and live Graphs pages.
+- Graphs retain 30 seconds of throttle/brake and lateral/longitudinal G-force history in the browser.
 - Windows C++ telemetry companion with adapters for ACC, AC, ACE and iRacing.
 - Live engineering telemetry in a browser, with selectable traces and history.
 - MoTeC compatible session recordings and completed-lap files, available through

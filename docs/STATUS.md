@@ -9,7 +9,7 @@ require verification before deployment.
 
 - Pi `rapid.service`, `rapid-display.service`, and `rapid-log-status.service` are active.
   The native `rapid-pi` cutover remains pending final validation.
-- The Pi has Drive, Timing, Vehicle, and Tyres touch pages.
+- The native dashboard source has Drive, Timing, Vehicle, Tyres, and Graphs touch pages. Graphs retain 30 seconds of pedal and G-force history in the dashboard browser; deployment remains pending validation.
 - `\\rapid\Telemetry` is the working authenticated SMB location for finalized bundles.
 - Native Windows companion source builds and passes its synthetic LD self-test.
 - Five CTest targets passed on the Pi in Debug: network, archive, runtime/recorder,
