@@ -1,9 +1,9 @@
-# Status — 2026-09-06
+# Status — 2026-09-07
 
-Migration update: 2026-09-06. Native Pi and archive implementations now build and
-pass initial isolated tests on the Pi. The production service has not been switched.
-The optimized build, extended upload test and latest compatibility fixes still
-require verification before deployment.
+Migration update: 2026-09-07. The current native source builds and passes its
+isolated Debug and Release checks on the Pi. The production service remains on
+the preserved legacy runtime until the native cutover and live telemetry check
+complete.
 
 ## Last verified
 
@@ -12,10 +12,10 @@ require verification before deployment.
 - The native dashboard source has Drive, Timing, Vehicle, Tyres, and Graphs touch pages. Graphs retain 30 seconds of pedal and G-force history in the dashboard browser; deployment remains pending validation.
 - `\\rapid\Telemetry` is the working authenticated SMB location for finalized bundles.
 - Native Windows companion source builds and passes its synthetic LD self-test.
-- Five CTest targets passed on the Pi in Debug: network, archive, runtime/recorder,
-  log status and protocol. Network checks covered UDP, HTTP, WebSocket history
-  and disconnect finalization. Later upload integration and compatibility changes
-  require another build/test pass.
+- Current commit `85ff713` passed all five Pi Debug CTest targets: network,
+  archive, runtime/recorder, log status and protocol. Its Release build passed
+  the four release-safe targets; `rapid-protocol-tests` is assertion-dependent.
+  Network checks cover UDP, HTTP, WebSocket history and disconnect finalization.
 - A real journal event advanced the native HTTP status with warning severity.
 - Dashboard services started at 8.500/8.503 seconds into userspace after removing
   their network-online dependency. Overall boot remains about 25 seconds.
@@ -31,8 +31,7 @@ to 100 MB and 14 days.
 
 - Lap files are produced when a session bundle finalizes, not after each completed lap.
 - Fallback sectors are distance thirds where canonical sector loops are unavailable.
-- Native Pi/archive implementation is present; production cutover remains pending.
-- The latest local sender-compatibility and validation fixes are not yet built on
-  the Pi. The earlier 20-file deployed-source comparison predates this migration.
+- Native Pi/archive implementation is present; production cutover and live
+  telemetry acceptance remain pending.
 - Hosted CI results are available through GitHub Actions after publication.
 - Four-simulator live acceptance and immediate lap publication remain open.
