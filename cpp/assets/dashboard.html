@@ -216,13 +216,15 @@ function redrawGraphs() {
 }
 function addGraphSample(state) {
   const numberOrNull = value => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
-  graphHistory.push({ time: performance.now(), throttle: numberOrNull(state.throttle) == null ? null : clamp(Number(state.throttle), 0, 1) * 100,
-    brake: numberOrNull(state.brake) == null ? null : clamp(Number(state.brake), 0, 1) * 100,
-    lateral: numberOrNull(state.g_x), longitudinal: numberOrNull(state.g_z) });
+  const driving = state.companion_connected && state.companion_daemon_state === 'driving';
+  graphHistory.push({ time: performance.now(),
+    throttle: driving && numberOrNull(state.throttle) != null ? clamp(Number(state.throttle), 0, 1) * 100 : null,
+    brake: driving && numberOrNull(state.brake) != null ? clamp(Number(state.brake), 0, 1) * 100 : null,
+    lateral: driving ? numberOrNull(state.g_x) : null, longitudinal: driving ? numberOrNull(state.g_z) : null });
   const oldest = performance.now() - graphWindowMs;
   while (graphHistory.length && graphHistory[0].time < oldest) graphHistory.shift();
-  setMetric('pedal-graph-value', state.throttle == null || state.brake == null ? null : `${Math.round(clamp(Number(state.throttle), 0, 1) * 100)} / ${Math.round(clamp(Number(state.brake), 0, 1) * 100)}%`);
-  setMetric('g-graph-value', state.g_x == null || state.g_z == null ? null : `${Number(state.g_x).toFixed(2)} / ${Number(state.g_z).toFixed(2)}g`);
+  setMetric('pedal-graph-value', !driving || state.throttle == null || state.brake == null ? null : `${Math.round(clamp(Number(state.throttle), 0, 1) * 100)} / ${Math.round(clamp(Number(state.brake), 0, 1) * 100)}%`);
+  setMetric('g-graph-value', !driving || state.g_x == null || state.g_z == null ? null : `${Number(state.g_x).toFixed(2)} / ${Number(state.g_z).toFixed(2)}g`);
   redrawGraphs();
 }
 new ResizeObserver(redrawGraphs).observe(document.querySelector('.shell'));
