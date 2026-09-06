@@ -1,0 +1,21 @@
+[Unit]
+Description=raPId native log activity monitor
+After=systemd-journald.service
+
+[Service]
+Type=simple
+User=rapid
+SupplementaryGroups=systemd-journal
+ExecStart=/home/rapid/raPId/cpp/build/rapid-log-status
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

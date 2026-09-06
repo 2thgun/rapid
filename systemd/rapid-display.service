@@ -1,0 +1,27 @@
+[Unit]
+Description=raPId GPIO framebuffer dashboard
+After=rapid.service
+Requires=rapid.service
+PartOf=rapid.service
+Conflicts=display-manager.service getty@tty1.service
+
+[Service]
+Type=simple
+User=rapid
+SupplementaryGroups=video input render
+WorkingDirectory=/home/rapid/raPId
+Environment=HOME=/home/rapid
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+PAMName=login
+RuntimeDirectory=rapid-display
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/xinit /home/rapid/.local/bin/rapid-kiosk -- /usr/lib/xorg/Xorg :0 vt1 -nolisten tcp
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target

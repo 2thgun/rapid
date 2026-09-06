@@ -1,0 +1,16 @@
+name: Bug report
+description: Report a reproducible raPId defect
+body:
+  - type: textarea
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction and logs
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Component

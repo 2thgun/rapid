@@ -1,0 +1,29 @@
+#!/bin/sh
+# Keep the dedicated dashboard panel awake indefinitely. Xorg otherwise enables
+# screen blanking after several idle minutes even though Chromium is still alive.
+/usr/bin/xset s off
+/usr/bin/xset -dpms
+/usr/bin/xset s noblank
+
+# systemd considers rapid.service started before the native server has bound
+# port 8000. Avoid leaving Chromium on its connection-error page after a reboot.
+while ! /usr/bin/curl -fs http://127.0.0.1:8000/ >/dev/null 2>&1; do
+  /usr/bin/sleep 0.2
+done
+
+# Chromium's kiosk/fullscreen request needs an X11 window manager. Without one,
+# it opens a centered 460x300 window and exposes the black X root around it.
+/usr/bin/openbox &
+/usr/bin/sleep 1
+
+exec /usr/bin/chromium \
+  --kiosk \
+  --user-data-dir=/run/rapid-display/chromium \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-session-crashed-bubble \
+  --disable-features=Translate \
+  --disable-backgrounding-occluded-windows \
+  --disable-renderer-backgrounding \
+  --disable-gpu \
+  http://127.0.0.1:8000/

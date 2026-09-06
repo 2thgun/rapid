@@ -1,0 +1,33 @@
+[acc]
+enabled = false
+host = "192.168.1.89"
+port = 9000
+local_port = 9000
+password = "replace-with-ACC-connection-password"
+display_name = "raPId"
+protocol_version = 4
+update_interval_ms = 100
+
+[app]
+host = "0.0.0.0"
+port = 8000
+database_path = "data/rapid.db"
+companion_port = 9001
+# Empty means: learn the first valid private/link-local sender, lock to it while
+# packets are live, then allow a different rig 1.5 seconds after it disconnects.
+companion_host = ""
+# Required for authenticated protocol v4. Generate a random 32-byte key and
+# provide the same base64 value to the Windows installer. Prefer the
+# RAPID_COMPANION_KEY environment variable instead of storing it here.
+companion_key = ""
+telemetry_directory = "data/telemetry"
+
+[upload]
+enabled = false
+url = "https://telemetry.example.com"
+# Prefer RAPID_UPLOAD_TOKEN or a systemd EnvironmentFile for this secret.
+token = ""
+# races: race sessions default on; all: every session; manual: opt-in only.
+policy = "races"
+queue_path = "data/upload-queue.db"
+retention_days = 14

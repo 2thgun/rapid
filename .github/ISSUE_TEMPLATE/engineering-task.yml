@@ -1,0 +1,17 @@
+name: Engineering task
+description: Track a feature, integration gap or acceptance gate
+body:
+  - type: textarea
+    attributes:
+      label: Outcome and current behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Acceptance criteria
+      description: Describe the evidence required to close this task.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Dependencies and validation
