@@ -38,8 +38,8 @@ directory; override with `RAPID_ASSETS_DIRECTORY` if installing elsewhere.
 The native service respects `[acc] enabled` and `[upload] enabled`.
 
 Install `systemd/rapid.service` only after the native checks pass and the current
-recorder is idle. Its executable is `cpp/build/rapid-pi`; Python is not required
-by this service. Preserve the previous unit in the deployment backup for rollback.
+recorder is idle. Its executable is `cpp/build/rapid-pi`. Preserve the previous
+unit in the deployment backup for rollback.
 
 Native recording publishes session bundles when driving ends or the sender
 disconnects. Successfully published channel spools remain as `.old` recovery

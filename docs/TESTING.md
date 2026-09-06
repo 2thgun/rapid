@@ -1,11 +1,5 @@
 # Testing
 
-Run Python tests from repository root:
-
-```powershell
-python -B -m unittest discover -s tests -v
-```
-
 Run C++ tests on Linux in Debug mode. Protocol tests use assertions, so their
 Release success is not test evidence. Log-status tests use explicit failures
 and remain effective with `NDEBUG` enabled.
@@ -31,8 +25,7 @@ ctest --test-dir build/release -R '^rapid-log-status-tests$' --output-on-failure
 
 Build the Windows companion using `companion/build-native-daemon.ps1` with
 `-Compiler MSVC` or `-Compiler Zig -ZigPath <path>`.
-The private `developer/build-companion.ps1` wrapper uses the preserved toolchain
-and puts outputs in `developer/build/windows/`. Run its executable with
+Run its executable with
 `--self-test --output-directory <temporary-directory>` without installing it.
 
 The Windows companion self-test validates synthetic LD structure only, not

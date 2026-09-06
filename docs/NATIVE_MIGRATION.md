@@ -1,7 +1,7 @@
 # Native runtime migration — 2026-09-06
 
-The native implementation replaces the Python Pi application and archive ingest
-service. Switch production only after native build and isolated checks pass.
+The native implementation provides the Pi application and archive ingest service.
+Switch production only after native build and isolated checks pass.
 
 ## Implemented, awaiting cutover
 
@@ -9,7 +9,7 @@ service. Switch production only after native build and isolated checks pass.
 - Implemented TOML/environment configuration, HTTP/WebSocket serving, companion
   telemetry state, disk-backed LD recording, spool recovery, power monitoring,
   ACC broadcasting and durable archive uploads in C++.
-- Existing Python sources and device runtime remain available for rollback.
+- Existing device runtime remains available for rollback until the service switch.
 - Native recorder retains successfully published spools with `.old` suffixes.
   Failed publication preserves the spool for retry/recovery.
 
@@ -25,7 +25,7 @@ service. Switch production only after native build and isolated checks pass.
 
 ## Remaining verification
 
-Production cutover and retirement of the Python sources remain pending.
+Production cutover remains pending.
 The latest code additionally handles the v3 companion's missing
 session IDs/timestamps, resets sessions after waiting/disconnect, maps ABS, and
 filters/validates telemetry fields before updating live state. Corresponding

@@ -8,11 +8,10 @@ require verification before deployment.
 ## Last verified
 
 - Pi `rapid.service`, `rapid-display.service`, and `rapid-log-status.service` are active.
-  Telemetry/dashboard hosting remains Python; journal monitoring is C++.
+  The native `rapid-pi` cutover remains pending final validation.
 - The Pi has Drive, Timing, Vehicle, and Tyres touch pages.
 - `\\rapid\Telemetry` is the working authenticated SMB location for finalized bundles.
 - Native Windows companion source builds and passes its synthetic LD self-test.
-- The local Python unit suite passes 19 tests after this dashboard-log addition.
 - Five CTest targets passed on the Pi in Debug: network, archive, runtime/recorder,
   log status and protocol. Network checks covered UDP, HTTP, WebSocket history
   and disconnect finalization. Later upload integration and compatibility changes
@@ -26,13 +25,13 @@ require verification before deployment.
 Display output now goes only to the journal, preventing Xorg and Chromium output
 from drawing over the dashboard. A three-second “Log updated” badge is driven by
 the native C++ monitor. Full messages remain in the persistent journal, limited
-to 100 MB and 14 days. The earlier Python log handler is superseded.
+to 100 MB and 14 days.
 
 ## Known limits
 
 - Lap files are produced when a session bundle finalizes, not after each completed lap.
 - Fallback sectors are distance thirds where canonical sector loops are unavailable.
-- C++ Pi/archive implementation is present; production cutover remains pending.
+- Native Pi/archive implementation is present; production cutover remains pending.
 - The latest local sender-compatibility and validation fixes are not yet built on
   the Pi. The earlier 20-file deployed-source comparison predates this migration.
 - Hosted CI results are available through GitHub Actions after publication.

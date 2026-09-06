@@ -39,5 +39,4 @@ See the [Windows companion guide](companion/README.md) for Windows builds and se
 - [Architecture](docs/ARCHITECTURE.md)
 - [Installation and operations](docs/OPERATIONS.md)
 - [Testing](docs/TESTING.md)
-- [Archive setup](archive_server/README.md)
 - [Changelog](CHANGELOG.md)

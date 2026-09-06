@@ -21,7 +21,7 @@ if ($Clean) {
 if (-not (Test-Path -LiteralPath $source)) { throw "Native source not found: $source" }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
-$commonLibraries = @('-lws2_32', '-lshell32', '-lole32', '-luuid', '-lbcrypt')
+$commonLibraries = @('-lws2_32', '-lshell32', '-lole32', '-luuid', '-lbcrypt', '-luser32')
 $clang = Get-Command clang++ -ErrorAction SilentlyContinue
 $gcc = Get-Command g++ -ErrorAction SilentlyContinue
 $zig = Get-Command zig -ErrorAction SilentlyContinue
@@ -67,7 +67,7 @@ if ($clang) {
             Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
             $objectOutput = Join-Path $OutputDirectory 'rapid-telemetry-daemon.obj'
             & cl.exe /nologo /std:c++20 /O2 /DNDEBUG /EHsc /W4 /DUNICODE /D_UNICODE `
-                $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib
+                $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib user32.lib
             $built = $LASTEXITCODE -eq 0
         }
     }
