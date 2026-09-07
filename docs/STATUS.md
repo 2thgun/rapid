@@ -19,10 +19,16 @@ simulator acceptance remains open.
 - A real journal event advanced the native HTTP status with warning severity.
 - Boot before cleanup measured 25.904 seconds. Removed the obsolete seven-second
   rc.local sleep and failed framebuffer-copy launch; cold-boot improvement is unmeasured.
-- Kiosk revision `7686e12` publishes its X11 activation environment. Both desktop
-  portal services are now active after previously failing to open the display.
+- Kiosk revision `9c4a5c9` publishes its X11 activation environment and avoids
+  interactive keyring prompts. The post-v4 screenshot shows the dashboard.
 
 ## Current change
+
+The Windows companion includes the tested/deployed quiet duplicate-launch fix
+(`7b4db54`). The next deployment candidate prevents heartbeats from turning
+retained values into graph samples, deduplicates dashboard polling by source
+sample, and rejects malformed legacy sequence values before recording changes.
+All six Pi Release CTests and the isolated Chromium graph check passed.
 
 Authenticated v4 is implemented in the Windows sender and Pi receiver. The final
 isolated Pi Release build passed all six CTests, including actual Windows BCrypt
@@ -37,6 +43,16 @@ Windows login; live simulator/MoTeC acceptance is still pending.
 Previous binaries and configuration were preserved in `.old` backups.
 See [v4 setup and protocol](TELEMETRY_V4.md) for pairing and rollback.
 
+## Next deployment
+
+Deploy the freshness candidate only while the recorder is idle. Preserve the
+current `cpp/` tree as a new uniquely named `.old` backup, replace it with the
+tested staged tree, and restart `rapid.service`; `rapid-display.service` must be
+started again because it is part of `rapid.service`. Verify `/healthz`, `/api/live`
+(`telemetry_fresh` and `telemetry_age_ms`), all three services, and the panel.
+Do not change the paired key, companion binary, state database, or telemetry
+directory for this release. A live driving session remains the final acceptance.
+
 Display output now goes only to the journal, preventing Xorg and Chromium output
 from drawing over the dashboard. A three-second “Log updated” badge is driven by
 the native C++ monitor. Full messages remain in the persistent journal, limited
@@ -48,6 +64,4 @@ to 100 MB and 14 days.
 - Fallback sectors are distance thirds where canonical sector loops are unavailable.
 - Native Pi/archive implementation is present. Live simulator and archive
   acceptance remain pending.
-- Linux native tests and the Windows companion build/self-test passed in
-  [GitHub Actions for 3c6aa8b](https://github.com/2thgun/rapid/actions/runs/34132243838).
 - Four-simulator live acceptance and immediate lap publication remain open.

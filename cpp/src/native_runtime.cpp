@@ -221,6 +221,23 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
       daemon = "driving";
     } else
       throw std::runtime_error("invalid packet type");
+    auto session = string(m, "session_id", string(m, "run_id"));
+    auto identity = sim + "/" + session;
+    if (session.empty())
+      identity += "/" + string(m, "track_name") + "/" + string(m, "car_model") +
+                  "/" + string(m, "session_name");
+    std::int64_t sequence = -1;
+    if (type == "telemetry" && m.contains("sequence") && !m["sequence"].is_null()) {
+      if (!m["sequence"].is_number_integer() || number(m, "sequence") < 0 ||
+          number(m, "sequence") > 9007199254740991.0)
+        throw std::runtime_error("invalid sequence");
+      sequence = m["sequence"];
+      // Reject before changing liveness or finalizing the current recording.
+      if (!v4 && identity == session_ && sequence_ >= 0 && sequence <= sequence_) {
+        state_["packets_replayed"] = number(state_, "packets_replayed") + 1;
+        return false;
+      }
+    }
     source_ = host;
     last_packet_ = monotonic();
     state_["companion_connected"] = true;
@@ -234,17 +251,13 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     if (type == "status") {
       if (daemon != "driving") {
         recorder_.finish();
+        last_sample_ = 0;
         state_["session_active"] = false;
         session_.clear();
         sequence_ = -1;
       }
       return true;
     }
-    auto session = string(m, "session_id", string(m, "run_id"));
-    auto identity = sim + "/" + session;
-    if (session.empty())
-      identity += "/" + string(m, "track_name") + "/" + string(m, "car_model") +
-                  "/" + string(m, "session_name");
     if (identity != session_ && version == 3)
       recorder_.finish("session_changed");
     if (identity != session_) {
@@ -259,16 +272,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
             "sector_1_delta_ms", "sector_2_delta_ms", "sector_3_delta_ms"})
         state_[key] = nullptr;
     }
-    std::int64_t sequence = -1;
-    if (m.contains("sequence") && !m["sequence"].is_null()) {
-      if (!m["sequence"].is_number_integer() || number(m, "sequence") < 0 ||
-          number(m, "sequence") > 9007199254740991.0)
-        throw std::runtime_error("invalid sequence");
-      sequence = m["sequence"];
-      if (!v4 && sequence_ >= 0 && sequence <= sequence_) {
-        state_["packets_replayed"] = number(state_, "packets_replayed") + 1;
-        return false;
-      }
+    if (sequence >= 0) {
       if (!v4 && sequence_ >= 0) {
         auto gap = sequence - sequence_ - 1;
         m["_packet_gap"] = std::min<std::int64_t>(gap, 1000000);
@@ -294,6 +298,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
         state_[it.key()] = it.value();
     state_["rpm"] = int(number(frame, "rpm"));
     state_["samples_received"] = number(state_, "samples_received") + 1;
+    last_sample_ = monotonic();
     state_["schema_version"] = v4 ? 4 : version;
     if (v4) state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
     state_["last_sequence"] = sequence < 0 ? Json() : Json(sequence);
@@ -347,6 +352,7 @@ void Runtime::expire() {
     state_["session_active"] = false;
     state_["session_ended_at"] = now();
     last_packet_ = 0;
+    last_sample_ = 0;
     sequence_ = -1;
     session_.clear();
     if (!state_.value("acc_connected", false))
@@ -361,6 +367,11 @@ void Runtime::finish() {
 Json Runtime::snapshot() const {
   std::lock_guard lock(mutex_);
   auto result = state_;
+  const double sample_age = last_sample_ ? (monotonic() - last_sample_) * 1000 : -1;
+  result["telemetry_age_ms"] = sample_age < 0 ? Json() : Json(sample_age);
+  result["telemetry_fresh"] = sample_age >= 0 && sample_age <= 1500 &&
+      state_.value("companion_connected", false) &&
+      string(state_, "companion_daemon_state") == "driving";
   result.update(recorder_.status());
   result["upload_enabled"] = config_.upload_enabled;
   result["runtime"] = "cpp";

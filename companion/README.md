@@ -33,10 +33,10 @@ record.
 
 For venue requirements and one-off use, see [portable setup](../docs/PORTABLE_SETUP.md).
 
-For an explicit one-off current-source run on a trusted LAN:
+For a one-off run with a paired Pi:
 
 ```powershell
-./rapid-telemetry-daemon.exe --protocol v3 --pi-host rapid --sample-rate 50
+./rapid-telemetry-daemon.exe --protocol v4 --pi-host rapid --sample-rate 50 --auth-key-file ./telemetry.key
 ```
 
 The installer registers an absolute launcher path for the current Windows user.

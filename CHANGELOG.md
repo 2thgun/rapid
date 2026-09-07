@@ -5,6 +5,11 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Graphs distinguish actual sample freshness from companion heartbeats, avoid
+  plotting the same sample repeatedly, and resume polling after a stalled request.
+- Invalid legacy sequence numbers are rejected before changing connection state
+  or finalizing an existing recording.
+
 - Duplicate companion launches now exit quietly instead of leaving an
   "already running" dialog and an extra process open.
 
@@ -21,11 +26,12 @@ last completed checks, not a guarantee of current device state.
 - Implemented C++ Pi configuration, HTTP/WebSocket serving, UDP telemetry,
   disk-backed LD recording/recovery, power monitoring, ACC reception and uploads.
 - Implemented C++ archive authentication, resumable uploads and crash-safe commit.
-- Added native recorder, archive and network tests; the initial five Debug suites
-  passed on the Pi. Optimized/extended test results and deployment remain pending.
+- Added native recorder, archive and network tests. The native production cutover
+  and subsequent authenticated v4 deployment are complete; live simulator and
+  MoTeC acceptance remain pending. See `docs/STATUS.md` for verification revisions.
 - Added local compatibility handling for v3 senders without session IDs/timestamps,
   session reset on waiting/disconnect, ABS mapping and protected live-state fields.
-  These later changes still require a build/test pass.
+  Automated native checks cover these compatibility paths.
 - Removed deprecated legacy implementations from the maintained repository;
   preserved them in the private developer backup before deletion.
 

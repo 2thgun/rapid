@@ -95,7 +95,7 @@ class Runtime {
   Database store_;
   Recorder recorder_;
   std::string source_, session_;
-  double last_packet_ = 0;
+  double last_packet_ = 0, last_sample_ = 0;
   std::int64_t sequence_ = -1;
   int timing_lap_ = -1, best_lap_ = 0;
   std::vector<int> splits_;

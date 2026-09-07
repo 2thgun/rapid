@@ -45,3 +45,10 @@ authentication, upload offsets, crash-tail truncation, commit recovery and limit
 The network test launches `rapid-pi` on temporary loopback ports and tests UDP,
 HTTP, WebSocket history and disconnect finalization. Its temporary recordings
 never use the production telemetry directory. Tests retain temporary evidence.
+
+`node cpp/tests/dashboard_graph_tests.js` checks the dashboard's actual sampling
+function for duplicate polls, heartbeat-only gaps, slow valid streams, session
+resets and history aging. CI runs this alongside the Windows job. The same script
+can run in a browser when supplied `dashboardSource` containing dashboard HTML.
+Native tests separately verify that heartbeats do not refresh sample age and that
+an invalid new-session sequence cannot finalize the current recording.

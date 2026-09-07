@@ -24,14 +24,18 @@ installation described in [operations](OPERATIONS.md).
 Run from PowerShell in the companion directory:
 
 ```powershell
-.\rapid-telemetry-daemon.exe --protocol v3 --pi-host rapid --sample-rate 50
+.\rapid-telemetry-daemon.exe --protocol v4 --pi-host rapid --sample-rate 50 --auth-key-file .\telemetry.key
 ```
 
 Use the Pi's current address with `--pi-host` if hostname discovery does not work.
-This command supports a Pi configured without a companion key. v3 does not
-authenticate telemetry. For v4, bring a current executable and the private key
-file matching the Pi configuration; follow [v4 setup](TELEMETRY_V4.md). The current
-companion defaults to v4 and requires a key unless forwarding is disabled.
+Bring the private key file matching the Pi configuration; follow
+[v4 setup](TELEMETRY_V4.md). The current production Pi requires v4 and rejects
+unauthenticated telemetry. Keep the key private when using a venue PC and remove
+your copy from that PC when finished.
+
+Only for a Pi deliberately configured without a companion key, use
+`--protocol v3` and omit `--auth-key-file`. That legacy mode does not authenticate
+telemetry and will not work with the paired production Pi.
 
 Open `http://rapid:8000/healthz` from the PC to check HTTP reachability. That does
 not prove UDP is allowed; start driving and confirm the dashboard receives data.

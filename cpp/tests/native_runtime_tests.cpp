@@ -57,12 +57,50 @@ int main(int argc, char **argv) {
     c.telemetry = root / "telemetry";
     c.queue = root / "queue.db";
     Runtime runtime(c);
+    {
+      Config freshness = c;
+      freshness.database = root / "freshness.db";
+      freshness.telemetry = root / "freshness-telemetry";
+      Runtime live(freshness);
+      require(!live.snapshot()["telemetry_fresh"].get<bool>(), "no sample is not fresh");
+      require(live.receive(sample().dump(), "127.0.0.1"), "freshness sample");
+      require(live.snapshot()["telemetry_fresh"] == true, "new sample is fresh");
+      std::this_thread::sleep_for(std::chrono::milliseconds(1600));
+      Json heartbeat = {{"version", 3}, {"type", "status"}, {"state", "driving"}, {"simulator", "ACC"}};
+      require(live.receive(heartbeat.dump(), "127.0.0.1"), "driving heartbeat");
+      require(live.snapshot()["companion_connected"] == true &&
+                  live.snapshot()["telemetry_fresh"] == false &&
+                  number(live.snapshot(), "telemetry_age_ms") >= 1500,
+              "heartbeat cannot freshen retained telemetry");
+      require(live.receive(sample(1).dump(), "127.0.0.1"), "samples resume");
+      require(live.snapshot()["telemetry_fresh"] == true, "resumed sample is fresh");
+      std::this_thread::sleep_for(std::chrono::milliseconds(1600));
+      require(!live.receive(sample(1).dump(), "127.0.0.1"), "replayed sample rejected");
+      live.expire();
+      require(live.snapshot()["companion_connected"] == false &&
+                  live.snapshot()["recording"] == false,
+              "replayed sample cannot extend connection lifetime");
+      require(live.receive(sample(2).dump(), "127.0.0.1"), "reconnect after expiry");
+      heartbeat["state"] = "ready";
+      require(live.receive(heartbeat.dump(), "127.0.0.1"), "ready heartbeat");
+      require(live.snapshot()["telemetry_fresh"] == false &&
+                  live.snapshot()["telemetry_age_ms"].is_null(), "ready clears sample freshness");
+    }
     require(!runtime.receive("[]", "127.0.0.1"), "non-object rejected");
     auto bad = sample();
     bad["telemetry"]["rpm"] = true;
     require(!runtime.receive(bad.dump(), "127.0.0.1"), "boolean RPM rejected");
     require(runtime.receive(sample().dump(), "127.0.0.1"),
             "valid telemetry after malformed");
+    auto invalid_session = sample(1);
+    invalid_session["session_id"] = "invalid-session";
+    invalid_session["sequence"] = "invalid";
+    require(!runtime.receive(invalid_session.dump(), "127.0.0.1"),
+            "invalid new-session sequence rejected");
+    require(runtime.snapshot()["session_id"] == "native-test" &&
+                runtime.snapshot()["recorded_samples"] == 1 &&
+                runtime.snapshot()["last_bundle_path"].is_null(),
+            "rejected new session cannot finalize current recording");
     require(!runtime.receive(sample().dump(), "127.0.0.1"), "replay rejected");
     require(!runtime.receive(sample(1).dump(), "192.168.1.5"),
             "sender pinning");

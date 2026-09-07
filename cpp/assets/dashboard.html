@@ -186,6 +186,7 @@ const pair = (left, right, unit = '') => left == null || right == null ? '--' : 
 
 const graphHistory = [];
 const graphWindowMs = 30000;
+let lastGraphSample = null;
 function drawGraph(canvas, series, minimum, maximum) {
   const bounds = canvas.getBoundingClientRect();
   if (bounds.width < 2 || bounds.height < 2) return;
@@ -217,11 +218,14 @@ function redrawGraphs() {
 }
 function addGraphSample(state) {
   const numberOrNull = value => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
-  const driving = state.companion_connected && state.companion_daemon_state === 'driving';
-  graphHistory.push({ time: performance.now(),
-    throttle: driving && numberOrNull(state.throttle) != null ? clamp(Number(state.throttle), 0, 1) * 100 : null,
-    brake: driving && numberOrNull(state.brake) != null ? clamp(Number(state.brake), 0, 1) * 100 : null,
-    lateral: driving ? numberOrNull(state.g_x) : null, longitudinal: driving ? numberOrNull(state.g_z) : null });
+  const driving = state.companion_connected && state.companion_daemon_state === 'driving' && state.telemetry_fresh === true;
+  const sampleId = `${state.session_id}:${state.samples_received}`;
+  const freshSample = driving && state.samples_received > 0 && sampleId !== lastGraphSample;
+  if (freshSample) lastGraphSample = sampleId;
+  if (freshSample || !driving) graphHistory.push({ time: performance.now() - (freshSample ? Number(state.telemetry_age_ms || 0) : 0),
+    throttle: freshSample && numberOrNull(state.throttle) != null ? clamp(Number(state.throttle), 0, 1) * 100 : null,
+    brake: freshSample && numberOrNull(state.brake) != null ? clamp(Number(state.brake), 0, 1) * 100 : null,
+    lateral: freshSample ? numberOrNull(state.g_x) : null, longitudinal: freshSample ? numberOrNull(state.g_z) : null });
   const oldest = performance.now() - graphWindowMs;
   while (graphHistory.length && graphHistory[0].time < oldest) graphHistory.shift();
   setMetric('pedal-graph-value', !driving || state.throttle == null || state.brake == null ? null : `${Math.round(clamp(Number(state.throttle), 0, 1) * 100)} / ${Math.round(clamp(Number(state.brake), 0, 1) * 100)}%`);
@@ -246,13 +250,13 @@ function updateLogNotice(state) {
 
 async function tick() {
   try {
-    const response = await fetch('/api/live', {cache: 'no-store'});
+    const response = await fetch('/api/live', {cache: 'no-store', signal: AbortSignal.timeout(2000)});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
     fields.status.textContent = !state.companion_connected
       ? 'Waiting for daemon connection…'
       : state.companion_daemon_state === 'driving'
-        ? `${state.simulator || 'Simulator'} connected`
+        ? state.telemetry_fresh ? `${state.simulator || 'Simulator'} connected` : 'Waiting for fresh telemetry'
         : state.simulator
           ? `${state.simulator} detected — waiting for driving`
           : 'Daemon connected — waiting for simulator';

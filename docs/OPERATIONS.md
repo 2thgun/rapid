@@ -71,3 +71,12 @@ Before deployment, preserve changed files and units in a unique `.old` backup an
 confirm the recorder is idle. After deployment check all three services, both APIs,
 the share and the panel. To roll back, restore that backup and reload systemd;
 disable the native log unit if restoring the older dashboard implementation.
+
+### Freshness candidate checklist
+
+The candidate after `7b4db54` changes only `rapid-pi` and dashboard assets. It
+adds `telemetry_age_ms` and `telemetry_fresh` to `/api/live`. A driving heartbeat
+without a newer telemetry sample must make `telemetry_fresh` false after 1.5
+seconds; the dashboard graph must show a gap. Deploy it while idle, retaining the
+paired v4 key, SQLite state database and telemetry directory. Do not replace the
+Windows companion for this candidate.
