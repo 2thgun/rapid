@@ -38,4 +38,4 @@ for revision `47860ec`: [verified run](https://github.com/2thgun/rapid/actions/r
 - RPD-011: native production replacement completed; live recording acceptance remains open.
 - RPD-005: automated checks reject malformed JSON and fields, then accept valid telemetry.
 - RPD-002/006: automated checks cover publication-failure spool preservation, crash recovery and v3 session reset; remaining acceptance criteria stay open.
-- RPD-012: boot critical path includes a seven-second rc.local delay followed by a failed fbcp launch. Xorg uses /dev/fb0 directly. Cleanup and cold-boot measurement remain pending.
+- RPD-012: removed the seven-second rc.local delay and failed fbcp launch, preserving the original and console mapping. Xorg uses /dev/fb0 directly. Cold-boot measurement remains pending.

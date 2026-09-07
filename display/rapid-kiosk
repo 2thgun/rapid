@@ -1,4 +1,14 @@
 #!/bin/sh
+# D-Bus activated desktop helpers need the same X11 connection as the kiosk.
+# Without this, the GTK portal cannot open a display and activation times out.
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+  if [ -n "$XAUTHORITY" ]; then
+    dbus-update-activation-environment --systemd DISPLAY XAUTHORITY
+  else
+    dbus-update-activation-environment --systemd DISPLAY
+  fi
+fi
+
 # Keep the dedicated dashboard panel awake indefinitely. Xorg otherwise enables
 # screen blanking after several idle minutes even though Chromium is still alive.
 /usr/bin/xset s off

@@ -23,9 +23,10 @@ That boot began before the native cutover. Its graphical target waited for
 NetworkManager readiness (6.035 seconds) and then rc.local (7.073 seconds).
 The latter sleeps seven seconds before launching fbcp, which fails to load
 libbcm_host.so. Xorg uses the panel framebuffer directly at /dev/fb0.
-Removing the obsolete delay and failed copier is pending; preserve the console
-mapping and verify a later physical cold boot. Target completion time alone does
-not establish when the dashboard becomes visible.
+The obsolete delay and failed copier were removed on 2026-09-07, preserving
+`con2fbmap 1 0`. The original is `/etc/rc.local.before-rapid-boot-20260907.old`.
+Shell syntax validation passed; cold-boot improvement still needs measurement.
+Target completion time alone does not establish when the dashboard becomes visible.
 
 ## Native runtime deployment
 
