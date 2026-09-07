@@ -270,8 +270,12 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     // local identity/time for recording and charts without inventing wire
     // sequence numbers or claiming packet-loss measurements for that older
     // sender.
-    if (version == 3 && session.empty())
-      m["session_id"] = string(recorder_.status(), "session_id", unique_id());
+    if (version == 3 && session.empty()) {
+      const auto status = recorder_.status();
+      const auto id = status.find("session_id");
+      m["session_id"] = id != status.end() && id->is_string()
+                            ? *id : Json(unique_id());
+    }
     if (!m.contains("monotonic_us"))
       m["monotonic_us"] = std::uint64_t(monotonic() * 1000000);
     sectors(frame);

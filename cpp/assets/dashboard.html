@@ -211,6 +211,7 @@ function drawGraph(canvas, series, minimum, maximum) {
   }
 }
 function redrawGraphs() {
+  if (!document.getElementById('graphs').classList.contains('active') || document.hidden) return;
   drawGraph(document.getElementById('pedal-graph'), [{key: 'throttle', color: '#20cf75'}, {key: 'brake', color: '#ef4458'}], 0, 100);
   drawGraph(document.getElementById('g-graph'), [{key: 'lateral', color: '#34bdf2'}, {key: 'longitudinal', color: '#f6b91a'}], -2.5, 2.5);
 }
