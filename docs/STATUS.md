@@ -30,6 +30,8 @@ retained values into graph samples, deduplicates dashboard polling by source
 sample, and rejects malformed packets before recording changes. All six Pi
 Release CTests and the isolated Chromium graph check passed. The exact staged
 binary and validation log are recorded privately for the morning deployment.
+The same dashboard deployment includes the optimized cartoon steering-wheel
+asset derived from the supplied reference image.
 
 Authenticated v4 is implemented in the Windows sender and Pi receiver. The final
 isolated Pi Release build passed all six CTests, including actual Windows BCrypt

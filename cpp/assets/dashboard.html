@@ -39,15 +39,7 @@
   #brake-fill { background: #ef4458; }
   .steering { align-self: end; display: grid; grid-template-columns: 1fr 88px; align-items: center; padding: 0 7px 3px; }
   #steering-value { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }
-  #steering-wheel { width: 84px; height: 84px; transform: rotate(0deg); transition: transform 80ms linear; transform-origin: center; }
-  .wheel-rim { fill: none; stroke: #090b0d; stroke-width: 14; }
-  .wheel-suede { fill: none; stroke: #2b3033; stroke-width: 2; stroke-dasharray: 1.5 2; opacity: .8; }
-  .wheel-marker { fill: #f3c51b; }
-  .wheel-spoke { fill: #171b1e; stroke: #51595e; stroke-width: 1; }
-  .wheel-cutout { fill: #080a0b; stroke: #373e42; stroke-width: .8; }
-  .wheel-hub { fill: #0c0f11; stroke: #5c6469; stroke-width: 2; }
-  .wheel-bolt { fill: #aeb6ba; stroke: #303538; stroke-width: .8; }
-  .wheel-logo { fill: #f3c51b; font: 800 7px Arial, sans-serif; letter-spacing: .4px; text-anchor: middle; }
+  #steering-wheel { width: 84px; height: 84px; object-fit: contain; transform: rotate(0deg); transition: transform 80ms linear; transform-origin: center; }
   .g-card { text-align: center; display: flex; flex-direction: column; align-items: center; }
   .g-pad { position: relative; width: 92px; height: 92px; margin: 8px auto 5px; border: 2px solid #3d4b54; border-radius: 50%; background: radial-gradient(circle, #182128 0 4px, transparent 5px); }
   .g-pad::before, .g-pad::after { content: ''; position: absolute; background: #29343b; }
@@ -108,24 +100,7 @@
       </div>
       <div class="steering">
         <div><div class="label">STEERING</div><div id="steering-value">—</div></div>
-        <svg id="steering-wheel" viewBox="0 0 100 100" aria-label="Steering wheel">
-          <circle class="wheel-rim" cx="50" cy="50" r="40"></circle>
-          <circle class="wheel-suede" cx="50" cy="50" r="40"></circle>
-          <path class="wheel-marker" d="M45.5 4.5 H54.5 L55.5 16 H44.5 Z"></path>
-          <path class="wheel-spoke" d="M40 45 L15 36 L12 46 L39 55 Z"></path>
-          <path class="wheel-spoke" d="M60 45 L85 36 L88 46 L61 55 Z"></path>
-          <path class="wheel-spoke" d="M43 59 L38 85 L49 90 L50 62 Z"></path>
-          <path class="wheel-spoke" d="M57 59 L62 85 L51 90 L50 62 Z"></path>
-          <ellipse class="wheel-cutout" cx="26" cy="44" rx="7" ry="2.5" transform="rotate(17 26 44)"></ellipse>
-          <ellipse class="wheel-cutout" cx="74" cy="44" rx="7" ry="2.5" transform="rotate(-17 74 44)"></ellipse>
-          <ellipse class="wheel-cutout" cx="43" cy="75" rx="2.5" ry="7" transform="rotate(8 43 75)"></ellipse>
-          <ellipse class="wheel-cutout" cx="57" cy="75" rx="2.5" ry="7" transform="rotate(-8 57 75)"></ellipse>
-          <circle class="wheel-hub" cx="50" cy="53" r="14"></circle>
-          <circle class="wheel-bolt" cx="50" cy="42" r="2"></circle><circle class="wheel-bolt" cx="59.5" cy="47.5" r="2"></circle>
-          <circle class="wheel-bolt" cx="59.5" cy="58.5" r="2"></circle><circle class="wheel-bolt" cx="50" cy="64" r="2"></circle>
-          <circle class="wheel-bolt" cx="40.5" cy="58.5" r="2"></circle><circle class="wheel-bolt" cx="40.5" cy="47.5" r="2"></circle>
-          <text class="wheel-logo" x="50" y="55.5">MOMO</text>
-        </svg>
+        <img id="steering-wheel" src="steering-wheel-cartoon.png" alt="Three-spoke steering wheel">
       </div>
     </div>
     <div class="card g-card">

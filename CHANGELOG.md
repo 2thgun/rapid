@@ -5,6 +5,9 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Replaced the generic dashboard steering-wheel drawing with a lightweight,
+  accurate cartoon asset based on the supplied three-spoke wheel reference.
+
 - Graphs distinguish actual sample freshness from companion heartbeats, avoid
   plotting the same sample repeatedly, and resume polling after a stalled request.
 - Invalid legacy sequence numbers are rejected before changing connection state
