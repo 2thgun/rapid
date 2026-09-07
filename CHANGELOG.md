@@ -5,6 +5,9 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Duplicate companion launches now exit quietly instead of leaving an
+  "already running" dialog and an extra process open.
+
 ### Authenticated v4 telemetry
 
 - Connected the Windows binary encoder to the daemon and added native Pi decoding.

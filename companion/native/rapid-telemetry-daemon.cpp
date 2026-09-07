@@ -1842,7 +1842,8 @@ int wmain(int argc, wchar_t** argv) {
         HANDLE mutex = CreateMutexW(nullptr, TRUE, kMutexName);
         if (!mutex) throw std::runtime_error("Cannot create daemon mutex");
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            if (!options.headless) MessageBoxW(nullptr, L"raPId telemetry daemon is already running.", L"raPId", MB_OK);
+            // Login startup and manual launches can overlap. The running
+            // instance already owns the tray; leave no dialog or extra process.
             CloseHandle(mutex);
             return 0;
         }
