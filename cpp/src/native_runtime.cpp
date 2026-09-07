@@ -1,4 +1,5 @@
 #include "rapid/native.hpp"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cmath>
 #include <fcntl.h>
@@ -359,23 +360,26 @@ Json Runtime::events(std::uint64_t &cursor, int history) const {
   std::uint64_t dropped = 0;
   if (cursor == 0) {
     cursor = next_event_ - 1;
+    const auto cutoff = monotonic() - std::clamp(history, 0, 120);
     for (const auto &[id, event] : events_)
-      if (number(event, "received_monotonic") >=
-          monotonic() - std::clamp(history, 0, 120)) {
+      if (number(event, "received_monotonic") >= cutoff) {
         cursor = id - 1;
         break;
       }
   }
   if (!events_.empty() && cursor + 1 < events_.front().first)
     dropped = events_.front().first - cursor - 1;
-  for (const auto &[id, event] : events_)
-    if (id > cursor) {
-      items.push_back(event);
-      cursor = id;
-    }
-  if (items.size() > 250) {
-    dropped += items.size() - 250;
-    items.erase(items.begin(), items.end() - 250);
+  auto first = std::upper_bound(
+      events_.begin(), events_.end(), cursor,
+      [](std::uint64_t id, const auto &entry) { return id < entry.first; });
+  const auto pending = events_.end() - first;
+  if (pending > 250) {
+    dropped += pending - 250;
+    first = events_.end() - 250;
+  }
+  for (; first != events_.end(); ++first) {
+    items.push_back(first->second);
+    cursor = first->first;
   }
   return {{"events", items}, {"dropped", dropped}};
 }

@@ -74,6 +74,36 @@ int main(int argc, char **argv) {
     require(runtime.snapshot()["recorded_samples"] == 11, "sample count wired");
     std::uint64_t cursor = 0;
     require(runtime.events(cursor)["events"].size() == 11, "live broker");
+    require(runtime.events(cursor)["events"].empty(), "no repeated events");
+    {
+      Config burst_config = c;
+      burst_config.database = root / "burst.db";
+      burst_config.telemetry = root / "burst-telemetry";
+      burst_config.queue = root / "burst-queue.db";
+      Runtime burst(burst_config);
+      for (int i = 0; i < 301; ++i)
+        require(burst.receive(sample(i).dump(), "127.0.0.1"), "burst sample");
+      std::uint64_t burst_cursor = 0;
+      auto batch = burst.events(burst_cursor, 120);
+      require(batch["events"].size() == 250 && batch["dropped"] == 51,
+              "initial history capped with exact drop count");
+      require(batch["events"].front()["sequence"] == 51 &&
+                  batch["events"].back()["sequence"] == 300 && burst_cursor == 301,
+              "newest events returned in order with final cursor");
+      auto empty = burst.events(burst_cursor);
+      require(empty["events"].empty() && empty["dropped"] == 0,
+              "caught-up cursor produces no duplicates or drops");
+      burst_cursor = 1;
+      batch = burst.events(burst_cursor);
+      require(batch["events"].size() == 250 && batch["dropped"] == 50,
+              "lagging cursor accounts only unseen dropped events");
+      require(burst.receive(sample(301).dump(), "127.0.0.1"), "incremental sample");
+      batch = burst.events(burst_cursor);
+      require(batch["events"].size() == 1 && batch["dropped"] == 0 &&
+                  batch["events"].front()["sequence"] == 301,
+              "incremental delivery after catch-up");
+      burst.finish();
+    }
     runtime.upload(false);
     runtime.finish();
     auto path =
