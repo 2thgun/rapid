@@ -11,10 +11,14 @@ permissions:
 jobs:
   cpp-native:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: sudo apt-get update && sudo apt-get install -y libsystemd-dev pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev
-      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug -DRAPID_BUILD_LOG_STATUS=ON
+      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DRAPID_BUILD_LOG_STATUS=ON
       - run: cmake --build build/cpp
       - run: ctest --test-dir build/cpp --output-on-failure
   windows-companion:

@@ -18,8 +18,9 @@ The Pi dashboard and recorder cutover completed after native build and isolated 
 - Native Pi and archive targets compile on the Pi with distribution dependencies.
 - Five Debug CTest targets passed: recorder/runtime, archive recovery, log
   status, protocol and real HTTP/UDP/WebSocket integration.
-- The optimized build passed its four release-safe test targets. The protocol
-  target is assertion-dependent and is covered by the Debug test run.
+- The deployed optimized build passed its four then-release-safe test targets;
+  the protocol target was covered in Debug. Current source uses explicit protocol
+  failures and runs all five targets in both CI build configurations.
 - `rapid.service` now runs `cpp/build/rapid-pi`. The kiosk and native log monitor
   are active, and local dashboard, live-state and log-status endpoints responded
   after the service switch with zero restarts.

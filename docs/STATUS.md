@@ -14,7 +14,8 @@ simulator acceptance remains open.
 - Native Windows companion source builds and passes its synthetic LD self-test.
 - Current commit `85ff713` passed all five Pi Debug CTest targets: network,
   archive, runtime/recorder, log status and protocol. Its Release build passed
-  the four release-safe targets; `rapid-protocol-tests` is assertion-dependent.
+  the four then-release-safe targets. The current protocol test uses explicit
+  failures so subsequent Release runs can include all five targets.
   Network checks cover UDP, HTTP, WebSocket history and disconnect finalization.
 - A real journal event advanced the native HTTP status with warning severity.
 - Dashboard services started at 8.500/8.503 seconds into userspace after removing
