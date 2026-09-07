@@ -12,8 +12,8 @@ simulator acceptance remains open.
   Graphs retain 30 seconds of pedal and G-force history in the dashboard browser.
 - `\\rapid\Telemetry` is the working authenticated SMB location for finalized bundles.
 - Native Windows companion source builds and passes its synthetic LD self-test.
-- Deployed native revision `3c6aa8b` passed all five Pi Release CTest targets:
-  network, archive, runtime/recorder, log status and protocol. Binary and dashboard
+- Deployed native revision `7388eb6` passed all six Pi Release CTest targets:
+  v4, network, archive, runtime/recorder, log status and protocol. Binary and dashboard
   hashes match the tested staging build; hosted Debug/Release tests also passed.
   Network checks cover UDP, HTTP, WebSocket history and disconnect finalization.
 - A real journal event advanced the native HTTP status with warning severity.
@@ -30,8 +30,12 @@ fixtures, validity/loss regression checks and replay persistence. A Windows-to-P
 UDP check on separate ports verified two samples, one rejected replay and session
 finalization. [Hosted Windows, Linux Debug and Linux Release checks for 7388eb6](https://github.com/2thgun/rapid/actions/runs/34157505987)
 all passed, with Linux decoding fresh fixtures from the Windows job.
-Production remains configured for v3; live v4 simulator acceptance is pending.
-See [v4 setup and protocol](TELEMETRY_V4.md) before pairing keys.
+Production Pi and the installed Windows companion now use v4 with paired private
+keys. An authenticated idle heartbeat on production port 9001 confirmed matching
+keys without creating synthetic recordings. The companion starts with v4 at
+Windows login; live simulator/MoTeC acceptance is still pending.
+Previous binaries and configuration were preserved in `.old` backups.
+See [v4 setup and protocol](TELEMETRY_V4.md) for pairing and rollback.
 
 Display output now goes only to the journal, preventing Xorg and Chromium output
 from drawing over the dashboard. A three-second “Log updated” badge is driven by
