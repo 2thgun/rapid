@@ -32,7 +32,7 @@ find_package(CURL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(tomlplusplus REQUIRED)
 find_package(Threads REQUIRED)
-add_library(rapid_native STATIC src/native_common.cpp src/native_recorder.cpp
+add_library(rapid_native STATIC src/native_common.cpp src/native_v4.cpp src/native_recorder.cpp
   src/native_runtime.cpp src/native_http.cpp src/native_acc.cpp src/native_upload.cpp)
 target_include_directories(rapid_native PUBLIC include)
 target_link_libraries(rapid_native PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto
@@ -48,6 +48,10 @@ target_link_libraries(rapid-archive PRIVATE rapid_native ${ARGON2_LIBRARY})
 target_compile_options(rapid-archive PRIVATE -Wall -Wextra -Wpedantic)
 
 if(BUILD_TESTING)
+  add_executable(rapid-v4-tests tests/v4_tests.cpp)
+  target_link_libraries(rapid-v4-tests PRIVATE rapid_native)
+  set(RAPID_V4_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/tests/v4-fixtures" CACHE PATH "Windows encoder fixtures")
+  add_test(NAME rapid-v4-tests COMMAND rapid-v4-tests ${CMAKE_CURRENT_SOURCE_DIR}/assets ${RAPID_V4_FIXTURES})
   add_executable(rapid-network-tests tests/native_network_tests.cpp)
   target_link_libraries(rapid-network-tests PRIVATE rapid_native ${ARGON2_LIBRARY})
   add_test(NAME rapid-network-tests COMMAND rapid-network-tests $<TARGET_FILE:rapid-pi> ${CMAKE_CURRENT_SOURCE_DIR}/assets $<TARGET_FILE:rapid-archive>)

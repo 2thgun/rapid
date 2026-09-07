@@ -213,6 +213,7 @@ Config Config::load(const fs::path &path) {
   c.companion_port = integer("app", "companion_port", "RAPID_COMPANION_PORT",
                              c.companion_port);
   c.companion_host = text("app", "companion_host", "RAPID_COMPANION_HOST", "");
+  c.companion_key = telemetry_key(text("app", "companion_key", "RAPID_COMPANION_KEY", ""));
   c.database =
       text("app", "database_path", "RAPID_DATABASE_PATH", c.database.string());
   c.telemetry = text("app", "telemetry_directory", "RAPID_TELEMETRY_DIRECTORY",

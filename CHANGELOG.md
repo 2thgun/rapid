@@ -5,6 +5,14 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+### Authenticated v4 telemetry
+
+- Connected the Windows binary encoder to the daemon and added native Pi decoding.
+- Added shared-key configuration, HMAC verification, strict packet validation and
+  persistent replay watermarks. A configured Pi key disables v3 fallback.
+- Added real Windows encoder fixtures and cross-platform receiver/recording tests.
+- Documented migration, wire layout and remaining loss/freshness limitations.
+
 ### Native migration — implementation checkpoint
 
 - Implemented C++ Pi configuration, HTTP/WebSocket serving, UDP telemetry,

@@ -18,7 +18,7 @@ no GitHub issues, assignees, dates or remote milestones have been created.
 | --- | --- | --- | --- |
 | RPD-001 | P1 | Publish completed laps during continued driving | New valid `.ld` visible on SMB before session end; inspect in MoTeC |
 | RPD-002 | P1 | Preserve data if bundle publication fails | Inject write/rename failure, restart, recover the original samples |
-| RPD-003 | P1 | Complete v4 sender/receiver integration | Authenticated round trip, invalid key/replay rejection, no false v4 claims |
+| RPD-003 | P1 | Deploy and validate v4 with a live simulator | Six Pi suites and Windows-to-Pi UDP round trip pass; production key pairing and live acceptance pending |
 | RPD-004 | P1 | Respect configured runtime controls | ACC/upload disable switches work; upload policy, retention and local-recording flags tested |
 | RPD-005 | P1 | Keep receiver alive on malformed input | Reject non-object JSON and invalid fields, then accept a valid frame |
 | RPD-006 | P1 | Reliable sessions, laps and recovered upload queue | New sessions reset identity; equal-time distinct laps persist; recovered bundles enqueue on first start |

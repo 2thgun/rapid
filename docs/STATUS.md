@@ -24,6 +24,14 @@ simulator acceptance remains open.
 
 ## Current change
 
+Authenticated v4 is implemented in the Windows sender and Pi receiver. The final
+isolated Pi Release build passed all six CTests, including actual Windows BCrypt
+fixtures, validity/loss regression checks and replay persistence. A Windows-to-Pi
+UDP check on separate ports verified two samples, one rejected replay and session
+finalization. Hosted CI for this change is pending.
+Production remains configured for v3; live v4 simulator acceptance is pending.
+See [v4 setup and protocol](TELEMETRY_V4.md) before pairing keys.
+
 Display output now goes only to the journal, preventing Xorg and Chromium output
 from drawing over the dashboard. A three-second “Log updated” badge is driven by
 the native C++ monitor. Full messages remain in the persistent journal, limited

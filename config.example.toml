@@ -17,9 +17,11 @@ companion_port = 9001
 # packets are live, then allow a different rig 1.5 seconds after it disconnects.
 companion_host = ""
 # Required for authenticated protocol v4. Generate a random 32-byte key and
-# provide the same base64 value to the Windows installer. Prefer the
+# provide the same 64-character hex value to the Windows companion. Prefer the
 # RAPID_COMPANION_KEY environment variable instead of storing it here.
 companion_key = ""
+# Empty key accepts legacy v3 only. A configured key requires authenticated v4;
+# unauthenticated v3 packets will be rejected.
 telemetry_directory = "data/telemetry"
 
 [upload]

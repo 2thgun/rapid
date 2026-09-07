@@ -55,6 +55,7 @@ Runtime::Runtime(Config config)
                        {path.string(), double(std::time(nullptr))});
           }),
       source_(config_.companion_host) {
+  store_.exec("CREATE TABLE IF NOT EXISTS v4_runs(id TEXT PRIMARY KEY,sequence INTEGER NOT NULL,time INTEGER NOT NULL,simulator INTEGER NOT NULL,metadata TEXT NOT NULL,closed INTEGER NOT NULL,active INTEGER NOT NULL)");
   store_.exec(
       "CREATE TABLE IF NOT EXISTS native_acc_packets(id INTEGER PRIMARY "
       "KEY,received_at TEXT,packet_type INTEGER,normalized_json TEXT)");
@@ -130,10 +131,13 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
         !((ip >> 24) == 10 || (ip >> 24) == 127 || (ip >> 16) == 0xc0a8 ||
           (ip >> 20) == 0xac1 || (ip >> 16) == 0xa9fe))
       return false;
-    auto m = Json::parse(payload);
+    const bool v4 = payload.starts_with("RPD4");
+    if (!v4 && !config_.companion_key.empty())
+      throw AuthenticationError("unauthenticated telemetry disabled");
+    auto m = v4 ? receive_v4(store_, payload, config_.companion_key) : Json::parse(payload);
     if (!m.is_object())
       throw std::runtime_error("packet must be an object");
-    m.erase("_packet_gap");
+    if (!v4) m.erase("_packet_gap");
     if (m.contains("sample_rate_hz") &&
         (!m["sample_rate_hz"].is_number_integer() ||
          number(m, "sample_rate_hz") < 1 || number(m, "sample_rate_hz") > 100))
@@ -160,6 +164,12 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     auto daemon = string(m, "state");
     Json frame;
     if (type == "status") {
+      if (v4) {
+        state_["schema_version"] = 4;
+        state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
+        for (const char *key : {"track_name", "car_model", "driver_name", "session_name"})
+          if (m.contains(key)) state_[key] = m[key];
+      }
       if (version < 2 ||
           (daemon != "waiting" && daemon != "ready" && daemon != "driving"))
         throw std::runtime_error("invalid heartbeat");
@@ -198,7 +208,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
           throw std::runtime_error("oversized channel text");
       }
       for (const auto *key : {"throttle", "brake"})
-        if (frame.contains(key) &&
+        if (frame.contains(key) && !(v4 && frame[key].is_null()) &&
             (!frame[key].is_number() || number(frame, key) < 0 ||
              number(frame, key) > 1.001))
           throw std::runtime_error("invalid pedal");
@@ -255,11 +265,11 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
           number(m, "sequence") > 9007199254740991.0)
         throw std::runtime_error("invalid sequence");
       sequence = m["sequence"];
-      if (sequence_ >= 0 && sequence <= sequence_) {
+      if (!v4 && sequence_ >= 0 && sequence <= sequence_) {
         state_["packets_replayed"] = number(state_, "packets_replayed") + 1;
         return false;
       }
-      if (sequence_ >= 0) {
+      if (!v4 && sequence_ >= 0) {
         auto gap = sequence - sequence_ - 1;
         m["_packet_gap"] = std::min<std::int64_t>(gap, 1000000);
         state_["packets_lost"] = number(state_, "packets_lost") + gap;
@@ -284,7 +294,8 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
         state_[it.key()] = it.value();
     state_["rpm"] = int(number(frame, "rpm"));
     state_["samples_received"] = number(state_, "samples_received") + 1;
-    state_["schema_version"] = version;
+    state_["schema_version"] = v4 ? 4 : version;
+    if (v4) state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
     state_["last_sequence"] = sequence < 0 ? Json() : Json(sequence);
     state_["last_monotonic_us"] = m.value("monotonic_us", Json());
     state_["session_active"] = true;
@@ -305,13 +316,19 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
                     {"sequence", m.value("sequence", Json())},
                     {"monotonic_us", m.value("monotonic_us", Json())},
                     {"received_monotonic", monotonic()},
-                    {"packet_gap", m.value("_packet_gap", 0)},
+                    {"packet_gap", m.value(v4 ? "_wire_gap" : "_packet_gap", 0)},
                     {"values", values}};
       events_.emplace_back(next_event_++, std::move(event));
       if (events_.size() > 12256)
         events_.pop_front();
     }
     return true;
+  } catch (const AuthenticationError &) {
+    state_["packets_auth_failed"] = number(state_, "packets_auth_failed") + 1;
+    return false;
+  } catch (const std::range_error &) {
+    state_["packets_replayed"] = number(state_, "packets_replayed") + 1;
+    return false;
   } catch (const std::exception &) {
     state_["packets_invalid"] = number(state_, "packets_invalid") + 1;
     return false;

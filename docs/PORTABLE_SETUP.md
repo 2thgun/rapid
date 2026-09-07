@@ -28,9 +28,10 @@ Run from PowerShell in the companion directory:
 ```
 
 Use the Pi's current address with `--pi-host` if hostname discovery does not work.
-The explicit v3 flag is required for this documented setup: the current source
-defaults to a v4 selector whose sender integration is unfinished. v3 is intended
-for a trusted local network and does not authenticate telemetry.
+This command supports a Pi configured without a companion key. v3 does not
+authenticate telemetry. For v4, bring a current executable and the private key
+file matching the Pi configuration; follow [v4 setup](TELEMETRY_V4.md). The current
+companion defaults to v4 and requires a key unless forwarding is disabled.
 
 Open `http://rapid:8000/healthz` from the PC to check HTTP reachability. That does
 not prove UDP is allowed; start driving and confirm the dashboard receives data.

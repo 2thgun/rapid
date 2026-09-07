@@ -17,7 +17,9 @@ The active Pi application exposes `/`, `/api/live`, `/telemetry`, `/api/v1/statu
 and `/api/v1/live`. `rapid-display.service` starts Chromium on the GPIO framebuffer.
 
 The last verified production companion receiver supports JSON schemas v1–v3 on UDP
-port 9001. Native v4 transport remains incomplete and must not be described as deployed.
+port 9001. Current source also implements authenticated binary v4, enabled by a
+shared key; see [v4 configuration and wire contract](TELEMETRY_V4.md). Deployment
+and live-simulator acceptance are tracked separately in [Status](STATUS.md).
 
 `rapid-pi` combines TOML/environment
 configuration, UDP reception, dashboard HTTP, WebSocket history, disk-backed LD

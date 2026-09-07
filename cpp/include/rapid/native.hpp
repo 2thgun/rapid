@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 namespace rapid::native {
@@ -41,9 +42,16 @@ public:
   Json query(const std::string &sql, const Json &args = Json::array());
 };
 
+std::string telemetry_key(std::string hex);
+struct AuthenticationError : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+Json receive_v4(Database &store, const std::string &payload,
+                const std::string &key);
+
 struct Config {
   std::string host = "0.0.0.0", companion_host, acc_host = "192.168.1.89",
-              acc_password;
+              acc_password, companion_key;
   std::string display_name = "raPId", upload_url, upload_token,
               upload_policy = "races";
   int port = 8000, companion_port = 9001, acc_port = 9000,

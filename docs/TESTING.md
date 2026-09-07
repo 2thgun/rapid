@@ -27,7 +27,14 @@ Build the Windows companion using `companion/build-native-daemon.ps1` with
 Run its executable with
 `--self-test --output-directory <temporary-directory>` without installing it.
 
-The Windows companion self-test validates synthetic LD structure only, not
+The Windows companion self-test validates synthetic LD structure and exports
+binary v4 fixtures signed by the actual BCrypt encoder. Native `rapid-v4-tests`
+uses them to check decoding, authentication, malformed input, replay across
+restarts, channel validity and recording. CI transfers freshly generated Windows
+fixtures to both Linux builds using GitHub's
+[artifact actions](https://github.com/actions/upload-artifact). Local CTest uses
+checked-in fixtures; override with `-DRAPID_V4_FIXTURES=/absolute/fixture/path`.
+Their fixed public key is strictly for testing. These checks do not validate
 simulator adapters or live MoTeC interpretation. See [status](STATUS.md) for the
 latest completed checks; hosted CI and physical acceptance are tracked separately.
 

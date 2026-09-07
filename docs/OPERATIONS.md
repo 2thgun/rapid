@@ -50,6 +50,8 @@ It reads the existing TOML configuration and `RAPID_*` environment overrides.
 The default asset directory is `cpp/assets/` relative to the service working
 directory; override with `RAPID_ASSETS_DIRECTORY` if installing elsewhere.
 The native service respects `[acc] enabled` and `[upload] enabled`.
+For companion authentication, follow [v4 migration](TELEMETRY_V4.md). A configured
+`[app] companion_key` enables v4-only reception; an empty key keeps legacy reception.
 
 Install `systemd/rapid.service` only after the native checks pass and the current
 recorder is idle. Its executable is `cpp/build/rapid-pi`. Preserve the previous

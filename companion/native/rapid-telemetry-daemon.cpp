@@ -993,7 +993,8 @@ void append_float_le(std::vector<std::uint8_t>& output, float value) {
 }
 
 void append_wire_string(std::vector<std::uint8_t>& output, std::string_view value) {
-    const auto length = std::min<std::size_t>(value.size(), std::numeric_limits<std::uint16_t>::max());
+    if (value.size() > 512) throw std::runtime_error("Protocol-v4 metadata field exceeds 512 bytes");
+    const auto length = value.size();
     append_le(output, static_cast<std::uint16_t>(length));
     output.insert(output.end(), value.begin(), value.begin() + static_cast<std::ptrdiff_t>(length));
 }
@@ -1071,7 +1072,7 @@ private:
 class V4Encoder {
 public:
     explicit V4Encoder(std::vector<std::uint8_t> key)
-        : hmac_(std::move(key)), daemon_started_(std::chrono::steady_clock::now()) {}
+        : hmac_(std::move(key)), daemon_started_(std::chrono::steady_clock::now()) { end_run(); }
 
     void begin_run() {
         if (BCryptGenRandom(nullptr, run_id_.data(), static_cast<ULONG>(run_id_.size()),
@@ -1085,7 +1086,11 @@ public:
 
     void end_run() {
         active_ = false;
-        run_id_.fill(0);
+        if (BCryptGenRandom(nullptr, run_id_.data(), static_cast<ULONG>(run_id_.size()),
+                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+            throw std::runtime_error("Cannot create v4 control-stream identifier");
+        control_sequence_ = 0;
+        daemon_started_ = std::chrono::steady_clock::now();
     }
 
     bool active() const { return active_; }
@@ -1122,7 +1127,7 @@ public:
 
     std::vector<std::uint8_t> status_packet(Game game, V4StatusState state, std::string_view text,
                                             std::uint64_t sent_packets, int rate) {
-        const auto text_length = std::min<std::size_t>(text.size(), std::numeric_limits<std::uint16_t>::max());
+        const auto text_length = std::min<std::size_t>(text.size(), 512);
         std::vector<std::uint8_t> payload;
         payload.reserve(12 + text_length);
         payload.push_back(static_cast<std::uint8_t>(state));
@@ -1469,8 +1474,17 @@ private:
         }
     }
 
+    void send(const std::vector<std::uint8_t>& payload) {
+        send(std::string(reinterpret_cast<const char*>(payload.data()), payload.size()));
+    }
+
     void finish_recording() {
         if (!recorder_.recording()) return;
+        if (v4_ && v4_->active()) {
+            send(v4_->status_packet(running_game_.game(), V4StatusState::ended,
+                                   "Session ended", packets_, options_.sample_rate));
+            v4_->end_run();
+        }
         try {
             const auto count = recorder_.sample_count();
             const auto path = recorder_.finish();
@@ -1502,6 +1516,8 @@ private:
                 if (running_game_) {
                     if (!options_.no_forward) {
                         sender_ = std::make_unique<UdpSender>(options_.pi_host, options_.pi_port);
+                        if (options_.protocol == Protocol::v4)
+                            v4_ = std::make_unique<V4Encoder>(options_.auth_key);
                     }
                     logger_.write(std::string(game_name(running_game_.game())) + " process detected; telemetry waking");
                     set_status(std::string(game_name(running_game_.game())) + " started - waiting for telemetry");
@@ -1530,7 +1546,13 @@ private:
 
             if (now >= next_heartbeat) {
                 const auto state = recorder_.recording() ? "driving" : adapter_ ? "ready" : "waiting";
-                send(status_json(state, adapter_.get(), options_.sample_rate));
+                if (v4_) {
+                    if (v4_->active() && adapter_)
+                        send(v4_->metadata_packet(running_game_.game(), adapter_->metadata, options_.sample_rate));
+                    send(v4_->status_packet(running_game_.game(),
+                         v4_->active() ? V4StatusState::driving : adapter_ ? V4StatusState::ready : V4StatusState::waiting,
+                         "", packets_, options_.sample_rate));
+                } else send(status_json(state, adapter_.get(), options_.sample_rate));
                 next_heartbeat = now + 1s;
                 set_status(current_status_);
             }
@@ -1566,13 +1588,19 @@ private:
                     inactive_since.reset();
                     if (!recorder_.recording()) {
                         recorder_.start(adapter_->metadata);
+                        if (v4_) {
+                            v4_->begin_run();
+                            send(v4_->metadata_packet(running_game_.game(), adapter_->metadata, options_.sample_rate));
+                        }
                         logger_.write("Recording " + adapter_->metadata.simulator + ": " +
                                       adapter_->metadata.vehicle + " at " + adapter_->metadata.venue);
                     }
                     Frame frame;
                     if (adapter_->read(frame)) {
                         recorder_.add(frame);
-                        send(telemetry_json(frame, *adapter_, options_.sample_rate));
+                        if (v4_) send(v4_->telemetry_packet(running_game_.game(), frame,
+                                                          options_.sample_rate, std::chrono::steady_clock::now()));
+                        else send(telemetry_json(frame, *adapter_, options_.sample_rate));
                         set_status(adapter_->metadata.simulator + " recording - " +
                                    std::to_string(recorder_.sample_count()) + " samples");
                     }
@@ -1602,6 +1630,7 @@ private:
     Logger logger_;
     MotecRecorder recorder_;
     std::unique_ptr<UdpSender> sender_;
+    std::unique_ptr<V4Encoder> v4_;
     std::unique_ptr<Adapter> adapter_;
     RunningGame running_game_;
     std::thread worker_;
@@ -1714,6 +1743,36 @@ HWND create_tray_window(HINSTANCE instance) {
 }
 
 bool run_self_test(const fs::path& directory, int sample_rate) {
+    // Public test-only key; fixtures exercise the actual Windows BCrypt encoder.
+    V4Encoder encoder(std::vector<std::uint8_t>(32, 0x11));
+    Metadata wire_metadata;
+    wire_metadata.venue = "V4 Track"; wire_metadata.vehicle = "V4 Car";
+    wire_metadata.driver = "V4 Driver"; wire_metadata.session = "Race";
+    Frame wire_frame;
+    wire_frame.valid_mask = all_field_bits();
+    wire_frame.value[rpm] = 6500; wire_frame.value[gear] = 4;
+    wire_frame.value[throttle] = .8; wire_frame.value[brake] = .2;
+    wire_frame.value[steering_angle] = -.3;
+    wire_frame.value[g_x] = .7; wire_frame.value[g_y] = 1; wire_frame.value[g_z] = -.4;
+    wire_frame.value[speed_kmh] = 198; wire_frame.value[lap_number] = 1;
+    wire_frame.value[current_lap_ms] = 1234;
+    wire_frame.completed_lap_ms = 90000; wire_frame.delta_ms = -125;
+    const auto fixtures = directory / "v4-fixtures";
+    fs::create_directories(fixtures);
+    auto save = [&](const char* name, const std::vector<std::uint8_t>& bytes) {
+        std::ofstream out(fixtures / name);
+        for (auto byte : bytes) out << std::hex << std::setw(2) << std::setfill('0') << int(byte);
+        out << '\n';
+        if (!out) throw std::runtime_error("Cannot write v4 test fixture");
+    };
+    encoder.begin_run();
+    save("metadata.hex", encoder.metadata_packet(Game::acc, wire_metadata, sample_rate));
+    save("telemetry.hex", encoder.telemetry_packet(Game::acc, wire_frame, sample_rate, std::chrono::steady_clock::now()));
+    save("driving.hex", encoder.status_packet(Game::acc, V4StatusState::driving, "", 2, sample_rate));
+    save("next.hex", encoder.telemetry_packet(Game::acc, wire_frame, sample_rate, std::chrono::steady_clock::now()));
+    save("ended.hex", encoder.status_packet(Game::acc, V4StatusState::ended, "", 4, sample_rate));
+    encoder.end_run();
+    save("ready.hex", encoder.status_packet(Game::acc, V4StatusState::ready, "", 5, sample_rate));
     Metadata metadata;
     metadata.simulator = "SELFTEST";
     metadata.driver = "Test Driver";
