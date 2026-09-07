@@ -27,8 +27,9 @@ simulator acceptance remains open.
 The Windows companion includes the tested/deployed quiet duplicate-launch fix
 (`7b4db54`). The next deployment candidate prevents heartbeats from turning
 retained values into graph samples, deduplicates dashboard polling by source
-sample, and rejects malformed legacy sequence values before recording changes.
-All six Pi Release CTests and the isolated Chromium graph check passed.
+sample, and rejects malformed packets before recording changes. All six Pi
+Release CTests and the isolated Chromium graph check passed. The exact staged
+binary and validation log are recorded privately for the morning deployment.
 
 Authenticated v4 is implemented in the Windows sender and Pi receiver. The final
 isolated Pi Release build passed all six CTests, including actual Windows BCrypt
