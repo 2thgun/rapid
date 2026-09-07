@@ -33,6 +33,8 @@ record. The PowerShell fallback has different idle behavior and is legacy only.
 
 ## Launch and installation
 
+For venue requirements and one-off use, see [portable setup](../docs/PORTABLE_SETUP.md).
+
 For an explicit one-off current-source run on a trusted LAN:
 
 ```powershell

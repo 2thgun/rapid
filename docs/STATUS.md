@@ -12,14 +12,15 @@ simulator acceptance remains open.
   Graphs retain 30 seconds of pedal and G-force history in the dashboard browser.
 - `\\rapid\Telemetry` is the working authenticated SMB location for finalized bundles.
 - Native Windows companion source builds and passes its synthetic LD self-test.
-- Current commit `85ff713` passed all five Pi Debug CTest targets: network,
-  archive, runtime/recorder, log status and protocol. Its Release build passed
-  the four then-release-safe targets. The current protocol test uses explicit
-  failures so subsequent Release runs can include all five targets.
+- Deployed native revision `3c6aa8b` passed all five Pi Release CTest targets:
+  network, archive, runtime/recorder, log status and protocol. Binary and dashboard
+  hashes match the tested staging build; hosted Debug/Release tests also passed.
   Network checks cover UDP, HTTP, WebSocket history and disconnect finalization.
 - A real journal event advanced the native HTTP status with warning severity.
-- Dashboard services started at 8.500/8.503 seconds into userspace after removing
-  their network-online dependency. Overall boot remains about 25 seconds.
+- Boot before cleanup measured 25.904 seconds. Removed the obsolete seven-second
+  rc.local sleep and failed framebuffer-copy launch; cold-boot improvement is unmeasured.
+- Kiosk revision `7686e12` publishes its X11 activation environment. Both desktop
+  portal services are now active after previously failing to open the display.
 
 ## Current change
 
@@ -35,5 +36,5 @@ to 100 MB and 14 days.
 - Native Pi/archive implementation is present. Live simulator and archive
   acceptance remain pending.
 - Linux native tests and the Windows companion build/self-test passed in
-  [GitHub Actions for 47860ec](https://github.com/2thgun/rapid/actions/runs/34064690027).
+  [GitHub Actions for 3c6aa8b](https://github.com/2thgun/rapid/actions/runs/34132243838).
 - Four-simulator live acceptance and immediate lap publication remain open.
