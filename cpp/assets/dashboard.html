@@ -300,10 +300,11 @@ async function tick() {
     setMetric('suspension-front', pair(state.suspension_fl, state.suspension_fr)); setMetric('suspension-rear', pair(state.suspension_rl, state.suspension_rr));
   } catch (error) {
     fields.status.textContent = 'Dashboard connection lost';
+    addGraphSample({});
   }
+  setTimeout(tick, 200);
 }
 tick();
-setInterval(tick, 200);
 async function pollLogStatus() {
   try {
     const endpoint = new URL('/api/log-status', window.location.href);

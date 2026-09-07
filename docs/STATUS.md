@@ -33,5 +33,6 @@ to 100 MB and 14 days.
 - Fallback sectors are distance thirds where canonical sector loops are unavailable.
 - Native Pi/archive implementation is present. Live simulator and archive
   acceptance remain pending.
-- Hosted CI results are available through GitHub Actions after publication.
+- Linux native tests and the Windows companion build/self-test passed in
+  [GitHub Actions for 47860ec](https://github.com/2thgun/rapid/actions/runs/34064690027).
 - Four-simulator live acceptance and immediate lap publication remain open.

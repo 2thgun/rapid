@@ -9,7 +9,7 @@ no GitHub issues, assignees, dates or remote milestones have been created.
 | --- | --- | --- |
 | M0: repository and clean dashboard | Delivered locally/on Pi | Preserved originals, documented source tree, native log notification, offline checks |
 | M1: dependable live recording | Open | Per-lap publication, recovery and four-simulator acceptance |
-| M2: native Pi parity | Implemented; cutover pending | Complete optimized/integration checks, preserve rollback, switch service and verify device |
+| M2: native Pi parity | Deployed; live acceptance open | Debug/Release checks and cutover complete; verify live simulator recordings |
 | M3: archive acceptance | Native recovery tests pass; end-to-end check pending | Resume, crash recovery, authentication and limits pass end-to-end tests |
 
 ## Prioritized issue drafts
@@ -30,4 +30,12 @@ no GitHub issues, assignees, dates or remote milestones have been created.
 | RPD-012 | P2 | Finish boot/display review | Explain legacy `rc.local` seven-second sleep and framebuffer helpers before modifying them; verify physical cold boot |
 
 Use Backlog, Ready, In progress, Blocked and Done when importing these into GitHub.
-Record evidence separately from status. Hosted CI execution is pending the first push.
+Record evidence separately from status. Native Linux and Windows companion CI passed
+for revision `47860ec`: [verified run](https://github.com/2thgun/rapid/actions/runs/34064690027).
+
+## Evidence checkpoint — 2026-09-07
+
+- RPD-011: native production replacement completed; live recording acceptance remains open.
+- RPD-005: automated checks reject malformed JSON and fields, then accept valid telemetry.
+- RPD-002/006: automated checks cover publication-failure spool preservation, crash recovery and v3 session reset; remaining acceptance criteria stay open.
+- RPD-012: boot critical path includes a seven-second rc.local delay followed by a failed fbcp launch. Xorg uses /dev/fb0 directly. Cleanup and cold-boot measurement remain pending.
