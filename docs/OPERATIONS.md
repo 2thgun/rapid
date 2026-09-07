@@ -18,6 +18,10 @@ The dashboard services intentionally do not wait for `network-online.target` at
 boot. The dashboard only depends on local HTTP; telemetry clients reconnect when
 the LAN is ready.
 
+The dedicated local-dashboard Chromium profile uses `--password-store=basic`
+to avoid interactive keyring creation on a keyboardless device. This profile
+is not intended to store passwords; it loads the local dashboard from `/run`.
+
 The 2026-09-07 boot investigation measured 25.941 seconds to startup completion.
 That boot began before the native cutover. Its graphical target waited for
 NetworkManager readiness (6.035 seconds) and then rc.local (7.073 seconds).

@@ -28,6 +28,7 @@ done
 
 exec /usr/bin/chromium \
   --kiosk \
+  --password-store=basic \
   --user-data-dir=/run/rapid-display/chromium \
   --no-first-run \
   --no-default-browser-check \
