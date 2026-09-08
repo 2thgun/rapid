@@ -47,6 +47,16 @@ current-user login startup entry. It does not install anything into AC, Content
 Manager, CSP, or wheel drivers. Run `install-demo.ps1 -Remove` to remove the
 login startup entry while preserving local recordings.
 
+To distribute a single setup executable, build it from a prepared private demo
+folder on Windows:
+
+```powershell
+./build-demo-installer.ps1 -BundlePath C:/Demos/raPId -OutputPath C:/Demos/raPId-AC1-Demo-Setup.exe
+```
+
+The resulting EXE contains the private paired key, so keep it out of Git and
+share it only with the intended demo PC.
+
 For a one-off run with a paired Pi:
 
 ```powershell
