@@ -1,8 +1,7 @@
 # Status — 2026-09-08
 
-Migration update: 2026-09-07. The Pi now runs the validated native C++ dashboard
-and recorder. Isolated Debug and Release checks passed before cutover; live
-simulator acceptance remains open.
+Migration update: 2026-09-08. The Pi runs the validated native C++ dashboard and
+recorder at demo revision `441f5fd`. Live simulator acceptance remains open.
 
 ## Last verified
 
@@ -12,7 +11,7 @@ simulator acceptance remains open.
   Graphs retain 30 seconds of pedal and G-force history in the dashboard browser.
 - `\\rapid\Telemetry` is the working authenticated SMB location for finalized bundles.
 - Native Windows companion source builds and passes its synthetic LD self-test.
-- Deployed native revision `7388eb6` passed all six Pi Release CTest targets:
+- Deployed native revision `441f5fd` passed all six Pi Release CTest targets:
   v4, network, archive, runtime/recorder, log status and protocol. Binary and dashboard
   hashes match the tested staging build; hosted Debug/Release tests also passed.
   Network checks cover UDP, HTTP, WebSocket history and disconnect finalization.
@@ -24,14 +23,12 @@ simulator acceptance remains open.
 
 ## Current change
 
-The AC1/Content Manager demo candidate adds fresh-physics gating, metadata refresh,
+The AC1/Content Manager demo release adds fresh-physics gating, metadata refresh,
 portable native launchers and config-relative local recording output. The
 [demo guide](AC1_DEMO_GUIDE.md) contains prerequisites, rehearsal and recovery.
-The steering-wheel PNG now has an explicit HTTP route and a binary-content
-regression check. These changes are not yet verified on the production Pi:
-the staging build was started before connectivity was lost; both the hostname
-and last known IP were unreachable on September 8. Do not equate a prepared
-package with a passed real AC driving/MoTeC rehearsal.
+The Pi installation was performed while the recorder was idle. The previous `cpp/`
+tree is preserved as an `.old` backup. All runtime services are active, `/healthz`
+responds, and the served steering-wheel PNG exactly matches the deployed asset.
 The Windows native build and isolated AC shared-memory/LD self-test passed on
 September 8, covering process names, controls, metadata, lap timing, pause,
 replay, packet counter restart and config-relative output. The tests use their
@@ -59,16 +56,12 @@ Windows login; live simulator/MoTeC acceptance is still pending.
 Previous binaries and configuration were preserved in `.old` backups.
 See [v4 setup and protocol](TELEMETRY_V4.md) for pairing and rollback.
 
-## Next deployment
+## Remaining acceptance
 
-Deploy the freshness candidate only while the recorder is idle. Preserve the
-current `cpp/` tree as a new uniquely named `.old` backup, replace it with the
-tested staged tree, and restart `rapid.service`; `rapid-display.service` must be
-started again because it is part of `rapid.service`. Verify `/healthz`, `/api/live`
-(`telemetry_fresh` and `telemetry_age_ms`), all three services, and the panel.
-Keep the paired key, state database and telemetry directory. Use the companion
-from the matching tested demo package for the AC freshness fix. A live driving
-session remains the final acceptance.
+Launch an original AC driving session through Content Manager using the portable
+paired companion kit. Confirm live controls, graphs, a completed bundle and its
+MoTeC opening according to the demo guide. That real driving rehearsal is the
+only remaining acceptance step.
 
 Display output now goes only to the journal, preventing Xorg and Chromium output
 from drawing over the dashboard. A three-second “Log updated” badge is driven by
