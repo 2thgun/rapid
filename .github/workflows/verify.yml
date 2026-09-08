@@ -35,6 +35,26 @@ jobs:
       - run: node cpp/tests/dashboard_graph_tests.js
       - shell: pwsh
         run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test"
+      - shell: pwsh
+        run: dotnet tool install --global wix --version 4.0.6
+      - shell: pwsh
+        run: ./companion/build-msi.ps1 -ExecutablePath ./companion/rapid-telemetry-daemon.exe -OutputPath ./dist/raPId-Companion.msi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-windows-msi
+          path: dist/raPId-Companion.msi
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-windows-companion
+          path: |
+            companion/rapid-telemetry-daemon.exe
+            companion/START-RAPID.cmd
+            companion/start-rapid-daemon.vbs
+            companion/install-demo.cmd
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-v4-fixtures

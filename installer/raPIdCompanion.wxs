@@ -1,0 +1,18 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="raPId Companion" Manufacturer="raPId" Version="1.0.0" UpgradeCode="A62B2831-CA89-4F7D-8A71-4B0B6046E361" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of raPId Companion is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="raPId">
+        <Component Id="CompanionFiles" Guid="A3746BD0-5F44-49F4-B11E-6FA9A84DD62D">
+          <File Id="CompanionExe" Source="$(var.CompanionExe)" KeyPath="yes" />
+          <File Id="CompanionLauncher" Source="$(var.CompanionLauncher)" />
+          <File Id="ConfigExample" Source="$(var.ConfigExample)" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="MainFeature" Title="raPId Companion" Level="1">
+      <ComponentRef Id="CompanionFiles" />
+    </Feature>
+  </Package>
+</Wix>

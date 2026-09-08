@@ -1,0 +1,10 @@
+# raPId unified companion configuration for ACC, AC, ACE, and iRacing.
+pi_host=192.168.1.64
+pi_port=9001
+sample_rate=50
+protocol=v4
+# Put the paired 64-hex-character key in telemetry.key beside your copied
+# daemon.conf, then add: auth_key_file=telemetry.key
+output_directory=recordings
+local_recording=true
+no_forward=false
