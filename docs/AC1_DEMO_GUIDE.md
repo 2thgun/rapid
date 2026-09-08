@@ -24,11 +24,10 @@ Content Manager session or MoTeC installation has been tested successfully.
 - Permission to run the companion, write recordings, use the local network and
   retrieve recordings. Rehearse any Windows application approval prompts before
   the presentation; do not disable the venue's security controls.
-- A known working local network that lets the PC reach the Pi. Prefer your own
-  already tested router if the venue cannot guarantee this. Guest Wi-Fi and some
-  hotspots isolate clients. Internet is unnecessary for raPId's local operation;
-  separately confirm that AC/Steam and the selected content launch offline if
-  that is the intended setup.
+- The Pi's own `rapid` Wi-Fi network is the normal demo network. It does not
+  require internet or venue Wi-Fi. The Windows PC must join it before starting
+  the companion. Ethernet can provide the Pi with internet separately when its
+  address range differs from the AP network.
 - The Pi's current IP address and the credentials used for its SSH/file share,
   stored privately. Preconfigure a reachable Wi-Fi network while still at home
   if the Pi has no keyboard. An unreachable Pi cannot be repaired over SSH.
@@ -53,16 +52,18 @@ chosen demo content requires it.
    Confirm that touch works and the steering-wheel image is visible on Drive.
    Resolve a persistent `PWR LIMIT` warning before driving; use the tested supply
    and cable. Boot time depends on the Pi and network, so allow setup time.
-2. Join the Windows PC to the Pi's network. From a Windows browser open
-   `http://rapid:8000/healthz`, then `http://rapid:8000/`. If `rapid` does not
-   resolve, use the Pi's current IPv4 address in both addresses.
+2. Confirm the top-right dashboard control says `WIFI AP`. On the Windows PC,
+   join Wi-Fi network `rapid` with password `12341234`. The Pi is always
+   `192.168.1.64` in AP mode. From a browser open
+   `http://192.168.1.64:8000/healthz`, then `http://192.168.1.64:8000/`.
+   Do not use eduroam or guest Wi-Fi for the PC-to-Pi telemetry path.
 3. Extract/copy the **whole companion folder** to a writable local directory,
    such as `C:\Users\YourName\Documents\raPId Demo`. Do not run inside a ZIP or
    from a read-only drive.
 4. Open the adjacent `daemon.conf` in a text editor. The prepared values are:
 
    ```ini
-   pi_host=rapid
+   pi_host=192.168.1.64
    pi_port=9001
    sample_rate=50
    protocol=v4
@@ -72,7 +73,7 @@ chosen demo content requires it.
    no_forward=false
    ```
 
-   If necessary, replace only `pi_host=rapid` with the Pi's current IPv4 address.
+   Keep `pi_host=192.168.1.64` while using the `rapid` access point.
    The host value has no `http://` or `:8000`. Keep the file as plain UTF-8 text
    without a BOM. Do not add quotes around values. Keep the existing paired key.
 5. If another raPId companion is running, use its tray menu **Exit** before
@@ -129,7 +130,7 @@ If the status is unclear, run this in PowerShell:
 Get-Process acs,acs_x86,rapid-telemetry-daemon -ErrorAction SilentlyContinue |
     Select-Object ProcessName,Id,SessionId
 
-$PiHost = 'rapid' # Replace with the Pi's current IPv4 address if needed.
+$PiHost = '192.168.1.64' # Pi address while using the rapid access point.
 Invoke-RestMethod "http://${PiHost}:8000/api/live" |
     Select-Object simulator,schema_version,companion_connected,companion_daemon_state,
         samples_received,telemetry_fresh,telemetry_age_ms,recording,recorded_samples,
@@ -150,6 +151,7 @@ connecting at the venue. Allow enough time to complete two clean laps.
 | Check | Pass condition |
 | --- | --- |
 | Cold start | Pi shows the dashboard without a keyboard, console overlay or keyring prompt; all five touch tabs work. |
+| Demo network | Dashboard says `WIFI AP`; PC joins `rapid`; `http://192.168.1.64:8000/healthz` responds. |
 | AC launch through Content Manager | `acs.exe`/`acs_x86.exe` starts; Pi identifies `AC`, accepts v4 and records changing telemetry. |
 | Drive page | Pedals rise and return to zero, RPM/speed/gears agree with the game, and the wheel turns in the expected direction. |
 | Graphs page | Pedal and G-force graphs are stacked vertically; throttle/brake actions produce distinct traces over the last 30 seconds. |
@@ -199,8 +201,8 @@ open the finalized recording. Keep the setup that passed rehearsal unchanged.
 
 | Symptom | Likely cause and recovery |
 | --- | --- |
-| Pi cannot be reached by SSH or browser | Check power and the network it joined. Try its current IPv4 address. Confirm both devices are on the tested network with client isolation disabled by its owner. Restore the preconfigured network if the keyboardless Pi joined the wrong one. |
-| `rapid` fails but the IP works | Hostname discovery/DNS is unavailable. Set `pi_host` to that IPv4 address, exit the companion, then relaunch. Use the same address in the browser/share. |
+| Pi cannot be reached by SSH or browser | Confirm the PC joined Wi-Fi `rapid`, then use `192.168.1.64`. Check the dashboard says `WIFI AP`; reboot the Pi only after recording is idle. |
+| `rapid` fails but the IP works | Expected on networks without hostname discovery. For AP mode, retain `pi_host=192.168.1.64` and use that address in the browser. |
 | Browser works, telemetry does not | HTTP uses TCP 8000; telemetry uses PC-to-Pi UDP 9001. Check the host/port, matching key, companion status and counters. Ask the network owner to allow that traffic; do not turn off the firewall. |
 | Forwarded count grows but Pi counters do not | UDP send success is not delivery confirmation. Check the destination IP, UDP policy and Pi authentication counters. Close companions on other PCs; the Pi accepts one active source, and a configured `companion_host` may still pin an old PC. |
 | Companion disappears on launch | It normally lives in the tray. Check hidden icons and Task Manager. If an older instance owns the tray, exit that instance first; a duplicate launch exits quietly. |
@@ -208,7 +210,8 @@ open the finalized recording. Keep the setup that passed rehearsal unchanged.
 | Key/configuration error | Confirm the adjacent files exist and the launcher is from the same folder. Use a BOM-free key/config, valid `key=value` lines and the paired key. Do not paste a password or a quoted string into the key file. |
 | Dormant while Content Manager is open | Launch an actual driving session. Confirm `acs.exe` or `acs_x86.exe` in Task Manager and wait for the five-second discovery interval. |
 | AC process detected, still waiting for telemetry | Finish loading/enter the car; avoid showroom/replay. Run AC and companion in the same Windows session with compatible permissions. Close other sims and relaunch the AC session. |
-| Works before travel, not after Wi-Fi/IP change | Update `pi_host` to the verified current IPv4 address, then exit/relaunch the companion after the network is ready. |
+| Works before travel, not at the venue | Rejoin the PC to `rapid`, confirm `WIFI AP`, retain `pi_host=192.168.1.64`, then exit/relaunch the companion. |
+| Dashboard says `WIFI HOME` | Tapping the Wi-Fi control switches modes and disconnects the current browser. Rejoin `rapid` to return to AP mode, or use the Pi's home-network address while that mode is active. |
 | Wrong simulator or competing readings | Close every other supported simulator and companion instance, then relaunch this companion and AC. Do not run two rigs against the paired Pi during the demo. |
 | `Waiting for fresh telemetry`, stationary graph or gaps | Unpause and drive; verify AC is producing samples. Inspect the PC log and Pi counters. Sustained loss during real driving needs network/power investigation. A gap during a pause is expected. |
 | Wrong pedal/steering behavior | Check the controls in AC first, then compare the dashboard on the stock rehearsal car. Do not present a physically reversed, stuck or mis-scaled control as correct. |

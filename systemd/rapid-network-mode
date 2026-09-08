@@ -1,0 +1,55 @@
+#!/bin/sh
+set -eu
+
+runtime=/run/rapid-network
+request="$runtime/request"
+state="$runtime/state"
+ap_connection=rapid-demo
+
+home_connection() {
+  nmcli -t -f NAME,TYPE connection show | awk -F: \
+    '$2 == "802-11-wireless" && $1 != "rapid-demo" { print $1; exit }'
+}
+
+write_state() {
+  printf '{"mode":"%s","updated_at":"%s"}\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$state"
+  chmod 0640 "$state"
+}
+
+apply_mode() {
+  mode=$1
+  case "$mode" in
+    ap) target=$ap_connection ;;
+    home) target=$(home_connection) ;;
+    *) return 1 ;;
+  esac
+  [ -n "$target" ]
+  nmcli connection up "$target" ifname wlan0
+  write_state "$mode"
+}
+
+active=$(nmcli -g GENERAL.CONNECTION device show wlan0 2>/dev/null || true)
+case "$active" in
+  "$ap_connection") write_state ap ;;
+  *)
+    home=$(home_connection || true)
+    if [ -n "$home" ] && [ "$active" = "$home" ]; then
+      write_state home
+    else
+      write_state unknown
+    fi
+    ;;
+esac
+
+while :; do
+  if [ -f "$request" ]; then
+    mode=$(sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\(ap\|home\)".*/\1/p' "$request" | head -n 1)
+    rm -f "$request"
+    if [ -n "$mode" ]; then
+      if ! apply_mode "$mode"; then
+        write_state error
+      fi
+    fi
+  fi
+  sleep 1
+done

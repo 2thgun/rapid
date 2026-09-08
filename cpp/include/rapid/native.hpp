@@ -58,7 +58,8 @@ struct Config {
       acc_local_port = 9000, protocol_version = 4, interval_ms = 100;
   bool acc_enabled = false, upload_enabled = false;
   fs::path database = "data/rapid.db", telemetry = "data/telemetry",
-           queue = "data/upload-queue.db", assets = "cpp/assets";
+           queue = "data/upload-queue.db", assets = "cpp/assets",
+           network_control = "/run/rapid-network";
   static Config load(const fs::path &path);
 };
 

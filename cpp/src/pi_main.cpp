@@ -66,6 +66,31 @@ int main(int argc, char **argv) {
               return {200, runtime.snapshot().dump()};
             if (req.method == "GET" && path == "/healthz")
               return {200, "{\"status\":\"ok\",\"runtime\":\"cpp\"}"};
+            if (req.method == "GET" && path == "/api/v1/network/mode") {
+              auto state = settings.network_control / "state";
+              if (!fs::exists(state))
+                return {503, "{\"available\":false}"};
+              auto value = Json::parse(read_file(state));
+              if (!value.is_object() || !value.contains("mode") ||
+                  !value["mode"].is_string())
+                return {503, "{\"available\":false}"};
+              value["available"] = true;
+              return {200, value.dump()};
+            }
+            if (req.method == "POST" && path == "/api/v1/network/mode") {
+              auto body = Json::parse(req.body);
+              if (!body.is_object() || !body.contains("mode") ||
+                  !body["mode"].is_string())
+                return {400, "{\"detail\":\"mode must be ap or home\"}"};
+              auto mode = body["mode"].get<std::string>();
+              if (mode != "ap" && mode != "home")
+                return {400, "{\"detail\":\"mode must be ap or home\"}"};
+              if (!fs::is_directory(settings.network_control))
+                return {503, "{\"available\":false}"};
+              atomic_file(settings.network_control / "request",
+                          Json{{"mode", mode}}.dump());
+              return {202, Json{{"mode", mode}, {"queued", true}}.dump()};
+            }
             if (req.method == "PUT" && path == "/api/v1/session/upload") {
               auto body = Json::parse(req.body);
               if (!body.is_object() || !body.contains("enabled") ||

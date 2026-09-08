@@ -17,6 +17,9 @@
   #log-status.visible { visibility: visible; }
   #log-status.warn { border-color: #e6a619; color: #f6b91a; }
   #log-status.error { border-color: #d53747; color: #ff6472; background: #291317; }
+  #network-mode { position: fixed; top: 9px; right: 72px; min-width: 48px; padding: 3px 5px; border: 1px solid #394754; background: #10161b; color: #aab7c0; font-size: 9px; font-weight: 800; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  #network-mode.ap { border-color: #315944; color: #55dd8f; }
+  #network-mode.home { border-color: #e6a619; color: #f6b91a; }
   .dash { min-height: 0; display: grid; grid-template-columns: 140px 190px 1fr; gap: 6px; }
   .card { min-width: 0; min-height: 0; background: #10161b; border: 1px solid #27323a; border-radius: 3px; padding: 7px; }
   .label { color: #8d9ba6; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
@@ -138,6 +141,7 @@
     </div>
   </section>
   <nav class="touch-nav" aria-label="Dashboard pages"><button class="active" data-page="drive">DRIVE</button><button data-page="timing">TIMING</button><button data-page="vehicle">VEHICLE</button><button data-page="tyres">TYRES</button><button data-page="graphs">GRAPHS</button></nav>
+  <button id="network-mode" type="button" aria-label="Switch Wi-Fi mode">WIFI</button>
 </main>
 <script>
 const fields = {};
@@ -145,7 +149,7 @@ const placeholderText = document.createTreeWalker(document.body, NodeFilter.SHOW
 for (let node = placeholderText.nextNode(); node; node = placeholderText.nextNode()) node.nodeValue = node.nodeValue.replaceAll('â€”', '--').replaceAll('â€¦', '...');
 for (const id of ['status', 'sim', 'gear', 'rpm', 'rpm-fill', 'speed', 'lap', 'last', 'delta',
   'throttle-value', 'throttle-fill', 'brake-value', 'brake-fill', 'steering-value',
-  'steering-wheel', 'g-dot', 'g-value', 'lap-number', 'power-status', 'log-status']) {
+  'steering-wheel', 'g-dot', 'g-value', 'lap-number', 'power-status', 'log-status', 'network-mode']) {
   fields[id] = document.getElementById(id);
 }
 const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
@@ -223,6 +227,33 @@ function updateLogNotice(state) {
   lastLogSequence = sequence;
 }
 
+let networkMode = null;
+function updateNetworkMode(state) {
+  if (!state.available || (state.mode !== 'ap' && state.mode !== 'home')) return;
+  networkMode = state.mode;
+  const button = fields['network-mode'];
+  button.className = state.mode;
+  button.textContent = state.mode === 'ap' ? 'WIFI AP' : 'WIFI HOME';
+}
+async function pollNetworkMode() {
+  try {
+    const response = await fetch('/api/v1/network/mode', {cache: 'no-store', signal: AbortSignal.timeout(2000)});
+    if (response.ok) updateNetworkMode(await response.json());
+  } catch (_) { /* The dashboard remains usable while Wi-Fi is changing. */ }
+  setTimeout(pollNetworkMode, 2000);
+}
+fields['network-mode'].addEventListener('pointerdown', async event => {
+  event.preventDefault();
+  const next = networkMode === 'ap' ? 'home' : 'ap';
+  fields['network-mode'].disabled = true;
+  fields['network-mode'].textContent = next === 'ap' ? 'STARTING AP' : 'JOINING HOME';
+  try {
+    const response = await fetch('/api/v1/network/mode', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({mode: next})});
+    if (!response.ok) throw new Error('network switch rejected');
+    networkMode = next;
+  } catch (_) { fields['network-mode'].textContent = 'WIFI ERROR'; }
+  setTimeout(() => { fields['network-mode'].disabled = false; }, 3000);
+});
 async function tick() {
   try {
     const response = await fetch('/api/live', {cache: 'no-store', signal: AbortSignal.timeout(2000)});
@@ -285,6 +316,7 @@ async function tick() {
   setTimeout(tick, 200);
 }
 tick();
+pollNetworkMode();
 async function pollLogStatus() {
   try {
     const endpoint = new URL('/api/log-status', window.location.href);

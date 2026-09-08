@@ -23,6 +23,8 @@ companion_key = ""
 # Empty key accepts legacy v3 only. A configured key requires authenticated v4;
 # unauthenticated v3 packets will be rejected.
 telemetry_directory = "data/telemetry"
+# Directory shared with rapid-network-mode.service. Leave unchanged on the Pi.
+network_control_directory = "/run/rapid-network"
 
 [upload]
 enabled = false

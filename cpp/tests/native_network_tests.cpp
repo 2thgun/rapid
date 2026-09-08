@@ -72,6 +72,8 @@ int main(int argc, char **argv) {
       setenv("RAPID_ARCHIVE_HOST", "127.0.0.1", 1);
       setenv("RAPID_ARCHIVE_PORT", std::to_string(port + 1).c_str(), 1);
       setenv("RAPID_ASSETS_DIRECTORY", argv[2], 1);
+      setenv("RAPID_NETWORK_CONTROL_DIRECTORY",
+             (root / "network-control").c_str(), 1);
       setenv("RAPID_ARCHIVE_OWNER_PASSWORD_HASH", hash, 1);
       setenv("RAPID_ARCHIVE_INGEST_TOKEN_HASH", hash, 1);
       int fd = ::open((root / "archive.log").c_str(), O_WRONLY | O_CREAT, 0600);
@@ -128,9 +130,25 @@ int main(int argc, char **argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     require(ready, "server ready");
+    fs::create_directories(root / "network-control");
+    require(request(port, http::verb::post, "/api/v1/network/mode",
+                    "{\"mode\":\"invalid\"}")
+                    .result_int() == 400,
+            "network setting rejects unknown modes");
+    require(request(port, http::verb::post, "/api/v1/network/mode",
+                    "{\"mode\":\"ap\"}")
+                    .result_int() == 202 &&
+                Json::parse(read_file(root / "network-control" / "request"))["mode"] ==
+                    "ap",
+            "network setting queues AP mode");
+    atomic_file(root / "network-control" / "state", "{\"mode\":\"ap\"}");
+    auto network_status = request(port, http::verb::get, "/api/v1/network/mode");
+    require(network_status.result_int() == 200 &&
+                Json::parse(network_status.body())["available"] == true,
+            "network status is available");
     require(request(port, http::verb::get, "/")
                     .body()
-                    .find("data-page=\"tyres\"") != std::string::npos,
+                    .find("id=\"network-mode\"") != std::string::npos,
             "dashboard assets");
     require(request(port, http::verb::get, "/telemetry")
                     .body()

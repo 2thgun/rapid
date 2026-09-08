@@ -1,0 +1,17 @@
+[Unit]
+Description=raPId Wi-Fi mode controller
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+Group=rapid
+RuntimeDirectory=rapid-network
+RuntimeDirectoryMode=0770
+ExecStart=/usr/local/sbin/rapid-network-mode
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

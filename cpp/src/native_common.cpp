@@ -220,6 +220,9 @@ Config Config::load(const fs::path &path) {
                      c.telemetry.string());
   c.assets = text("app", "assets_directory", "RAPID_ASSETS_DIRECTORY",
                   c.assets.string());
+  c.network_control = text("app", "network_control_directory",
+                           "RAPID_NETWORK_CONTROL_DIRECTORY",
+                           c.network_control.string());
   c.acc_enabled = boolean("acc", "enabled", "RAPID_ACC_ENABLED", false);
   c.acc_host = text("acc", "host", "RAPID_ACC_HOST", c.acc_host);
   c.acc_port = integer("acc", "port", "RAPID_ACC_PORT", c.acc_port);
