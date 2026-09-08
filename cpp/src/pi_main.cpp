@@ -19,7 +19,8 @@ int main(int argc, char **argv) {
     auto settings = Config::load(config);
     Runtime runtime(settings);
     auto dashboard = read_file(settings.assets / "dashboard.html"),
-         telemetry = read_file(settings.assets / "telemetry.html");
+         telemetry = read_file(settings.assets / "telemetry.html"),
+         steering_wheel = read_file(settings.assets / "steering-wheel-cartoon.png");
     std::signal(SIGINT, [](int) { stopping = true; });
     std::signal(SIGTERM, [](int) { stopping = true; });
     std::signal(SIGPIPE, SIG_IGN);
@@ -58,6 +59,8 @@ int main(int argc, char **argv) {
               return {200, dashboard, "text/html; charset=utf-8"};
             if (req.method == "GET" && path == "/telemetry")
               return {200, telemetry, "text/html; charset=utf-8"};
+            if (req.method == "GET" && path == "/steering-wheel-cartoon.png")
+              return {200, steering_wheel, "image/png"};
             if (req.method == "GET" &&
                 (path == "/api/live" || path == "/api/v1/status"))
               return {200, runtime.snapshot().dump()};

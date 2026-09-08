@@ -22,9 +22,6 @@ Configure the same key on both ends using the [v4 guide](../docs/TELEMETRY_V4.md
 Use `--protocol v3` for an older Pi receiver configured without a companion key.
 Local recording is currently unconditional despite the parsed opt-in flag.
 
-Older saved binaries and the compatibility wrapper use broadcast/10 Hz defaults.
-The preserved private runtime must not be mistaken for a build of today's source.
-
 Without a supported simulator process, the native daemon only checks the process
 table every five seconds. It does not open shared memory, send heartbeats, or
 record.
@@ -32,6 +29,17 @@ record.
 ## Launch and installation
 
 For venue requirements and one-off use, see [portable setup](../docs/PORTABLE_SETUP.md).
+For original Assetto Corsa and Content Manager, use the complete
+[demo guide](../docs/AC1_DEMO_GUIDE.md). Prepare a paired portable folder from an
+already built native executable:
+
+```powershell
+./package-demo.ps1 -ExecutablePath ./rapid-telemetry-daemon.exe -AuthKeyPath C:/private/telemetry.key -Destination C:/Demos/raPId
+```
+
+The destination's parent must exist outside the repository. The package contains
+the private paired key, local recording folder and `START-RAPID.cmd`; copy the
+whole folder to the demo PC. Existing packages are preserved as `.old` folders.
 
 For a one-off run with a paired Pi:
 
@@ -42,7 +50,9 @@ For a one-off run with a paired Pi:
 The installer registers an absolute launcher path for the current Windows user.
 Do not run it as a test. Before using the installer with a fresh build, persist
 `protocol=v3` for a keyless Pi, or `protocol=v4` and an absolute `auth_key_file`
-path, in `%LOCALAPPDATA%/raPId/daemon.conf`; the VBS launcher passes no arguments.
+path, in `%LOCALAPPDATA%/raPId/daemon.conf`. The native VBS launcher uses adjacent
+`daemon.conf` and `telemetry.key` when present; otherwise the normal per-user
+configuration applies.
 
 Offline LD checks do not validate simulator units, game detection or MoTeC i2
 lap interpretation. Drive multiple laps and inspect one log per simulator.

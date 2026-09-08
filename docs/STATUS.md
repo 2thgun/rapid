@@ -1,4 +1,4 @@
-# Status — 2026-09-07
+# Status — 2026-09-08
 
 Migration update: 2026-09-07. The Pi now runs the validated native C++ dashboard
 and recorder. Isolated Debug and Release checks passed before cutover; live
@@ -23,6 +23,19 @@ simulator acceptance remains open.
   interactive keyring prompts. The post-v4 screenshot shows the dashboard.
 
 ## Current change
+
+The AC1/Content Manager demo candidate adds fresh-physics gating, metadata refresh,
+portable native launchers and config-relative local recording output. The
+[demo guide](AC1_DEMO_GUIDE.md) contains prerequisites, rehearsal and recovery.
+The steering-wheel PNG now has an explicit HTTP route and a binary-content
+regression check. These changes are not yet verified on the production Pi:
+the staging build was started before connectivity was lost; both the hostname
+and last known IP were unreachable on September 8. Do not equate a prepared
+package with a passed real AC driving/MoTeC rehearsal.
+The Windows native build and isolated AC shared-memory/LD self-test passed on
+September 8, covering process names, controls, metadata, lap timing, pause,
+replay, packet counter restart and config-relative output. The tests use their
+own mapping names and do not inject samples into a running simulator.
 
 The Windows companion includes the tested/deployed quiet duplicate-launch fix
 (`7b4db54`). The next deployment candidate prevents heartbeats from turning
@@ -53,8 +66,9 @@ current `cpp/` tree as a new uniquely named `.old` backup, replace it with the
 tested staged tree, and restart `rapid.service`; `rapid-display.service` must be
 started again because it is part of `rapid.service`. Verify `/healthz`, `/api/live`
 (`telemetry_fresh` and `telemetry_age_ms`), all three services, and the panel.
-Do not change the paired key, companion binary, state database, or telemetry
-directory for this release. A live driving session remains the final acceptance.
+Keep the paired key, state database and telemetry directory. Use the companion
+from the matching tested demo package for the AC freshness fix. A live driving
+session remains the final acceptance.
 
 Display output now goes only to the journal, preventing Xorg and Chromium output
 from drawing over the dashboard. A three-second “Log updated” badge is driven by

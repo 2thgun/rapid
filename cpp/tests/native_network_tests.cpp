@@ -136,6 +136,10 @@ int main(int argc, char **argv) {
                     .body()
                     .find("new WebSocket") != std::string::npos,
             "engineering assets");
+    const auto wheel = request(port, http::verb::get, "/steering-wheel-cartoon.png");
+    require(wheel.result_int() == 200 && wheel[http::field::content_type] == "image/png" &&
+                wheel.body() == read_file(fs::path(argv[2]) / "steering-wheel-cartoon.png"),
+            "steering wheel asset served intact with PNG content type");
     require(request(port, http::verb::put, "/api/v1/session/upload",
                     "{\"enabled\":\"false\"}")
                     .result_int() == 400,

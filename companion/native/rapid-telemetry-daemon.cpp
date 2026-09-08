@@ -312,6 +312,9 @@ void apply_config_file(Options& options, const fs::path& path, bool required) {
             options.local_recording = parse_bool(value, "local_recording");
         } else if (name == "output_directory") {
             options.output_directory = utf8_to_wide(value);
+            if (options.output_directory.is_relative()) {
+                options.output_directory = path.parent_path() / options.output_directory;
+            }
         } else if (name == "no_forward") {
             options.no_forward = parse_bool(value, "no_forward");
         } else {
@@ -602,30 +605,48 @@ public:
     virtual bool read(Frame& frame) = 0;
     virtual bool connected() = 0;
     virtual const char* kind() const = 0;
+    virtual void refresh_metadata() {}
     Metadata metadata;
 };
 
 class AssettoAdapter final : public Adapter {
 public:
-    static std::unique_ptr<AssettoAdapter> open(Game game) {
+    static std::unique_ptr<AssettoAdapter> open(
+        Game game, const wchar_t* physics_name = L"Local\\acpmf_physics",
+        const wchar_t* graphics_name = L"Local\\acpmf_graphics",
+        const wchar_t* static_name = L"Local\\acpmf_static") {
         auto adapter = std::unique_ptr<AssettoAdapter>(new AssettoAdapter);
-        if (!adapter->physics_.open(L"Local\\acpmf_physics") ||
-            !adapter->graphics_.open(L"Local\\acpmf_graphics") ||
-            !adapter->static_.open(L"Local\\acpmf_static")) return nullptr;
+        if (!adapter->physics_.open(physics_name) ||
+            !adapter->graphics_.open(graphics_name) ||
+            !adapter->static_.open(static_name)) return nullptr;
+        adapter->game_ = game;
         adapter->metadata.simulator = game == Game::acc ? "ACC" : "AC";
-        const int session_type = adapter->graphics_.read<std::int32_t>(8);
+        adapter->refresh_metadata();
+        return adapter;
+    }
+
+    void refresh_metadata() override {
+        // Mappings can appear before AC has populated its loading-screen metadata.
+        const int session_type = graphics_.read<std::int32_t>(8);
         static constexpr const char* sessions[] = {
             "Practice", "Qualifying", "Race", "Hotlap", "Time Attack",
             "Drift", "Drag", "Hotstint", "Superpole"
         };
-        adapter->metadata.session = session_type >= 0 && session_type < 9
-            ? sessions[session_type] : adapter->metadata.simulator;
-        adapter->metadata.vehicle = adapter->static_.wide(68, 33);
-        adapter->metadata.venue = adapter->static_.wide(134, 33);
-        adapter->metadata.driver = adapter->static_.wide(200, 33);
-        const auto surname = adapter->static_.wide(266, 33);
-        if (!surname.empty()) adapter->metadata.driver += " " + surname;
-        return adapter;
+        metadata.session = session_type >= 0 && session_type < 9
+            ? sessions[session_type] : metadata.simulator;
+        metadata.vehicle = static_.wide(68, 33);
+        metadata.venue = static_.wide(134, 33);
+        if (game_ == Game::ac) {
+            // Original AC's static layout differs from ACC after the shared prefix.
+            const auto layout = static_.wide(524, 15);
+            if (!layout.empty()) metadata.venue += " / " + layout;
+        }
+        metadata.driver = static_.wide(200, 33);
+        const auto surname = static_.wide(266, 33);
+        if (!surname.empty()) {
+            if (!metadata.driver.empty()) metadata.driver += " ";
+            metadata.driver += surname;
+        }
     }
 
     bool live() override { return graphics_.read<std::int32_t>(4) == 2; }
@@ -635,7 +656,11 @@ public:
     const char* kind() const override { return "Assetto"; }
 
     bool read(Frame& frame) override {
+        if (!live()) return false;
+        MemoryBarrier();
         const int before = physics_.read<std::int32_t>(0);
+        if (last_packet_id_ && *last_packet_id_ == before) return false;
+        const int graphics_before = graphics_.read<std::int32_t>(0);
         frame.valid_mask = all_field_bits();
         auto& v = frame.value;
         v[throttle] = physics_.read<float>(4); v[brake] = physics_.read<float>(8);
@@ -660,7 +685,11 @@ public:
         }
         v[lap_position] = graphics_.read<float>(248);
         sanitize(frame);
-        return before == physics_.read<std::int32_t>(0);
+        MemoryBarrier();
+        if (before != physics_.read<std::int32_t>(0) ||
+            graphics_before != graphics_.read<std::int32_t>(0) || !live()) return false;
+        last_packet_id_ = before;
+        return true;
     }
 
 private:
@@ -673,6 +702,8 @@ private:
     }
 
     Mapping physics_, graphics_, static_;
+    Game game_ = Game::none;
+    std::optional<int> last_packet_id_;
 };
 
 class AceAdapter final : public Adapter {
@@ -1584,9 +1615,11 @@ private:
             if (adapter_ && now >= next_sample) {
                 next_sample += sample_period;
                 if (next_sample < now - sample_period) next_sample = now + sample_period;
-                if (adapter_->live()) {
+                Frame frame;
+                if (adapter_->live() && adapter_->read(frame)) {
                     inactive_since.reset();
                     if (!recorder_.recording()) {
+                        adapter_->refresh_metadata();
                         recorder_.start(adapter_->metadata);
                         if (v4_) {
                             v4_->begin_run();
@@ -1595,15 +1628,12 @@ private:
                         logger_.write("Recording " + adapter_->metadata.simulator + ": " +
                                       adapter_->metadata.vehicle + " at " + adapter_->metadata.venue);
                     }
-                    Frame frame;
-                    if (adapter_->read(frame)) {
-                        recorder_.add(frame);
-                        if (v4_) send(v4_->telemetry_packet(running_game_.game(), frame,
-                                                          options_.sample_rate, std::chrono::steady_clock::now()));
-                        else send(telemetry_json(frame, *adapter_, options_.sample_rate));
-                        set_status(adapter_->metadata.simulator + " recording - " +
-                                   std::to_string(recorder_.sample_count()) + " samples");
-                    }
+                    recorder_.add(frame);
+                    if (v4_) send(v4_->telemetry_packet(running_game_.game(), frame,
+                                                      options_.sample_rate, std::chrono::steady_clock::now()));
+                    else send(telemetry_json(frame, *adapter_, options_.sample_rate));
+                    set_status(adapter_->metadata.simulator + " recording - " +
+                               std::to_string(recorder_.sample_count()) + " samples");
                 } else {
                     set_status(adapter_->metadata.simulator + " connected - waiting for driving");
                     if (recorder_.recording()) {
@@ -1742,7 +1772,153 @@ HWND create_tray_window(HINSTANCE instance) {
     return window;
 }
 
+// Independent typed fixtures for the original AC/Content Manager shared-memory
+// ABI: AcManager.Tools/SharedMemory in https://github.com/gro-ove/actools.
+// These names are private to --self-test; a running simulator is never modified.
+namespace assetto_self_test {
+#pragma pack(push, 4)
+struct Physics {
+    int packet_id;
+    float gas, brake, fuel;
+    int gear, rpm;
+    float steer, speed, velocity[3], acceleration[3];
+    float slip[4], load[4], pressure[4], angular_speed[4], wear[4], dirty[4];
+    float temperature[4], camber[4], suspension[4];
+    float drs, tc, heading, pitch, roll, cg_height, damage[5];
+    int tyres_out, pit_limiter;
+    float abs;
+};
+struct Graphics {
+    int packet_id, status, session;
+    wchar_t current_time[15], last_time[15], best_time[15], split[15];
+    int completed_laps, position, current_ms, last_ms, best_ms;
+    float time_left, distance;
+    int in_pits, sector, last_sector_ms, laps;
+    wchar_t compound[33];
+    float replay_multiplier, normalized_position;
+};
+struct Static {
+    wchar_t shared_version[15], game_version[15];
+    int sessions, cars;
+    wchar_t car[33], track[33], first_name[33], surname[33], nickname[33];
+    int sectors;
+    float torque, power;
+    int max_rpm;
+    float max_fuel, suspension[4], radius[4], turbo, air, road;
+    int penalties;
+    float fuel_rate, tyre_rate, mechanical_damage;
+    int blankets;
+    float stability;
+    int auto_clutch, auto_blip, has_drs, has_ers, has_kers;
+    float kers_joules;
+    int engine_brake_settings, ers_controllers;
+    float spline_length;
+    wchar_t layout[15];
+};
+#pragma pack(pop)
+static_assert(sizeof(wchar_t) == 2 && sizeof(int) == 4);
+static_assert(offsetof(Physics, acceleration) == 44 && offsetof(Physics, abs) == 252);
+static_assert(offsetof(Graphics, current_ms) == 140 && offsetof(Graphics, normalized_position) == 248);
+static_assert(offsetof(Static, car) == 68 && offsetof(Static, layout) == 524);
+
+void require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(std::string("AC shared-memory self-test: ") + message);
+}
+
+template <typename T> class TestMapping {
+public:
+    explicit TestMapping(const std::wstring& name) {
+        handle_ = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                    0, sizeof(T), name.c_str());
+        if (!handle_) throw std::runtime_error("Cannot create isolated AC test mapping");
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            CloseHandle(handle_);
+            throw std::runtime_error("AC test mapping name is already in use");
+        }
+        data_ = static_cast<T*>(MapViewOfFile(handle_, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(T)));
+        if (!data_) {
+            CloseHandle(handle_);
+            throw std::runtime_error("Cannot map isolated AC test memory");
+        }
+        std::memset(data_, 0, sizeof(T));
+    }
+    ~TestMapping() { UnmapViewOfFile(data_); CloseHandle(handle_); }
+    TestMapping(const TestMapping&) = delete;
+    TestMapping& operator=(const TestMapping&) = delete;
+    T& value() { return *data_; }
+private:
+    HANDLE handle_;
+    T* data_;
+};
+
+std::pair<Frame, Metadata> run() {
+    require(game_for_executable(L"acs.exe") == Game::ac &&
+            game_for_executable(L"ACS_X86.EXE") == Game::ac, "AC process detection");
+    require(game_for_executable(L"Content Manager.exe") == Game::none &&
+            game_for_executable(L"AssettoCorsa.exe") == Game::none,
+            "launchers must remain dormant until the driving executable starts");
+    const auto prefix = L"Local\\raPIdAcSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
+                        L"_" + std::to_wstring(GetTickCount64());
+    const auto physics_name = prefix + L"_physics", graphics_name = prefix + L"_graphics",
+               static_name = prefix + L"_static";
+    TestMapping<Physics> physics(physics_name);
+    TestMapping<Graphics> graphics(graphics_name);
+    TestMapping<Static> info(static_name);
+    auto adapter = AssettoAdapter::open(Game::ac, physics_name.c_str(), graphics_name.c_str(), static_name.c_str());
+    require(bool(adapter), "open actual adapter on isolated Windows mappings");
+    require(adapter->metadata.vehicle.empty(), "initial loading metadata");
+    std::wcscpy(info.value().car, L"ks_bmw_m4");
+    std::wcscpy(info.value().track, L"ks_vallelunga");
+    std::wcscpy(info.value().layout, L"club");
+    std::wcscpy(info.value().first_name, L"Test");
+    std::wcscpy(info.value().surname, L"Driver");
+    auto& p = physics.value();
+    p.packet_id = 41; p.gas = .75f; p.brake = .25f; p.fuel = 35;
+    p.gear = 5; p.rpm = 6123; p.steer = -.4f; p.speed = 123.5f;
+    p.acceleration[0] = .5f; p.acceleration[1] = 1; p.acceleration[2] = -.75f;
+    p.pressure[0] = 27.5f; p.angular_speed[0] = 70; p.temperature[0] = 85;
+    p.suspension[0] = .03f; p.pit_limiter = 1; p.abs = .5f;
+    auto& g = graphics.value();
+    g.packet_id = 20; g.status = 2; g.session = 0; g.completed_laps = 2;
+    g.current_ms = 12345; g.last_ms = 90567; g.normalized_position = .375f;
+    Frame frame;
+    require(adapter->live() && adapter->read(frame), "fresh driving sample");
+    adapter->refresh_metadata();
+    require(adapter->metadata.vehicle == "ks_bmw_m4" &&
+            adapter->metadata.venue == "ks_vallelunga / club" &&
+            adapter->metadata.driver == "Test Driver" && adapter->metadata.session == "Practice",
+            "metadata refresh after loading, including original AC track layout");
+    const auto approximately_equal = [](double value, double expected) { return std::abs(value - expected) < .0001; };
+    require(frame.value[gear] == 4 && frame.value[rpm] == 6123 &&
+            approximately_equal(frame.value[throttle], .75) && approximately_equal(frame.value[brake], .25) &&
+            approximately_equal(frame.value[steering_angle], -.4) && approximately_equal(frame.value[speed_kmh], 123.5) &&
+            approximately_equal(frame.value[g_x], .5) && approximately_equal(frame.value[g_y], 1) && approximately_equal(frame.value[g_z], -.75),
+            "primary controls, gear, speed and acceleration offsets");
+    require(approximately_equal(frame.value[pressure_fl], 27.5) && approximately_equal(frame.value[wheel_speed_fl], 70) &&
+            approximately_equal(frame.value[core_temp_fl], 85) && approximately_equal(frame.value[suspension_fl], .03) &&
+            frame.value[lap_number] == 3 && frame.value[current_lap_ms] == 12345 &&
+            frame.completed_lap_ms == 90567 && approximately_equal(frame.value[lap_position], .375),
+            "original AC corner fields and lap timing offsets");
+    const auto wire_frame = frame;
+    require(!adapter->read(frame), "unchanged LIVE physics must not become a fresh sample");
+    p.packet_id = 42; g.status = 1;
+    require(!adapter->live() && !adapter->read(frame), "paused sample rejected");
+    g.status = 3;
+    require(!adapter->live() && !adapter->read(frame), "replay sample rejected");
+    g.status = 0;
+    require(!adapter->read(frame), "off sample rejected");
+    g.status = 2; p.gear = 1;
+    require(adapter->read(frame) && frame.value[gear] == 0, "resume and neutral gear");
+    p.packet_id = 0; p.gear = 0;
+    require(adapter->read(frame) && frame.value[gear] == -1, "packet counter restart and reverse gear");
+    require(!adapter->read(frame), "resumed sample is accepted only once");
+    std::cout << "AC1/Content Manager adapter self-test passed: controls, metadata, laps, pause, replay, restart\n";
+    return {wire_frame, adapter->metadata};
+}
+} // namespace assetto_self_test
+
 bool run_self_test(const fs::path& directory, int sample_rate) {
+    const auto [ac_frame, ac_metadata] = assetto_self_test::run();
     // Public test-only key; fixtures exercise the actual Windows BCrypt encoder.
     V4Encoder encoder(std::vector<std::uint8_t>(32, 0x11));
     Metadata wire_metadata;
@@ -1773,6 +1949,20 @@ bool run_self_test(const fs::path& directory, int sample_rate) {
     save("ended.hex", encoder.status_packet(Game::acc, V4StatusState::ended, "", 4, sample_rate));
     encoder.end_run();
     save("ready.hex", encoder.status_packet(Game::acc, V4StatusState::ready, "", 5, sample_rate));
+    encoder.begin_run();
+    save("ac-metadata.hex", encoder.metadata_packet(Game::ac, ac_metadata, sample_rate));
+    save("ac-telemetry.hex", encoder.telemetry_packet(Game::ac, ac_frame, sample_rate, std::chrono::steady_clock::now()));
+    save("ac-ended.hex", encoder.status_packet(Game::ac, V4StatusState::ended, "", 2, sample_rate));
+    encoder.end_run();
+    const auto test_config = directory / "portable-self-test.conf";
+    {
+        std::ofstream output(test_config);
+        output << "output_directory=relative-output\n";
+    }
+    Options portable_options;
+    apply_config_file(portable_options, fs::absolute(test_config), true);
+    assetto_self_test::require(portable_options.output_directory == fs::absolute(directory) / "relative-output",
+                              "portable output path must resolve next to the config");
     Metadata metadata;
     metadata.simulator = "SELFTEST";
     metadata.driver = "Test Driver";

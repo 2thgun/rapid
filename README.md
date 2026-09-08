@@ -38,6 +38,7 @@ See the [Windows companion guide](companion/README.md) for Windows builds and se
 
 ## Documentation
 
+- [Original Assetto Corsa / Content Manager demo guide](docs/AC1_DEMO_GUIDE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Installation and operations](docs/OPERATIONS.md)
 - [Testing](docs/TESTING.md)

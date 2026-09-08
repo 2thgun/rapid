@@ -5,6 +5,13 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Added a portable paired AC1/Content Manager demo package, launchers and complete
+  setup, rehearsal and troubleshooting instructions.
+- AC telemetry now requires a new physics packet, rejects paused/replay data,
+  and refreshes session metadata after loading. Isolated Windows shared-memory
+  tests cover the actual adapter and original AC's car/track layout.
+- Fixed the dashboard server's missing route for the cartoon steering-wheel PNG.
+
 - Replaced the generic dashboard steering-wheel drawing with a lightweight,
   accurate cartoon asset based on the supplied three-spoke wheel reference.
 
