@@ -24,7 +24,7 @@ if ($keyText -notmatch '\A[0-9a-fA-F]{64}\z') {
 $bundle = [IO.Path]::GetFullPath($Destination).TrimEnd('\', '/')
 $repository = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\', '/')
 $guide = Join-Path $repository 'docs\AC1_DEMO_GUIDE.md'
-foreach ($required in @('START-RAPID.cmd', 'start-rapid-daemon.vbs', 'INSTALL-RAPID.cmd', 'install-demo.ps1')) {
+foreach ($required in @('START-RAPID.cmd', 'start-rapid-daemon.vbs', 'install-demo.cmd')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $required) -PathType Leaf)) {
         throw "Package launcher is missing: $required"
     }
@@ -72,8 +72,7 @@ New-Item -ItemType Directory -Path (Join-Path $bundle 'recordings') | Out-Null
 Copy-Item -LiteralPath $executable -Destination (Join-Path $bundle 'rapid-telemetry-daemon.exe')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'START-RAPID.cmd') -Destination $bundle
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'start-rapid-daemon.vbs') -Destination $bundle
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'INSTALL-RAPID.cmd') -Destination $bundle
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-demo.ps1') -Destination $bundle
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-demo.cmd') -Destination $bundle
 $encoding = New-Object Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $bundle 'telemetry.key'), $keyText + [Environment]::NewLine, $encoding)
 $configuration = @(
@@ -95,10 +94,11 @@ foreach ($reference in @('TELEMETRY_V4.md', 'OPERATIONS.md')) {
 $instructions = @(
     'raPId paired Assetto Corsa demo companion'
     ''
-    '1. Double-click INSTALL-RAPID.cmd to install for this Windows user and start the companion.'
+    '1. Run the separately built raPId-AC1-Demo-Setup.exe to install this paired bundle.'
     '2. Connect the PC to Wi-Fi rapid. The Pi is 192.168.1.64 in AP mode.'
-    '3. Launch Assetto Corsa through Steam or Content Manager.'
-    '4. Enter a driving session and check live pedals, steering, graphs and recording on the Pi.'
+    '3. Open the installed folder and double-click START-RAPID.cmd.'
+    '4. Launch Assetto Corsa through Steam or Content Manager.'
+    '5. Enter a driving session and check live pedals, steering, graphs and recording on the Pi.'
     ''
     'Read AC1_DEMO_GUIDE.md before the demo for the full checklist and recovery steps.'
     'The installer creates a per-user raPId AC1 Demo folder and login startup entry.'

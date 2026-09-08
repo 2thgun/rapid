@@ -21,8 +21,7 @@ if (-not $OutputPath) {
 $output = [IO.Path]::GetFullPath($OutputPath)
 $files = @(
     'rapid-telemetry-daemon.exe', 'daemon.conf', 'telemetry.key',
-    'start-rapid-daemon.vbs', 'START-RAPID.cmd',
-    'install-demo.ps1', 'INSTALL-RAPID.cmd',
+    'start-rapid-daemon.vbs', 'START-RAPID.cmd', 'install-demo.cmd',
     'START-HERE.txt', 'AC1_DEMO_GUIDE.md'
 )
 foreach ($name in $files) {
@@ -61,7 +60,7 @@ try {
         'FinishMessage='
         "TargetName=$output"
         'FriendlyName=raPId AC1 Demo Setup'
-        'AppLaunched=cmd.exe /c INSTALL-RAPID.cmd'
+        'AppLaunched=cmd.exe /c install-demo.cmd'
         'PostInstallCmd=<None>'
         'AdminQuietInstCmd='
         'UserQuietInstCmd='
