@@ -41,6 +41,12 @@ The destination's parent must exist outside the repository. The package contains
 the private paired key, local recording folder and `START-RAPID.cmd`; copy the
 whole folder to the demo PC. Existing packages are preserved as `.old` folders.
 
+For the paired AC1 demo package, double-click `INSTALL-RAPID.cmd`. It copies the
+bundle into `%LOCALAPPDATA%\raPId\AC1 Demo`, starts the companion, and adds a
+current-user login startup entry. It does not install anything into AC, Content
+Manager, CSP, or wheel drivers. Run `install-demo.ps1 -Remove` to remove the
+login startup entry while preserving local recordings.
+
 For a one-off run with a paired Pi:
 
 ```powershell

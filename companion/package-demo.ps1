@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)][string]$ExecutablePath,
     [Parameter(Mandatory)][string]$AuthKeyPath,
     [Parameter(Mandatory)][string]$Destination,
-    [ValidatePattern('\A[A-Za-z0-9][A-Za-z0-9._:-]{0,252}\z')][string]$PiHost = 'rapid',
+    [ValidatePattern('\A[A-Za-z0-9][A-Za-z0-9._:-]{0,252}\z')][string]$PiHost = '192.168.1.64',
     [ValidateRange(1, 65535)][int]$PiPort = 9001
 )
 
@@ -24,7 +24,7 @@ if ($keyText -notmatch '\A[0-9a-fA-F]{64}\z') {
 $bundle = [IO.Path]::GetFullPath($Destination).TrimEnd('\', '/')
 $repository = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\', '/')
 $guide = Join-Path $repository 'docs\AC1_DEMO_GUIDE.md'
-foreach ($required in @('START-RAPID.cmd', 'start-rapid-daemon.vbs')) {
+foreach ($required in @('START-RAPID.cmd', 'start-rapid-daemon.vbs', 'INSTALL-RAPID.cmd', 'install-demo.ps1')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $required) -PathType Leaf)) {
         throw "Package launcher is missing: $required"
     }
@@ -72,6 +72,8 @@ New-Item -ItemType Directory -Path (Join-Path $bundle 'recordings') | Out-Null
 Copy-Item -LiteralPath $executable -Destination (Join-Path $bundle 'rapid-telemetry-daemon.exe')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'START-RAPID.cmd') -Destination $bundle
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'start-rapid-daemon.vbs') -Destination $bundle
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'INSTALL-RAPID.cmd') -Destination $bundle
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-demo.ps1') -Destination $bundle
 $encoding = New-Object Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $bundle 'telemetry.key'), $keyText + [Environment]::NewLine, $encoding)
 $configuration = @(
@@ -93,14 +95,13 @@ foreach ($reference in @('TELEMETRY_V4.md', 'OPERATIONS.md')) {
 $instructions = @(
     'raPId paired Assetto Corsa demo companion'
     ''
-    '1. Copy/extract this entire folder into a writable local folder on the Windows PC.'
-    '2. Connect the PC and your paired Pi to the same network.'
-    '3. Exit any raPId companion already running in the system tray.'
-    '4. Double-click START-RAPID.cmd, then launch Assetto Corsa through Steam or Content Manager.'
-    '5. Enter a driving session and check live pedals, steering, graphs and recording on the Pi.'
+    '1. Double-click INSTALL-RAPID.cmd to install for this Windows user and start the companion.'
+    '2. Connect the PC to Wi-Fi rapid. The Pi is 192.168.1.64 in AP mode.'
+    '3. Launch Assetto Corsa through Steam or Content Manager.'
+    '4. Enter a driving session and check live pedals, steering, graphs and recording on the Pi.'
     ''
     'Read AC1_DEMO_GUIDE.md before the demo for the full checklist and recovery steps.'
-    'If the Pi hostname does not resolve, edit pi_host in daemon.conf to its current IPv4 address.'
+    'The installer creates a per-user raPId AC1 Demo folder and login startup entry.'
     'PC logs and emergency recordings are in recordings. Exit through the tray menu to finish recordings.'
     'telemetry.key is private and must match the Pi. Do not publish or upload this folder.'
 )
