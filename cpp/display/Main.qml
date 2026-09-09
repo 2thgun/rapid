@@ -1,9 +1,12 @@
 import QtQuick
+import QtQuick.Window
 
-Rectangle {
+Window {
     id: root
     width: 480
     height: 320
+    visible: true
+    flags: Qt.FramelessWindowHint
     color: "#0b1014"
 
     property int page: 0
