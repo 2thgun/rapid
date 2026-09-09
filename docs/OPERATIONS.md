@@ -78,10 +78,10 @@ persistent logs and disable console forwarding.
 
 ## Dashboard Wi-Fi mode control
 
-`rapid-network-mode.service` lets the dashboard switch `wlan0` between the
-`rapid-demo` access point and the first other saved Wi-Fi connection. It uses a
-root-owned NetworkManager worker; `rapid-pi` can only write a queued `ap` or
-`home` request in `/run/rapid-network`.
+`rapid-network-mode.service` lets the dashboard select Home Wi-Fi, the
+`rapid-demo` access point, or Wi-Fi Off. It uses a root-owned NetworkManager
+worker; `rapid-pi` can only write a queued `home`, `ap` or `off` request in
+`/run/rapid-network`.
 
 Install the service and script together, then enable it:
 
@@ -92,9 +92,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now rapid-network-mode
 ```
 
-The dashboard button shows `WIFI AP` or `WIFI HOME` and switches to the other
-mode. The requesting browser disconnects while `wlan0` changes networks. In AP
-mode the Pi is `192.168.1.64`; in home mode use its hostname or DHCP address.
+The dashboard cycles `WIFI HOME`, `WIFI AP` and `WIFI OFF`. The requesting
+browser disconnects while `wlan0` changes networks. In AP mode the Pi is
+`192.168.1.64`; in Home mode use its hostname or DHCP address. Selecting Off
+disconnects Wi-Fi until Home or AP is selected from the physical panel.
 
 Set the intended boot/home profile explicitly on a deployed Pi instead of relying
 on NetworkManager's connection-list order:
