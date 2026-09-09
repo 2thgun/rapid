@@ -28,29 +28,29 @@ apply_mode() {
   case "$mode" in
     ap) target=$ap_connection ;;
     home) target=$(home_connection) ;;
+    off)
+      nmcli radio wifi off
+      write_state off
+      return
+      ;;
     *) return 1 ;;
   esac
   [ -n "$target" ]
+  nmcli radio wifi on
   nmcli connection up "$target" ifname wlan0
   write_state "$mode"
 }
 
-active=$(nmcli -g GENERAL.CONNECTION device show wlan0 2>/dev/null || true)
-case "$active" in
-  "$ap_connection") write_state ap ;;
-  *)
-    home=$(home_connection || true)
-    if [ -n "$home" ] && [ "$active" = "$home" ]; then
-      write_state home
-    else
-      write_state unknown
-    fi
-    ;;
-esac
+# A boot always resumes the intended Home connection. AP remains the fallback
+# configured through NetworkManager priorities; Off is an explicit live choice.
+if ! apply_mode home; then
+  active=$(nmcli -g GENERAL.CONNECTION device show wlan0 2>/dev/null || true)
+  [ "$active" = "$ap_connection" ] && write_state ap || write_state unknown
+fi
 
 while :; do
   if [ -f "$request" ]; then
-    mode=$(sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\(ap\|home\)".*/\1/p' "$request" | head -n 1)
+    mode=$(sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\(off\|ap\|home\)".*/\1/p' "$request" | head -n 1)
     rm -f "$request"
     if [ -n "$mode" ]; then
       if ! apply_mode "$mode"; then

@@ -30,7 +30,7 @@ public:
   Q_INVOKABLE QVariant value(const QString &key) const;
   Q_INVOKABLE QString timeValue(const QString &key) const;
   Q_INVOKABLE QString percentValue(const QString &key) const;
-  Q_INVOKABLE void switchNetwork();
+  Q_INVOKABLE void setNetworkMode(const QString &mode);
 
 signals:
   void changed();

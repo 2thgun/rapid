@@ -17,9 +17,10 @@
   #log-status.visible { visibility: visible; }
   #log-status.warn { border-color: #e6a619; color: #f6b91a; }
   #log-status.error { border-color: #d53747; color: #ff6472; background: #291317; }
-  #network-mode { position: fixed; top: 9px; right: 72px; min-width: 48px; padding: 3px 5px; border: 1px solid #394754; background: #10161b; color: #aab7c0; font-size: 9px; font-weight: 800; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  #network-mode { position: fixed; top: 5px; right: 68px; min-width: 68px; min-height: 25px; padding: 4px 7px; border: 2px solid #394754; border-radius: 3px; background: #10161b; color: #aab7c0; font-size: 10px; font-weight: 800; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   #network-mode.ap { border-color: #315944; color: #55dd8f; }
   #network-mode.home { border-color: #e6a619; color: #f6b91a; }
+  #network-mode.off { border-color: #d53747; color: #ff6472; }
   .dash { min-height: 0; display: grid; grid-template-columns: 140px 190px 1fr; gap: 6px; }
   .card { min-width: 0; min-height: 0; background: #10161b; border: 1px solid #27323a; border-radius: 3px; padding: 7px; }
   .label { color: #8d9ba6; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
@@ -229,11 +230,11 @@ function updateLogNotice(state) {
 
 let networkMode = null;
 function updateNetworkMode(state) {
-  if (!state.available || (state.mode !== 'ap' && state.mode !== 'home')) return;
+  if (!state.available || !['off', 'ap', 'home'].includes(state.mode)) return;
   networkMode = state.mode;
   const button = fields['network-mode'];
   button.className = state.mode;
-  button.textContent = state.mode === 'ap' ? 'WIFI AP' : 'WIFI HOME';
+  button.textContent = state.mode === 'ap' ? 'WIFI AP' : state.mode === 'home' ? 'WIFI HOME' : 'WIFI OFF';
 }
 async function pollNetworkMode() {
   try {
@@ -244,9 +245,9 @@ async function pollNetworkMode() {
 }
 fields['network-mode'].addEventListener('pointerdown', async event => {
   event.preventDefault();
-  const next = networkMode === 'ap' ? 'home' : 'ap';
+  const next = networkMode === 'home' ? 'ap' : networkMode === 'ap' ? 'off' : 'home';
   fields['network-mode'].disabled = true;
-  fields['network-mode'].textContent = next === 'ap' ? 'STARTING AP' : 'JOINING HOME';
+  fields['network-mode'].textContent = next === 'ap' ? 'STARTING AP' : next === 'home' ? 'JOINING HOME' : 'WIFI OFF';
   try {
     const response = await fetch('/api/v1/network/mode', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({mode: next})});
     if (!response.ok) throw new Error('network switch rejected');

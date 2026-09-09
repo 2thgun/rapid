@@ -38,12 +38,19 @@ Window {
     }
 
     Rectangle { anchors.fill: parent; color: "#0b1014" }
-    Rectangle { id: header; x: 8; y: 7; width: root.width - 16; height: 25; radius: 3; color: "#121a20"; border.color: "#28353d"
-        Text { anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter; text: dashboard.status; color: root.muted; font.pixelSize: 10; font.bold: true }
-        Text { anchors.right: network.left; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter; text: root.text("simulator", "raPId"); color: "#e8f0f3"; font.pixelSize: 11; font.bold: true }
-        Rectangle { id: network; visible: dashboard.networkAvailable; anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter; height: 18; width: 62; radius: 2; color: "#19242b"
-            Text { anchors.centerIn: parent; text: dashboard.networkMode === "ap" ? "WIFI AP" : "WIFI HOME"; color: root.accent; font.pixelSize: 9; font.bold: true }
-            MouseArea { anchors.fill: parent; onClicked: dashboard.switchNetwork() }
+    Rectangle { id: header; x: 8; y: 6; width: root.width - 16; height: 28; radius: 3; color: "#121a20"; border.color: "#28353d"
+        Text { anchors.left: parent.left; anchors.leftMargin: 8; anchors.right: network.left; anchors.rightMargin: 7; anchors.verticalCenter: parent.verticalCenter; text: dashboard.status; color: root.muted; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
+        Row { id: network; visible: dashboard.networkAvailable; anchors.right: parent.right; anchors.rightMargin: 3; anchors.verticalCenter: parent.verticalCenter; spacing: 3
+            Repeater { model: [ {mode: "home", label: "HOME"}, {mode: "ap", label: "AP"}, {mode: "off", label: "OFF"} ]
+                Rectangle { required property var modelData; width: 43; height: 22; radius: 3
+                    readonly property bool selected: dashboard.networkMode === modelData.mode
+                    color: selected ? "#2a2210" : "#19242b"
+                    border.color: selected ? root.accent : "#3b4b55"
+                    border.width: selected ? 2 : 1
+                    Text { anchors.centerIn: parent; text: modelData.label; color: parent.selected ? root.accent : root.muted; font.pixelSize: 9; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: dashboard.setNetworkMode(modelData.mode) }
+                }
+            }
         }
     }
 
@@ -135,11 +142,15 @@ Window {
             Text { x: 10; y: 3; text: "PEDALS   T " + root.percent("throttle") + "   B " + root.percent("brake"); color: root.muted; font.pixelSize: 10; font.bold: true }
             Canvas { id: pedalGraph; x: 0; y: 20; width: parent.width; height: 83
                 onPaint: root.drawGraph(getContext("2d"), pedalGraph, [{key: "throttle", color: "#20cf75"}, {key: "brake", color: "#ef4458"}], 0, 100)
+                onVisibleChanged: if (visible) requestPaint()
+                Component.onCompleted: requestPaint()
                 Connections { target: dashboard; function onChanged() { pedalGraph.requestPaint() } }
             }
             Text { x: 10; y: 112; text: "G-FORCE   LAT " + root.number("g_x").toFixed(2) + "   LONG " + root.number("g_z").toFixed(2); color: root.muted; font.pixelSize: 10; font.bold: true }
             Canvas { id: forceGraph; x: 0; y: 129; width: parent.width; height: 83
                 onPaint: root.drawGraph(getContext("2d"), forceGraph, [{key: "lateral", color: "#34bdf2"}, {key: "longitudinal", color: "#f6b91a"}], -2.5, 2.5)
+                onVisibleChanged: if (visible) requestPaint()
+                Component.onCompleted: requestPaint()
                 Connections { target: dashboard; function onChanged() { forceGraph.requestPaint() } }
             }
         }

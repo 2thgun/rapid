@@ -81,10 +81,10 @@ int main(int argc, char **argv) {
               auto body = Json::parse(req.body);
               if (!body.is_object() || !body.contains("mode") ||
                   !body["mode"].is_string())
-                return {400, "{\"detail\":\"mode must be ap or home\"}"};
+                return {400, "{\"detail\":\"mode must be off, ap or home\"}"};
               auto mode = body["mode"].get<std::string>();
-              if (mode != "ap" && mode != "home")
-                return {400, "{\"detail\":\"mode must be ap or home\"}"};
+              if (mode != "off" && mode != "ap" && mode != "home")
+                return {400, "{\"detail\":\"mode must be off, ap or home\"}"};
               if (!fs::is_directory(settings.network_control))
                 return {503, "{\"available\":false}"};
               atomic_file(settings.network_control / "request",

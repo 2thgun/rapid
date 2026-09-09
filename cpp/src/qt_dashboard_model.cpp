@@ -151,12 +151,11 @@ void DashboardModel::consumeNetworkMode(QNetworkReply *reply) {
   reply->deleteLater();
 }
 
-void DashboardModel::switchNetwork() {
-  if (!network_available_ || (network_mode_ != "ap" && network_mode_ != "home")) return;
-  const auto next = network_mode_ == "ap" ? "home" : "ap";
+void DashboardModel::setNetworkMode(const QString &mode) {
+  if (!network_available_ || (mode != "off" && mode != "ap" && mode != "home")) return;
   QNetworkRequest request(endpoint_path(endpoint_, "/api/v1/network/mode"));
   request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-  auto *reply = network_->post(request, QJsonDocument(QJsonObject{{"mode", next}}).toJson(QJsonDocument::Compact));
+  auto *reply = network_->post(request, QJsonDocument(QJsonObject{{"mode", mode}}).toJson(QJsonDocument::Compact));
   connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
 }
 
