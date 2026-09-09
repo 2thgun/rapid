@@ -18,6 +18,15 @@ The dashboard services intentionally do not wait for `network-online.target` at
 boot. The dashboard only depends on local HTTP; telemetry clients reconnect when
 the LAN is ready.
 
+## First-boot provisioning
+
+Use cloud-init only to provision a new Pi. A provisioning payload that builds the
+runtime or restarts display services must not remain active for ordinary boots:
+it leaves the panel at a login console while it runs. After a successful first
+boot, preserve the seed as a private `.old` backup, replace it with an inert
+cloud config, and create `/etc/cloud/cloud-init.disabled`. Keep the installed
+services and network configuration; do not erase recordings or paired keys.
+
 The dedicated local-dashboard Chromium profile uses `--password-store=basic`
 to avoid interactive keyring creation on a keyboardless device. This profile
 is not intended to store passwords; it loads the local dashboard from `/run`.

@@ -73,6 +73,12 @@ from drawing over the dashboard. A three-second “Log updated” badge is drive
 the native C++ monitor. Full messages remain in the persistent journal, limited
 to 100 MB and 14 days.
 
+The September 9 boot delay was caused by a leftover cloud-init provisioning
+payload rebuilding the runtime and restarting the display. It was removed after
+preserving a private `.old` copy, and cloud-init is disabled on the deployed Pi.
+The verification reboot started `rapid-display` at 10.431 seconds, reached
+graphical target at 18.452 seconds, and completed in 22.296 seconds.
+
 ## Known limits
 
 - Lap files are produced when a session bundle finalizes, not after each completed lap.
