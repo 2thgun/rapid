@@ -52,7 +52,7 @@ chosen demo content requires it.
    Confirm that touch works and the steering-wheel image is visible on Drive.
    Resolve a persistent `PWR LIMIT` warning before driving; use the tested supply
    and cable. Boot time depends on the Pi and network, so allow setup time.
-2. Confirm the top-right dashboard control says `WIFI AP`. On the Windows PC,
+2. Open the Wi-Fi button and select `ACCESS POINT`. Home is the boot default. On the Windows PC,
    join Wi-Fi network `rapid` with password `12341234`. The Pi is always
    `192.168.1.64` in AP mode. From a browser open
    `http://192.168.1.64:8000/healthz`, then `http://192.168.1.64:8000/`.
@@ -211,7 +211,7 @@ open the finalized recording. Keep the setup that passed rehearsal unchanged.
 | Dormant while Content Manager is open | Launch an actual driving session. Confirm `acs.exe` or `acs_x86.exe` in Task Manager and wait for the five-second discovery interval. |
 | AC process detected, still waiting for telemetry | Finish loading/enter the car; avoid showroom/replay. Run AC and companion in the same Windows session with compatible permissions. Close other sims and relaunch the AC session. |
 | Works before travel, not at the venue | Rejoin the PC to `rapid`, confirm `WIFI AP`, retain `pi_host=192.168.1.64`, then exit/relaunch the companion. |
-| Dashboard says `WIFI HOME` | Tapping the Wi-Fi control switches modes and disconnects the current browser. Rejoin `rapid` to return to AP mode, or use the Pi's home-network address while that mode is active. |
+| Dashboard says `WIFI HOME` | Home is the normal boot mode. Open the Wi-Fi control and select ACCESS POINT for the demo, then join `rapid` on the PC. In the fallback browser dashboard, taps cycle Home, AP and Off. |
 | Wrong simulator or competing readings | Close every other supported simulator and companion instance, then relaunch this companion and AC. Do not run two rigs against the paired Pi during the demo. |
 | `Waiting for fresh telemetry`, stationary graph or gaps | Unpause and drive; verify AC is producing samples. Inspect the PC log and Pi counters. Sustained loss during real driving needs network/power investigation. A gap during a pause is expected. |
 | Wrong pedal/steering behavior | Check the controls in AC first, then compare the dashboard on the stock rehearsal car. Do not present a physically reversed, stuck or mis-scaled control as correct. |

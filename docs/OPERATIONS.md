@@ -27,19 +27,7 @@ boot, preserve the seed as a private `.old` backup, replace it with an inert
 cloud config, and create `/etc/cloud/cloud-init.disabled`. Keep the installed
 services and network configuration; do not erase recordings or paired keys.
 
-The dedicated local-dashboard Chromium profile uses `--password-store=basic`
-to avoid interactive keyring creation on a keyboardless device. This profile
-is not intended to store passwords; it loads the local dashboard from `/run`.
-
-The 2026-09-07 boot investigation measured 25.941 seconds to startup completion.
-That boot began before the native cutover. Its graphical target waited for
-NetworkManager readiness (6.035 seconds) and then rc.local (7.073 seconds).
-The latter sleeps seven seconds before launching fbcp, which fails to load
-libbcm_host.so. Xorg uses the panel framebuffer directly at /dev/fb0.
-The obsolete delay and failed copier were removed on 2026-09-07, preserving
-`con2fbmap 1 0`. The original is `/etc/rc.local.before-rapid-boot-20260907.old`.
-Shell syntax validation passed; cold-boot improvement still needs measurement.
-Target completion time alone does not establish when the dashboard becomes visible.
+The Qt kiosk uses Xorg directly on the GPIO framebuffer. See [Qt setup](QT_DISPLAY.md) for display dependencies, installation and rollback.
 
 ## Native runtime deployment
 
@@ -116,12 +104,3 @@ Before deployment, preserve changed files and units in a unique `.old` backup an
 confirm the recorder is idle. After deployment check all three services, both APIs,
 the share and the panel. To roll back, restore that backup and reload systemd;
 disable the native log unit if restoring the older dashboard implementation.
-
-### Freshness candidate checklist
-
-The candidate after `7b4db54` changes only `rapid-pi` and dashboard assets. It
-adds `telemetry_age_ms` and `telemetry_fresh` to `/api/live`. A driving heartbeat
-without a newer telemetry sample must make `telemetry_fresh` false after 1.5
-seconds; the dashboard graph must show a gap. Deploy it while idle, retaining the
-paired v4 key, SQLite state database and telemetry directory. Do not replace the
-Windows companion for this candidate.

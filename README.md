@@ -20,6 +20,7 @@ raPId is a Raspberry Pi racing dashboard, Windows telemetry companion, and MoTeC
 | --- | --- |
 | Windows companion | Collect simulator telemetry and send it to the Pi |
 | `rapid-pi` | Native C++ dashboard server, telemetry receiver and recorder |
+| `rapid-qt-display` | Native Qt touchscreen with five pages and Home/AP/Off control |
 | `rapid-log-status` | Native C++ journal activity monitor |
 | `rapid-archive` | Native C++ archive ingest service |
 

@@ -5,6 +5,12 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Restored the complete Qt dashboard data layout, fixed graph rendering and
+  missing-channel/connection-loss gaps, and enlarged navigation and Wi-Fi controls.
+- Added isolated Qt regression checks and enabled Qt builds in CI.
+- Removed unused prototype C++ code, retired PowerShell telemetry runtimes,
+  obsolete desktop autostart, and superseded migration/protocol notes.
+
 - Added a portable paired AC1/Content Manager demo package, launchers and complete
   setup, rehearsal and troubleshooting instructions.
 - AC telemetry now requires a new physics packet, rejects paused/replay data,

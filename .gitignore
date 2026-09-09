@@ -3,6 +3,8 @@ config.toml
 companion/.selftest/
 .tools/
 build/
+build-*/
+dist/
 *.exe
 *.pdb
 *.ld

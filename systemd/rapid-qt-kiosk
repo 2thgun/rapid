@@ -10,4 +10,5 @@ done
 /usr/bin/xset s off
 /usr/bin/xset -dpms
 /usr/bin/xset s noblank
+export QT_QUICK_BACKEND=software
 exec /home/rapid/raPId/cpp/build-qt/rapid-qt-display --endpoint http://127.0.0.1:8000

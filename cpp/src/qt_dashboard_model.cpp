@@ -30,6 +30,7 @@ QUrl endpoint_path(QUrl endpoint, const QString &path, int port = -1) {
 
 DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
     : QObject(parent), endpoint_(std::move(endpoint)), network_(new QNetworkAccessManager(this)) {
+  network_->setTransferTimeout(1800);
   QTimer::singleShot(0, this, &DashboardModel::pollLive);
   QTimer::singleShot(0, this, &DashboardModel::pollNetworkMode);
   QTimer::singleShot(0, this, &DashboardModel::pollLogStatus);
@@ -66,13 +67,15 @@ void DashboardModel::consumeLive(QNetworkReply *reply) {
     if (document.isObject()) {
       state_ = document.object().toVariantMap();
       updateStatus();
-      updateGraphHistory();
     } else {
+      state_["telemetry_fresh"] = false;
       status_ = "Dashboard sent invalid telemetry";
     }
   } else {
+    state_["telemetry_fresh"] = false;
     status_ = "Dashboard connection lost";
   }
+  updateGraphHistory();
   reply->deleteLater();
   bump();
 }
@@ -93,10 +96,17 @@ void DashboardModel::updateGraphHistory() {
     QVariantMap sample;
     sample.insert("time", now - (fresh_sample ? state_.value("telemetry_age_ms").toLongLong() : 0));
     if (fresh_sample) {
-      sample.insert("throttle", qBound(0.0, state_.value("throttle").toDouble() * 100.0, 100.0));
-      sample.insert("brake", qBound(0.0, state_.value("brake").toDouble() * 100.0, 100.0));
-      sample.insert("lateral", state_.value("g_x").toDouble());
-      sample.insert("longitudinal", state_.value("g_z").toDouble());
+      const auto channel = [this](const char *key, bool pedal = false) -> QVariant {
+        const auto raw = state_.value(key);
+        bool valid = false;
+        const double value = raw.toDouble(&valid);
+        if (!raw.isValid() || raw.isNull() || !valid || !qIsFinite(value)) return {};
+        return pedal ? qBound(0.0, value * 100.0, 100.0) : value;
+      };
+      sample.insert("throttle", channel("throttle", true));
+      sample.insert("brake", channel("brake", true));
+      sample.insert("lateral", channel("g_x"));
+      sample.insert("longitudinal", channel("g_z"));
       last_graph_sample_ = sample_id;
     } else {
       // Preserve an explicit gap instead of redrawing retained idle telemetry.

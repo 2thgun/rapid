@@ -1,5 +1,0 @@
-[Desktop Entry]
-Name=raPId Dashboard
-Comment=GPIO race dashboard kiosk session
-Exec=/home/rapid/.local/bin/rapid-kiosk
-Type=Application

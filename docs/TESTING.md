@@ -1,6 +1,6 @@
 # Testing
 
-Run C++ tests on Linux in Debug and Release modes. Protocol and log-status tests
+Run C++ tests on Linux in Debug and Release modes. V4 and log-status tests
 use explicit failures and remain effective with `NDEBUG` enabled. Hosted CI runs
 the full native suite in both configurations.
 
@@ -52,3 +52,8 @@ resets and history aging. CI runs this alongside the Windows job. The same scrip
 can run in a browser when supplied `dashboardSource` containing dashboard HTML.
 Native tests separately verify that heartbeats do not refresh sample age and that
 an invalid new-session sequence cannot finalize the current recording.
+
+Build with `-DRAPID_BUILD_QT_DISPLAY=ON` to include the Qt display and
+`rapid-qt-tests`. The Qt test uses an isolated loopback HTTP server to exercise
+polling, deduplication, missing channels, idle gaps, failed requests and session
+changes. See [Qt display](QT_DISPLAY.md) for the isolated visual graph fixture.

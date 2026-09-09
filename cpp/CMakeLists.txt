@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(RAPID_BUILD_LOG_STATUS "Build the Linux journal/HTTP log monitor" OFF)
-option(RAPID_BUILD_QT_DISPLAY "Build the experimental Qt touchscreen display" OFF)
+option(RAPID_BUILD_QT_DISPLAY "Build the Qt touchscreen display" OFF)
 if(RAPID_BUILD_LOG_STATUS)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
@@ -17,14 +17,6 @@ if(RAPID_BUILD_LOG_STATUS)
   target_link_libraries(rapid-log-status PRIVATE PkgConfig::SYSTEMD)
   target_compile_options(rapid-log-status PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
-
-add_library(rapid_core STATIC
-    src/json.cpp
-    src/protocol.cpp
-    src/state.cpp
-)
-target_include_directories(rapid_core PUBLIC include)
-target_compile_options(rapid_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -42,7 +34,7 @@ target_compile_options(rapid_native PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(rapid-pi src/pi_main.cpp)
 target_link_libraries(rapid-pi PRIVATE rapid_native)
 
-# This is deliberately optional while Chromium remains the production display.
+# Optional for server-only installations.
 # The Qt target consumes the local HTTP API; it does not link to or alter the
 # receiver/recorder runtime.
 if(RAPID_BUILD_QT_DISPLAY)
@@ -57,11 +49,19 @@ if(RAPID_BUILD_QT_DISPLAY)
     PREFIX "/"
     FILES
       display/Main.qml
+      display/HistoryPlot.qml
       assets/steering-wheel-cartoon.png
   )
   target_link_libraries(rapid-qt-display PRIVATE
     Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick)
   target_compile_options(rapid-qt-display PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  if(BUILD_TESTING)
+    qt_add_executable(rapid-qt-tests tests/qt_dashboard_tests.cpp
+      src/qt_dashboard_model.cpp src/qt_dashboard_model.hpp)
+    target_link_libraries(rapid-qt-tests PRIVATE Qt6::Core Qt6::Network)
+    target_compile_options(rapid-qt-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME rapid-qt-tests COMMAND rapid-qt-tests)
+  endif()
 endif()
 
 # Dependencies are supplied by the OS, not downloaded at build time.
@@ -87,8 +87,4 @@ if(BUILD_TESTING)
   target_include_directories(rapid-log-status-tests PRIVATE include)
   target_compile_options(rapid-log-status-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   add_test(NAME rapid-log-status-tests COMMAND rapid-log-status-tests)
-  add_executable(rapid-protocol-tests tests/protocol_tests.cpp)
-  target_link_libraries(rapid-protocol-tests PRIVATE rapid_core)
-  target_compile_options(rapid-protocol-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
-  add_test(NAME rapid-protocol-tests COMMAND rapid-protocol-tests)
 endif()
