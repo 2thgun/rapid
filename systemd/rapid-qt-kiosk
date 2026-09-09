@@ -1,0 +1,13 @@
+#!/bin/sh
+# Qt runs in the same X session as the previous Chromium kiosk, preserving the
+# proven framebuffer, touch and tty ownership setup in rapid-display.service.
+set -eu
+
+while ! /usr/bin/curl -fs http://127.0.0.1:8000/ >/dev/null 2>&1; do
+  /usr/bin/sleep 0.2
+done
+
+/usr/bin/xset s off
+/usr/bin/xset -dpms
+/usr/bin/xset s noblank
+exec /home/rapid/raPId/cpp/build-qt/rapid-qt-display --endpoint http://127.0.0.1:8000

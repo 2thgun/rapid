@@ -19,7 +19,7 @@ StandardError=journal
 PAMName=login
 RuntimeDirectory=rapid-display
 RuntimeDirectoryMode=0700
-ExecStart=/usr/bin/xinit /home/rapid/.local/bin/rapid-kiosk -- /usr/lib/xorg/Xorg :0 vt1 -nolisten tcp
+ExecStart=/usr/bin/xinit /home/rapid/raPId/systemd/rapid-qt-kiosk -- /usr/lib/xorg/Xorg :0 vt1 -nolisten tcp
 Restart=on-failure
 RestartSec=3
 

@@ -1,21 +1,20 @@
 # Qt touchscreen display
 
-`rapid-qt-display` is the in-progress native replacement for the Chromium kiosk.
-It is a separate C++/Qt Quick process: `rapid-pi` continues to own telemetry,
-recording, persistence, uploads and the narrow Wi-Fi mode API. The display reads
-only the existing local HTTP endpoints, so it cannot affect a recording if it
-crashes or is restarted.
+`rapid-qt-display` is the native Qt Quick replacement for the Chromium kiosk.
+It is a separate C++ process: `rapid-pi` continues to own telemetry, recording,
+persistence, uploads and the narrow Wi-Fi mode API. The display only reads the
+local HTTP endpoints, so restarting it cannot affect a recording.
 
-## Current scope
+## Delivered display
 
-- 480 × 320 fullscreen touch layout with Drive, Timing, Vehicle and Tyres pages.
+- 480 by 320 fullscreen touch layout with Drive, Timing, Vehicle, Tyres and
+  vertically stacked Graphs pages.
 - Local `/api/live` polling at 5 Hz, including stale-telemetry status.
 - Existing `/api/v1/network/mode` AP/Home control and `/api/log-status` notice.
-- Existing reference steering-wheel PNG as a Qt resource.
-
-The Graphs tab is deliberately marked as incomplete. Chromium remains production
-until the Qt display has equivalent graph history, an on-panel touch test and a
-full demo rehearsal. Do not replace `rapid-display.service` yet.
+- Reference steering-wheel PNG embedded as a Qt resource.
+- A rolling 30-second pedal and G-force history that accepts only unique, fresh
+  driving samples. Waiting, paused and idle periods are gaps instead of retained
+  telemetry drawn as new data.
 
 ## Build
 
@@ -29,21 +28,17 @@ cmake -S cpp -B cpp/build-qt -DCMAKE_BUILD_TYPE=Release \
 cmake --build cpp/build-qt -j2 --target rapid-qt-display
 ```
 
-For an isolated desktop check, point the display at any running native runtime:
+`rapid-display.service` starts Qt through the established Xorg framebuffer
+session. This preserves the existing touch and tty setup. During deployment the
+previous Chromium launcher is retained on the Pi as an `.old` backup.
 
-```sh
-./cpp/build-qt/rapid-qt-display --endpoint http://127.0.0.1:8000
-```
+## Verification and rollback
 
-For the GPIO panel, test a direct framebuffer launch only while the current kiosk
-is stopped and the recorder is idle. Start with `QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0`
-and confirm touch calibration. A later EGLFS test may be faster if the panel's
-graphics stack supports it. Do not enable a replacement systemd unit until both
-paths have been compared on the physical display.
+While idle, check `systemctl is-active rapid rapid-display rapid-log-status` and
+confirm Drive, Timing, Vehicle, Tyres and Graphs respond to touch. The Graphs
+page must retain live driving samples and show a gap after returning to a menu or
+pausing.
 
-## Next implementation slice
-
-Port the existing 30-second throttle/brake and G-force graph behavior, including
-fresh-sample deduplication and gaps while waiting or paused. Then add an explicit
-Qt display service unit that remains disabled by default, plus an on-panel test
-and rollback procedure.
+If the display needs to be restored while idle, replace the Qt launcher in
+`rapid-display.service` with its saved Chromium launcher and restart
+`rapid-display`.
