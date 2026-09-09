@@ -42,5 +42,6 @@ See the [Windows companion guide](companion/README.md) for Windows builds and se
 - [Architecture](docs/ARCHITECTURE.md)
 - [Installation and operations](docs/OPERATIONS.md)
 - [Testing](docs/TESTING.md)
+- [Qt touchscreen display migration](docs/QT_DISPLAY.md)
 - [Telemetry v4 setup and protocol](docs/TELEMETRY_V4.md)
 - [Changelog](CHANGELOG.md)

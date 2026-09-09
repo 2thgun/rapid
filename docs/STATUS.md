@@ -63,6 +63,11 @@ paired companion kit. Confirm live controls, graphs, a completed bundle and its
 MoTeC opening according to the demo guide. That real driving rehearsal is the
 only remaining acceptance step.
 
+An optional Qt Quick display target is now scaffolded, reading the existing local
+runtime API without changing telemetry or recording. Chromium remains the active
+display while Qt graphs and physical-panel validation are completed. See
+[Qt display migration](QT_DISPLAY.md).
+
 Display output now goes only to the journal, preventing Xorg and Chromium output
 from drawing over the dashboard. A three-second “Log updated” badge is driven by
 the native C++ monitor. Full messages remain in the persistent journal, limited

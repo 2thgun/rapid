@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(RAPID_BUILD_LOG_STATUS "Build the Linux journal/HTTP log monitor" OFF)
+option(RAPID_BUILD_QT_DISPLAY "Build the experimental Qt touchscreen display" OFF)
 if(RAPID_BUILD_LOG_STATUS)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
@@ -40,6 +41,28 @@ target_link_libraries(rapid_native PUBLIC nlohmann_json::nlohmann_json OpenSSL::
 target_compile_options(rapid_native PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(rapid-pi src/pi_main.cpp)
 target_link_libraries(rapid-pi PRIVATE rapid_native)
+
+# This is deliberately optional while Chromium remains the production display.
+# The Qt target consumes the local HTTP API; it does not link to or alter the
+# receiver/recorder runtime.
+if(RAPID_BUILD_QT_DISPLAY)
+  find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Network Qml Quick)
+  qt_standard_project_setup()
+  qt_add_executable(rapid-qt-display
+    src/qt_dashboard_main.cpp
+    src/qt_dashboard_model.cpp
+    src/qt_dashboard_model.hpp
+  )
+  qt_add_resources(rapid-qt-display rapid_qt_display_assets
+    PREFIX "/"
+    FILES
+      display/Main.qml
+      assets/steering-wheel-cartoon.png
+  )
+  target_link_libraries(rapid-qt-display PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick)
+  target_compile_options(rapid-qt-display PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
 # Dependencies are supplied by the OS, not downloaded at build time.
 find_library(ARGON2_LIBRARY argon2 REQUIRED)

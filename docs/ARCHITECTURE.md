@@ -33,6 +33,10 @@ counts; slow viewers do not block the producer's history buffer. Recorder state
 is exposed through both live/status endpoints. Native ACC audit tables are named
 `native_acc_packets` and `native_acc_laps`.
 
+The optional `rapid-qt-display` target is a Qt Quick client of the local runtime
+API. It is not part of the receiver process and has not replaced the Chromium
+kiosk; see [Qt display migration](QT_DISPLAY.md).
+
 ## Native log activity
 
 `rapid-log-status` uses libsystemd directly. Its read-only endpoint is
