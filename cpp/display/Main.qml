@@ -99,10 +99,46 @@ Rectangle {
             }
         }
         Item { visible: root.page === 4; anchors.fill: parent
-            Text { anchors.horizontalCenter: parent.horizontalCenter; y: 22; text: "GRAPHS — NEXT QT SLICE"; color: root.accent; font.pixelSize: 16; font.bold: true }
-            Text { anchors.horizontalCenter: parent.horizontalCenter; y: 58; width: 380; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; text: "The existing browser dashboard remains the graph reference while Qt history rendering is implemented."; color: root.muted; font.pixelSize: 12 }
-            Text { anchors.horizontalCenter: parent.horizontalCenter; y: 132; text: "THROTTLE " + root.percent("throttle") + "    BRAKE " + root.percent("brake"); color: "#f4f7f9"; font.pixelSize: 15; font.bold: true }
-            Text { anchors.horizontalCenter: parent.horizontalCenter; y: 165; text: "Gx " + root.number("g_x").toFixed(2) + "    Gz " + root.number("g_z").toFixed(2); color: "#f4f7f9"; font.pixelSize: 15; font.bold: true }
+            property var samples: dashboard.graphSamples
+            function sampleNumber(sample, key) {
+                const value = sample[key]
+                return value === undefined || value === null || !Number.isFinite(Number(value)) ? null : Number(value)
+            }
+            function drawGraph(context, canvas, lines, minimum, maximum) {
+                const now = Date.now()
+                context.reset()
+                context.fillStyle = "#121a20"
+                context.fillRect(0, 0, canvas.width, canvas.height)
+                context.strokeStyle = "#28353d"
+                context.lineWidth = 1
+                for (let row = 1; row < 4; ++row) {
+                    const y = Math.round(canvas.height * row / 4) + 0.5
+                    context.beginPath(); context.moveTo(0, y); context.lineTo(canvas.width, y); context.stroke()
+                }
+                for (const line of lines) {
+                    context.strokeStyle = line.color; context.lineWidth = 2
+                    let drawing = false
+                    context.beginPath()
+                    for (const sample of samples) {
+                        const value = sampleNumber(sample, line.key)
+                        if (value === null) { drawing = false; continue }
+                        const x = canvas.width * (1 - (now - Number(sample.time)) / 30000)
+                        const y = canvas.height * (1 - clamp((value - minimum) / (maximum - minimum), 0, 1))
+                        if (!drawing) { context.moveTo(x, y); drawing = true } else context.lineTo(x, y)
+                    }
+                    context.stroke()
+                }
+            }
+            Text { x: 10; y: 3; text: "PEDALS   T " + root.percent("throttle") + "   B " + root.percent("brake"); color: root.muted; font.pixelSize: 10; font.bold: true }
+            Canvas { id: pedalGraph; x: 0; y: 20; width: parent.width; height: 83
+                onPaint: root.drawGraph(getContext("2d"), pedalGraph, [{key: "throttle", color: "#20cf75"}, {key: "brake", color: "#ef4458"}], 0, 100)
+                Connections { target: dashboard; function onChanged() { pedalGraph.requestPaint() } }
+            }
+            Text { x: 10; y: 112; text: "G-FORCE   LAT " + root.number("g_x").toFixed(2) + "   LONG " + root.number("g_z").toFixed(2); color: root.muted; font.pixelSize: 10; font.bold: true }
+            Canvas { id: forceGraph; x: 0; y: 129; width: parent.width; height: 83
+                onPaint: root.drawGraph(getContext("2d"), forceGraph, [{key: "lateral", color: "#34bdf2"}, {key: "longitudinal", color: "#f6b91a"}], -2.5, 2.5)
+                Connections { target: dashboard; function onChanged() { forceGraph.requestPaint() } }
+            }
         }
     }
     Rectangle { x: 8; y: 282; width: root.width - 16; height: 30; radius: 3; color: "#121a20"; border.color: "#28353d"

@@ -7,6 +7,7 @@ Wants=NetworkManager.service
 Type=simple
 User=root
 Group=rapid
+EnvironmentFile=-/etc/rapid-network-mode.conf
 RuntimeDirectory=rapid-network
 RuntimeDirectoryMode=0770
 ExecStart=/usr/local/sbin/rapid-network-mode

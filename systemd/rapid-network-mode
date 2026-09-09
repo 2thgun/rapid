@@ -7,6 +7,13 @@ state="$runtime/state"
 ap_connection=rapid-demo
 
 home_connection() {
+  # A deployed Pi can pin its intended home profile in the root-owned
+  # EnvironmentFile. Falling back to the first saved profile preserves the
+  # generic first-boot behavior for a newly provisioned device.
+  if [ -n "${RAPID_HOME_CONNECTION:-}" ]; then
+    printf '%s\n' "$RAPID_HOME_CONNECTION"
+    return
+  fi
   nmcli -t -f NAME,TYPE connection show | awk -F: \
     '$2 == "802-11-wireless" && $1 != "rapid-demo" { print $1; exit }'
 }

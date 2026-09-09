@@ -2,6 +2,7 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QDateTime>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -65,6 +66,7 @@ void DashboardModel::consumeLive(QNetworkReply *reply) {
     if (document.isObject()) {
       state_ = document.object().toVariantMap();
       updateStatus();
+      updateGraphHistory();
     } else {
       status_ = "Dashboard sent invalid telemetry";
     }
@@ -73,6 +75,44 @@ void DashboardModel::consumeLive(QNetworkReply *reply) {
   }
   reply->deleteLater();
   bump();
+}
+
+void DashboardModel::updateGraphHistory() {
+  constexpr qint64 kWindowMilliseconds = 30'000;
+  constexpr qint64 kGapIntervalMilliseconds = 200;
+  const qint64 now = QDateTime::currentMSecsSinceEpoch();
+  const bool driving = state_.value("companion_connected").toBool() &&
+      state_.value("companion_daemon_state").toString() == "driving" &&
+      state_.value("telemetry_fresh").toBool();
+  const QString sample_id = state_.value("session_id").toString() + ':' +
+      QString::number(state_.value("samples_received").toLongLong());
+  const bool fresh_sample = driving && state_.value("samples_received").toLongLong() > 0 &&
+      sample_id != last_graph_sample_;
+
+  if (fresh_sample || (!driving && now - last_graph_gap_ms_ >= kGapIntervalMilliseconds)) {
+    QVariantMap sample;
+    sample.insert("time", now - (fresh_sample ? state_.value("telemetry_age_ms").toLongLong() : 0));
+    if (fresh_sample) {
+      sample.insert("throttle", qBound(0.0, state_.value("throttle").toDouble() * 100.0, 100.0));
+      sample.insert("brake", qBound(0.0, state_.value("brake").toDouble() * 100.0, 100.0));
+      sample.insert("lateral", state_.value("g_x").toDouble());
+      sample.insert("longitudinal", state_.value("g_z").toDouble());
+      last_graph_sample_ = sample_id;
+    } else {
+      // Preserve an explicit gap instead of redrawing retained idle telemetry.
+      sample.insert("throttle", QVariant());
+      sample.insert("brake", QVariant());
+      sample.insert("lateral", QVariant());
+      sample.insert("longitudinal", QVariant());
+      last_graph_gap_ms_ = now;
+    }
+    graph_samples_.append(sample);
+  }
+
+  while (!graph_samples_.isEmpty() &&
+         graph_samples_.front().toMap().value("time").toLongLong() < now - kWindowMilliseconds) {
+    graph_samples_.removeFirst();
+  }
 }
 
 void DashboardModel::updateStatus() {

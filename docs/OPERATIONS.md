@@ -96,6 +96,21 @@ The dashboard button shows `WIFI AP` or `WIFI HOME` and switches to the other
 mode. The requesting browser disconnects while `wlan0` changes networks. In AP
 mode the Pi is `192.168.1.64`; in home mode use its hostname or DHCP address.
 
+Set the intended boot/home profile explicitly on a deployed Pi instead of relying
+on NetworkManager's connection-list order:
+
+```sh
+sudo sh -c 'printf "%s\\n" "RAPID_HOME_CONNECTION=your-saved-wifi-profile" > /etc/rapid-network-mode.conf'
+sudo nmcli connection modify rapid-demo connection.autoconnect yes connection.autoconnect-priority -100
+sudo nmcli connection modify your-saved-wifi-profile connection.autoconnect yes connection.autoconnect-priority 100
+sudo systemctl restart rapid-network-mode
+```
+
+This makes the saved home connection the normal boot path. The dashboard button
+still switches to the AP explicitly, and the AP remains a fallback when Home is
+unavailable. Keep `/etc/rapid-network-mode.conf` private because its profile name
+can identify a local network.
+
 Before deployment, preserve changed files and units in a unique `.old` backup and
 confirm the recorder is idle. After deployment check all three services, both APIs,
 the share and the panel. To roll back, restore that backup and reload systemd;
