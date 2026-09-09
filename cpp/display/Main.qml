@@ -76,7 +76,7 @@ Rectangle {
         }
         Item { visible: root.page === 1; anchors.fill: parent
             Repeater { model: [ ["TRACK", root.text("track_name")], ["CAR", root.text("car_model")], ["DRIVER", root.text("driver_name")], ["CURRENT", root.time("current_lap_ms")], ["BEST", root.time("best_lap_ms")], ["SAMPLES", root.text("recorded_samples")] ]
-                Rectangle { required property var modelData; x: (index % 2) * 236; y: Math.floor(index / 2) * 72; width: 228; height: 64; radius: 4; color: "#121a20"; border.color: "#28353d"
+                Rectangle { required property var modelData; required property int index; x: (index % 2) * 236; y: Math.floor(index / 2) * 72; width: 228; height: 64; radius: 4; color: "#121a20"; border.color: "#28353d"
                     Text { x: 10; y: 9; text: modelData[0]; color: root.muted; font.pixelSize: 10; font.bold: true }
                     Text { x: 10; y: 29; width: 208; text: modelData[1]; color: "#f4f7f9"; font.pixelSize: 14; font.bold: true; elide: Text.ElideRight }
                 }
@@ -84,7 +84,7 @@ Rectangle {
         }
         Item { visible: root.page === 2; anchors.fill: parent
             Repeater { model: [ ["FUEL", root.text("fuel") + " L"], ["TC", root.text("tc")], ["ABS", root.percent("abs_activity")], ["LIMITER", dashboard.value("pit_limiter") ? "ON" : "OFF"], ["DAMAGE FRONT", root.percent("damage_front")], ["DAMAGE REAR", root.percent("damage_rear")] ]
-                Rectangle { required property var modelData; x: (index % 2) * 236; y: Math.floor(index / 2) * 72; width: 228; height: 64; radius: 4; color: "#121a20"; border.color: "#28353d"
+                Rectangle { required property var modelData; required property int index; x: (index % 2) * 236; y: Math.floor(index / 2) * 72; width: 228; height: 64; radius: 4; color: "#121a20"; border.color: "#28353d"
                     Text { x: 10; y: 9; text: modelData[0]; color: root.muted; font.pixelSize: 10; font.bold: true }
                     Text { x: 10; y: 29; text: modelData[1]; color: "#f4f7f9"; font.pixelSize: 17; font.bold: true }
                 }
@@ -92,7 +92,7 @@ Rectangle {
         }
         Item { visible: root.page === 3; anchors.fill: parent
             Repeater { model: [ ["FL", root.text("core_temp_fl") + " C  " + root.text("pressure_fl")], ["FR", root.text("core_temp_fr") + " C  " + root.text("pressure_fr")], ["RL", root.text("core_temp_rl") + " C  " + root.text("pressure_rl")], ["RR", root.text("core_temp_rr") + " C  " + root.text("pressure_rr")] ]
-                Rectangle { required property var modelData; x: (index % 2) * 236; y: Math.floor(index / 2) * 72; width: 228; height: 64; radius: 4; color: "#121a20"; border.color: "#28353d"
+                Rectangle { required property var modelData; required property int index; x: (index % 2) * 236; y: Math.floor(index / 2) * 72; width: 228; height: 64; radius: 4; color: "#121a20"; border.color: "#28353d"
                     Text { x: 10; y: 9; text: modelData[0]; color: root.muted; font.pixelSize: 10; font.bold: true }
                     Text { x: 10; y: 29; text: modelData[1]; color: "#f4f7f9"; font.pixelSize: 15; font.bold: true }
                 }
@@ -144,7 +144,7 @@ Rectangle {
     Rectangle { x: 8; y: 282; width: root.width - 16; height: 30; radius: 3; color: "#121a20"; border.color: "#28353d"
         Row { anchors.centerIn: parent; spacing: 5
             Repeater { model: ["DRIVE", "TIMING", "VEHICLE", "TYRES", "GRAPHS"]
-                Rectangle { required property string modelData; width: 83; height: 23; radius: 2; color: index === root.page ? "#2a2210" : "#0e151a"; border.color: index === root.page ? root.accent : "#28353d"
+                Rectangle { required property string modelData; required property int index; width: 83; height: 23; radius: 2; color: index === root.page ? "#2a2210" : "#0e151a"; border.color: index === root.page ? root.accent : "#28353d"
                     Text { anchors.centerIn: parent; text: modelData; color: index === root.page ? root.accent : root.muted; font.pixelSize: 9; font.bold: true }
                     MouseArea { anchors.fill: parent; onClicked: root.page = index }
                 }
