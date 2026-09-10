@@ -1,5 +1,11 @@
 # Current handoff
 
+Active work: flash/setup/pairing, documented in `wiki/Provisioning.md`.
+First slice adds opt-in C++ device identity/configuration persistence and
+read-only `/api/v1/setup`. No provisioning or Pi deployment yet. Next comes
+authenticated management and the privileged service boundary. See wiki log
+for verification; do not describe the full onboarding flow as implemented.
+
 Runtime/UI checkpoint: `bd92a46` (2026-09-09). The Qt repair is deployed.
 Documentation now lives in the pinned GitHub wiki submodule.
 

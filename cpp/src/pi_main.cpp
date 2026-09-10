@@ -1,6 +1,8 @@
 #include "rapid/native.hpp"
+#include "rapid/setup.hpp"
 #include <csignal>
 #include <iostream>
+#include <memory>
 #include <thread>
 
 using namespace rapid::native;
@@ -17,6 +19,9 @@ int main(int argc, char **argv) {
     else if (argc != 1)
       throw std::runtime_error("use --config path or --help");
     auto settings = Config::load(config);
+    std::unique_ptr<SetupStore> setup;
+    if (!settings.setup_directory.empty())
+      setup = std::make_unique<SetupStore>(settings.setup_directory);
     Runtime runtime(settings);
     auto dashboard = read_file(settings.assets / "dashboard.html"),
          telemetry = read_file(settings.assets / "telemetry.html"),
@@ -66,6 +71,15 @@ int main(int argc, char **argv) {
               return {200, runtime.snapshot().dump()};
             if (req.method == "GET" && path == "/healthz")
               return {200, "{\"status\":\"ok\",\"runtime\":\"cpp\"}"};
+            if (path == "/api/v1/setup") {
+              if (!setup)
+                return {503, "{\"available\":false}"};
+              if (req.method != "GET")
+                return {405, "{\"detail\":\"setup is read-only\"}", "application/json",
+                        {{"Allow", "GET"}}};
+              return {200, setup_status(setup->snapshot()).dump(), "application/json",
+                      {{"Cache-Control", "no-store"}}};
+            }
             if (req.method == "GET" && path == "/api/v1/network/mode") {
               auto state = settings.network_control / "state";
               if (!fs::exists(state))

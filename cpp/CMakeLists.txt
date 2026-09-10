@@ -26,7 +26,7 @@ find_package(Boost REQUIRED COMPONENTS system)
 find_package(tomlplusplus REQUIRED)
 find_package(Threads REQUIRED)
 add_library(rapid_native STATIC src/native_common.cpp src/native_v4.cpp src/native_recorder.cpp
-  src/native_runtime.cpp src/native_http.cpp src/native_acc.cpp src/native_upload.cpp)
+  src/native_runtime.cpp src/native_http.cpp src/native_acc.cpp src/native_upload.cpp src/native_setup.cpp)
 target_include_directories(rapid_native PUBLIC include)
 target_link_libraries(rapid_native PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto
   SQLite::SQLite3 CURL::libcurl Boost::system tomlplusplus::tomlplusplus Threads::Threads)
@@ -71,6 +71,9 @@ target_link_libraries(rapid-archive PRIVATE rapid_native ${ARGON2_LIBRARY})
 target_compile_options(rapid-archive PRIVATE -Wall -Wextra -Wpedantic)
 
 if(BUILD_TESTING)
+  add_executable(rapid-setup-tests tests/setup_tests.cpp)
+  target_link_libraries(rapid-setup-tests PRIVATE rapid_native)
+  add_test(NAME rapid-setup-tests COMMAND rapid-setup-tests)
   add_executable(rapid-v4-tests tests/v4_tests.cpp)
   target_link_libraries(rapid-v4-tests PRIVATE rapid_native)
   set(RAPID_V4_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/tests/v4-fixtures" CACHE PATH "Windows encoder fixtures")

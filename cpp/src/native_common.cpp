@@ -223,6 +223,7 @@ Config Config::load(const fs::path &path) {
   c.network_control = text("app", "network_control_directory",
                            "RAPID_NETWORK_CONTROL_DIRECTORY",
                            c.network_control.string());
+  c.setup_directory = text("setup", "state_directory", "RAPID_SETUP_STATE_DIRECTORY", "");
   c.acc_enabled = boolean("acc", "enabled", "RAPID_ACC_ENABLED", false);
   c.acc_host = text("acc", "host", "RAPID_ACC_HOST", c.acc_host);
   c.acc_port = integer("acc", "port", "RAPID_ACC_PORT", c.acc_port);

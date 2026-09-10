@@ -26,6 +26,12 @@ telemetry_directory = "data/telemetry"
 # Directory shared with rapid-network-mode.service. Leave unchanged on the Pi.
 network_control_directory = "/run/rapid-network"
 
+[setup]
+# Opt-in foundation only: read-only /api/v1/setup, no provisioning UI yet.
+# Empty keeps existing installations unchanged. Parent directory must exist;
+# a new leaf directory is created privately, existing leaf must be mode 0700.
+state_directory = ""
+
 [upload]
 enabled = false
 url = "https://telemetry.example.com"

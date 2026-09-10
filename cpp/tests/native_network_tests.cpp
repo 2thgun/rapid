@@ -103,6 +103,7 @@ int main(int argc, char **argv) {
              (root / "network-control").c_str(), 1);
       setenv("RAPID_ASSETS_DIRECTORY", argv[2], 1);
       setenv("RAPID_DATABASE_PATH", (root / "rapid.db").c_str(), 1);
+      setenv("RAPID_SETUP_STATE_DIRECTORY", (root / "setup").c_str(), 1);
       setenv("RAPID_TELEMETRY_DIRECTORY", (root / "telemetry").c_str(), 1);
       setenv("RAPID_UPLOAD_ENABLED", "false", 1);
       setenv("RAPID_ACC_ENABLED", "false", 1);
@@ -130,6 +131,16 @@ int main(int argc, char **argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     require(ready, "server ready");
+    const auto setup_reply = request(port, http::verb::get, "/api/v1/setup");
+    require(setup_reply.result_int() == 200 &&
+                setup_reply[http::field::cache_control] == "no-store",
+            "setup status available without caching");
+    const auto setup = Json::parse(setup_reply.body());
+    require(setup["setup_complete"] == false && setup["revision"] == 1 &&
+                setup["capabilities"]["settings_write"] == false && !setup.contains("settings"),
+            "setup status reports incomplete, read-only foundation");
+    require(request(port, http::verb::post, "/api/v1/setup", "{}").result_int() == 405,
+            "setup mutation unavailable until authenticated management is implemented");
     fs::create_directories(root / "network-control");
     require(request(port, http::verb::post, "/api/v1/network/mode",
                     "{\"mode\":\"invalid\"}")

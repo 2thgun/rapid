@@ -59,7 +59,7 @@ struct Config {
   bool acc_enabled = false, upload_enabled = false;
   fs::path database = "data/rapid.db", telemetry = "data/telemetry",
            queue = "data/upload-queue.db", assets = "cpp/assets",
-           network_control = "/run/rapid-network";
+           network_control = "/run/rapid-network", setup_directory;
   static Config load(const fs::path &path);
 };
 
