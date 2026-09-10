@@ -68,8 +68,12 @@ SetupStore::SetupStore(const fs::path &directory)
                                      {"rotation", 0}, {"boot_network", "home_then_ap"}}}};
       store_.exec("INSERT INTO setup_state VALUES(1,1,?)", {document.dump()});
       store_.exec("PRAGMA user_version=1");
-    } else if (version != 1) {
+    } else if (version != 1 && version != 2) {
       throw std::runtime_error("unsupported setup schema; use a compatible application version");
+    }
+    if (version < 2) {
+      store_.exec("CREATE TABLE setup_owner (id INTEGER PRIMARY KEY CHECK(id=1), password_hash TEXT NOT NULL)");
+      store_.exec("PRAGMA user_version=2");
     }
     // Reject corrupt state, preserving it for recovery instead of reinitializing
     // identity or treating the device as unowned.
@@ -93,7 +97,7 @@ Json SetupStore::snapshot_unlocked() {
   auto document = Json::parse(row[0].at("document").get<std::string>());
   if (!document.is_object())
     throw std::runtime_error("invalid setup document");
-  document["schema_version"] = 1;
+  document["schema_version"] = 2;
   document["revision"] = row[0].at("revision");
   return document;
 }
@@ -101,6 +105,20 @@ Json SetupStore::snapshot_unlocked() {
 Json SetupStore::snapshot() {
   std::lock_guard lock(mutex_);
   return snapshot_unlocked();
+}
+
+std::string SetupStore::owner_hash() {
+  std::lock_guard lock(mutex_);
+  const auto rows = store_.query("SELECT password_hash FROM setup_owner WHERE id=1");
+  return rows.empty() ? "" : rows[0].at("password_hash").get<std::string>();
+}
+
+bool SetupStore::claim_owner(const std::string &password_hash) {
+  if (!password_hash.starts_with("$argon2id$") || password_hash.size() > 512)
+    throw std::invalid_argument("invalid owner password hash");
+  std::lock_guard lock(mutex_);
+  store_.exec("INSERT OR IGNORE INTO setup_owner VALUES(1,?)", {password_hash});
+  return store_.query("SELECT changes() AS count")[0]["count"] == 1;
 }
 
 bool SetupStore::update(std::int64_t expected_revision, const Json &settings) {

@@ -2,8 +2,10 @@
 
 Active work: flash/setup/pairing, documented in `wiki/Provisioning.md`.
 First slice adds opt-in C++ device identity/configuration persistence and
-read-only `/api/v1/setup`. No provisioning or Pi deployment yet. Next comes
-authenticated management and the privileged service boundary. See wiki log
+read-only `/api/v1/setup`. A separate loopback C++ setup server adds owner login;
+CPack assembles a preview Pi application package. See `wiki/Pi-Package.md`.
+No provisioning or Pi deployment yet. Next: HTTPS/AP bootstrap and the privileged
+service boundary. See wiki log
 for verification; do not describe the full onboarding flow as implemented.
 Foundation source `f55bf82` passed hosted Windows and Linux Debug/Release checks
 (Actions run `34456072961`). Later documentation commits do not change that code.

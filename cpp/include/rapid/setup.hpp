@@ -15,6 +15,8 @@ public:
   // Compare-and-swap prevents a delayed browser/service request from replacing
   // newer configuration. No unauthenticated HTTP write route exposes this.
   bool update(std::int64_t expected_revision, const Json &settings);
+  std::string owner_hash();
+  bool claim_owner(const std::string &password_hash);
 };
 
 // Only public setup information; never serialize the persistent document into

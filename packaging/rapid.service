@@ -1,0 +1,25 @@
+[Unit]
+Description=raPId telemetry runtime
+After=network.target
+ConditionPathExists=/etc/rapid/runtime.env
+
+[Service]
+Type=simple
+User=rapid
+Group=rapid
+StateDirectory=rapid
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/rapid
+Environment=RAPID_CONFIG=/etc/rapid/config.toml
+EnvironmentFile=/etc/rapid/runtime.env
+ExecStart=/usr/lib/rapid/rapid-pi
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=90
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

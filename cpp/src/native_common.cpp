@@ -214,6 +214,8 @@ Config Config::load(const fs::path &path) {
                              c.companion_port);
   c.companion_host = text("app", "companion_host", "RAPID_COMPANION_HOST", "");
   c.companion_key = telemetry_key(text("app", "companion_key", "RAPID_COMPANION_KEY", ""));
+  if (boolean("app", "require_v4", "RAPID_REQUIRE_V4", false) && c.companion_key.empty())
+    throw std::runtime_error("authenticated v4 key required before runtime activation");
   c.database =
       text("app", "database_path", "RAPID_DATABASE_PATH", c.database.string());
   c.telemetry = text("app", "telemetry_directory", "RAPID_TELEMETRY_DIRECTORY",

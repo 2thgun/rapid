@@ -23,9 +23,19 @@ jobs:
           name: windows-v4-fixtures
           path: build/windows-v4-fixtures
       - run: sudo apt-get update && sudo apt-get install -y libsystemd-dev pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript
-      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON -DRAPID_V4_FIXTURES=${{ github.workspace }}/build/windows-v4-fixtures
+      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON -DRAPID_BUILD_PI_PACKAGE=ON -DRAPID_V4_FIXTURES=${{ github.workspace }}/build/windows-v4-fixtures
       - run: cmake --build build/cpp
       - run: ctest --test-dir build/cpp --output-on-failure
+      - if: matrix.build_type == 'Release'
+        run: |
+          cpack --config build/cpp/CPackConfig.cmake -B build/packages
+          cmake -DPACKAGE="$PWD/build/packages/rapid_0.1.0~preview1_amd64.deb" -P packaging/CheckPackage.cmake
+      - if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-linux-preview-amd64
+          path: build/packages/*.deb
+          if-no-files-found: error
   windows-companion:
     runs-on: windows-latest
     steps:

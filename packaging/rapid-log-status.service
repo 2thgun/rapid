@@ -1,0 +1,20 @@
+[Unit]
+Description=raPId log activity monitor
+After=systemd-journald.service
+
+[Service]
+User=rapid
+SupplementaryGroups=systemd-journal
+ExecStart=/usr/lib/rapid/rapid-log-status
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

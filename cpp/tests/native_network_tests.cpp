@@ -1,4 +1,5 @@
 #include "rapid/native.hpp"
+#include "rapid/setup_auth.hpp"
 #include <argon2.h>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
@@ -36,14 +37,16 @@ struct Process {
 };
 http::response<http::string_body> request(int port, http::verb method,
                                           const std::string &path,
-                                          const std::string &body = "") {
+                                          const std::string &body = "",
+                                          const std::map<std::string, std::string> &headers = {}) {
   asio::io_context io;
   tcp::socket socket(io);
   socket.connect(
       {asio::ip::make_address("127.0.0.1"), static_cast<unsigned short>(port)});
   http::request<http::string_body> req{method, path, 11};
-  req.set(http::field::host, "127.0.0.1");
+  req.set(http::field::host, "127.0.0.1:" + std::to_string(port));
   req.set(http::field::content_type, "application/json");
+  for (const auto &[name, value] : headers) req.set(name, value);
   req.body() = body;
   req.prepare_payload();
   http::write(socket, req);
@@ -54,7 +57,7 @@ http::response<http::string_body> request(int port, http::verb method,
 }
 int main(int argc, char **argv) {
   try {
-    require(argc == 4, "Pi binary, assets and archive binary required");
+    require(argc == 5, "Pi binary, assets, archive binary and setup binary required");
     auto root =
         fs::temp_directory_path() / ("rapid-network-tests-" + unique_id());
     fs::create_directories(root);
@@ -257,6 +260,43 @@ int main(int argc, char **argv) {
             hash_file(fs::path(state["last_bundle_path"].get<std::string>()) /
                       "full-session.ld"),
         "uploaded LD digest matches recorder");
+    {
+      SetupStore owner(root / "owner");
+      SetupAuth auth(owner, port + 2);
+      require(auth.enroll("network-test-owner-password"), "isolated owner enrolled");
+    }
+    Process management{fork()};
+    if (management.pid == 0) {
+      int fd = ::open((root / "setup.log").c_str(), O_WRONLY | O_CREAT, 0600);
+      dup2(fd, STDOUT_FILENO);
+      dup2(fd, STDERR_FILENO);
+      ::close(fd);
+      execl(argv[4], argv[4], "--state-directory", (root / "owner").c_str(),
+            "--assets", argv[2], "--port", std::to_string(port + 2).c_str(), nullptr);
+      _exit(127);
+    }
+    bool management_ready = false;
+    for (int i = 0; i < 100; ++i) {
+      try {
+        management_ready = request(port + 2, http::verb::get, "/api/v1/setup").result_int() == 200;
+        if (management_ready) break;
+      } catch (...) {}
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    require(management_ready, "loopback management server ready");
+    auto page = request(port + 2, http::verb::get, "/setup");
+    require(page.result_int() == 200 && page.body().find("Owner sign-in") != std::string::npos &&
+            !page[http::field::content_security_policy].empty(), "setup page served with security policy");
+    require(request(port + 2, http::verb::get, "/api/v1/settings").result_int() == 401,
+            "HTTP settings require authentication");
+    const auto login = request(port + 2, http::verb::post, "/api/v1/auth/login",
+        Json{{"password", "network-test-owner-password"}}.dump(),
+        {{"Origin", "http://127.0.0.1:" + std::to_string(port + 2)}});
+    require(login.result_int() == 200, "HTTP owner login succeeds");
+    const auto cookie = std::string(login[http::field::set_cookie]);
+    require(request(port + 2, http::verb::get, "/api/v1/settings", "",
+                    {{"Cookie", cookie.substr(0, cookie.find(';'))}}).result_int() == 200,
+            "HTTP session cookie authorizes settings read");
     std::cout << "Native network: HTTP, UDP, WebSocket history, disconnect "
                  "finalization and authenticated recorder-to-archive upload "
                  "passed\nEvidence: "

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+xset s off
+xset -dpms
+xset s noblank
+export QT_QUICK_BACKEND=software
+exec /usr/lib/rapid/rapid-qt-display

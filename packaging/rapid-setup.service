@@ -1,0 +1,26 @@
+[Unit]
+Description=raPId local management preview
+After=local-fs.target
+
+[Service]
+Type=simple
+User=rapid
+Group=rapid
+StateDirectory=rapid-setup
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/rapid-setup
+ExecStart=/usr/lib/rapid/rapid-setup-server --state-directory /var/lib/rapid-setup --assets /usr/share/rapid
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
