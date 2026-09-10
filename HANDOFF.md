@@ -3,6 +3,10 @@
 Runtime/UI checkpoint: `bd92a46` (2026-09-09). The Qt repair is deployed.
 Documentation now lives in the pinned GitHub wiki submodule.
 
+CI follow-up: `973dbee` fixes network-test isolation after repeated hosted
+Linux failures. Check the latest GitHub Actions conclusion before describing a
+revision as verified; local/Pi test results alone are insufficient.
+
 ```sh
 git submodule update --init --recursive
 ```
