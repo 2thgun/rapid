@@ -1,0 +1,15 @@
+[app]
+host = "127.0.0.1"
+port = 8000
+database_path = "/var/lib/rapid/rapid.db"
+telemetry_directory = "/var/lib/rapid/telemetry"
+assets_directory = "/usr/share/rapid"
+require_v4 = true
+# Runtime requires a separately provisioned v4 key before activation.
+
+[acc]
+enabled = false
+
+[upload]
+enabled = false
+queue_path = "/var/lib/rapid/upload-queue.db"

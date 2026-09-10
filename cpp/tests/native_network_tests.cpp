@@ -286,7 +286,7 @@ int main(int argc, char **argv) {
     require(management_ready, "loopback management server ready");
     auto page = request(port + 2, http::verb::get, "/setup");
     require(page.result_int() == 200 && page.body().find("Owner sign-in") != std::string::npos &&
-            !page[http::field::content_security_policy].empty(), "setup page served with security policy");
+            !page["Content-Security-Policy"].empty(), "setup page served with security policy");
     require(request(port + 2, http::verb::get, "/api/v1/settings").result_int() == 401,
             "HTTP settings require authentication");
     const auto login = request(port + 2, http::verb::post, "/api/v1/auth/login",

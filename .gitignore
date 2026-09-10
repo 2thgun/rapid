@@ -1,5 +1,6 @@
 data/
 config.toml
+!packaging/config.toml
 companion/.selftest/
 .tools/
 build/
