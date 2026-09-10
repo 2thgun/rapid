@@ -7,8 +7,10 @@ CPack assembles a preview Pi application package. See `wiki/Pi-Package.md`.
 No provisioning or Pi deployment yet. Next: HTTPS/AP bootstrap and the privileged
 service boundary. See wiki log
 for verification; do not describe the full onboarding flow as implemented.
-Foundation source `f55bf82` passed hosted Windows and Linux Debug/Release checks
-(Actions run `34456072961`). Later documentation commits do not change that code.
+Current source `7b5e910` passed all eight Pi CTests, ARM64 package inspection and
+extracted-package integration. Hosted Windows/Linux Debug/Release and amd64
+packaging passed (Actions `34473689994`). ARM64 preview is in ignored `dist/`;
+evidence is in `.local/sessions/2026-09-10-setup-auth/`. Not installed on the Pi.
 
 Runtime/UI checkpoint: `bd92a46` (2026-09-09). The Qt repair is deployed.
 Documentation now lives in the pinned GitHub wiki submodule.
