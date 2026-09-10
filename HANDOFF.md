@@ -36,7 +36,7 @@ Then read [Resume work](https://github.com/2thgun/rapid/wiki/Resume-Work) or
 - Native C++ Pi runtime and Windows companion; production telemetry uses v4.
 - Qt is the active five-page panel. Stacked graphs and larger touch controls were
   checked on-device; Home/AP/Off selection is implemented, with Home at startup.
-- Five native CTests plus the Qt model test passed on the Pi. Synthetic graph
+- Eight CTests including the Qt model passed for the deployed package source. Synthetic graph
   traces/gaps and screenshots were verified. Live AC1/CM/MoTeC rehearsal,
   physical finger calibration and a fresh Qt cold boot remain open.
 - Next: demo acceptance; wheel-speed unit audit; complete active v3 transport
