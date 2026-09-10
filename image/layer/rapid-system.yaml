@@ -1,0 +1,39 @@
+# METABEGIN
+# X-Env-Layer-Name: rapid-system
+# X-Env-Layer-Version: 0.1.0
+# X-Env-Layer-Category: application
+# X-Env-Layer-Desc: raPId Pi 4 GPIO touchscreen image foundation.
+#  First-boot provisioning must be packaged before producing a boot image.
+# X-Env-Layer-Requires: rpi4,debian-trixie-arm64-multi,rpi-debian-trixie,
+#  rpi-essential-base,systemd-min,network-manager,systemd-timesyncd,
+#  wireless-regulatory,device-user-admin
+# X-Env-VarPrefix: rapid
+# X-Env-Var-package:
+# X-Env-Var-package-Desc: Absolute path to the tested ARM64 raPId Debian package.
+# X-Env-Var-package-Required: y
+# X-Env-Var-package-Valid: file
+# X-Env-Var-package-Set: n
+# METAEND
+---
+mmdebstrap:
+  packages:
+    - samba
+  customize-hooks:
+    - |-
+      set -eu
+      root=$1
+      install -m 0644 "$IGconf_rapid_package" "$root/tmp/rapid.deb"
+      chroot "$root" apt-get install -y --no-install-recommends /tmp/rapid.deb
+      rm -f "$root/tmp/rapid.deb"
+      # Preserve firmware defaults and initramfs setup, replacing only the
+      # graphics overlay for the tested legacy GPIO framebuffer profile.
+      sed -i 's/^dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-fkms-v3d/' "$root/boot/firmware/config.txt"
+      printf '\n[all]\ndtparam=spi=on\ndtoverlay=piscreen,speed=16000000,rotate=90\n' >> "$root/boot/firmware/config.txt"
+      install -D -m 0644 "$SRCROOT/../display/99-rapid-fbdev.conf" "$root/etc/X11/xorg.conf.d/99-rapid-fbdev.conf"
+      # No cloned identity, shared key, owner password or recordings in images.
+      test ! -e "$root/etc/rapid/runtime.env"
+      test ! -e "$root/var/lib/rapid-setup/setup.db"
+      test -f "$root/usr/lib/systemd/system/rapid-firstboot.service"
+      chroot "$root" systemctl mask ssh.service ssh.socket
+      chroot "$root" systemctl disable smbd nmbd
+      chroot "$root" systemctl enable rapid-firstboot rapid rapid-display rapid-log-status rapid-setup

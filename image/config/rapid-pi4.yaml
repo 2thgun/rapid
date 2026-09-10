@@ -1,0 +1,16 @@
+device:
+  layer: rpi4
+  hostname: rapid
+  user1: rapid
+  user1uid: 1000
+  user1sudo: none
+  user1groups: video,input,render,spi,gpio
+
+image:
+  layer: image-rpios
+  name: rapid-pi4-piscreen-preview
+  boot_part_size: 512M
+  root_part_size: 4G
+
+layer:
+  app: rapid-system
