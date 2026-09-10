@@ -72,8 +72,6 @@ int main(int argc, char **argv) {
       setenv("RAPID_ARCHIVE_HOST", "127.0.0.1", 1);
       setenv("RAPID_ARCHIVE_PORT", std::to_string(port + 1).c_str(), 1);
       setenv("RAPID_ASSETS_DIRECTORY", argv[2], 1);
-      setenv("RAPID_NETWORK_CONTROL_DIRECTORY",
-             (root / "network-control").c_str(), 1);
       setenv("RAPID_ARCHIVE_OWNER_PASSWORD_HASH", hash, 1);
       setenv("RAPID_ARCHIVE_INGEST_TOKEN_HASH", hash, 1);
       int fd = ::open((root / "archive.log").c_str(), O_WRONLY | O_CREAT, 0600);
@@ -101,6 +99,8 @@ int main(int argc, char **argv) {
       setenv("RAPID_APP_HOST", "127.0.0.1", 1);
       setenv("RAPID_APP_PORT", std::to_string(port).c_str(), 1);
       setenv("RAPID_COMPANION_PORT", std::to_string(udp).c_str(), 1);
+      setenv("RAPID_NETWORK_CONTROL_DIRECTORY",
+             (root / "network-control").c_str(), 1);
       setenv("RAPID_ASSETS_DIRECTORY", argv[2], 1);
       setenv("RAPID_DATABASE_PATH", (root / "rapid.db").c_str(), 1);
       setenv("RAPID_TELEMETRY_DIRECTORY", (root / "telemetry").c_str(), 1);
@@ -135,12 +135,13 @@ int main(int argc, char **argv) {
                     "{\"mode\":\"invalid\"}")
                     .result_int() == 400,
             "network setting rejects unknown modes");
-    require(request(port, http::verb::post, "/api/v1/network/mode",
-                    "{\"mode\":\"ap\"}")
-                    .result_int() == 202 &&
-                Json::parse(read_file(root / "network-control" / "request"))["mode"] ==
-                    "ap",
-            "network setting queues AP mode");
+    for (const auto *mode : {"home", "ap", "off"}) {
+      const auto response = request(port, http::verb::post,
+          "/api/v1/network/mode", Json{{"mode", mode}}.dump());
+      require(response.result_int() == 202, "network mode request accepted");
+      require(Json::parse(read_file(root / "network-control" / "request"))["mode"] ==
+                  mode, "network mode queued in isolated test directory");
+    }
     atomic_file(root / "network-control" / "state", "{\"mode\":\"ap\"}");
     auto network_status = request(port, http::verb::get, "/api/v1/network/mode");
     require(network_status.result_int() == 200 &&
