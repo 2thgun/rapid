@@ -20,3 +20,4 @@ companion/.selftest*/
 !.env.example
 .staging/
 .backup/
+.local/

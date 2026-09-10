@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Moved guides and sanitized development logs to the GitHub wiki, pinned as the
+  source repository's `wiki/` submodule. Added a clone-ready handoff and updated
+  demo packaging to export offline guides from that documentation checkpoint.
+
 - Restored the complete Qt dashboard data layout, fixed graph rendering and
   missing-channel/connection-loss gaps, and enlarged navigation and Wi-Fi controls.
 - Added isolated Qt regression checks and enabled Qt builds in CI.
@@ -44,7 +48,7 @@ last completed checks, not a guarantee of current device state.
 - Implemented C++ archive authentication, resumable uploads and crash-safe commit.
 - Added native recorder, archive and network tests. The native production cutover
   and subsequent authenticated v4 deployment are complete; live simulator and
-  MoTeC acceptance remain pending. See `docs/STATUS.md` for verification revisions.
+  MoTeC acceptance remain pending. See `https://github.com/2thgun/rapid/wiki/Validation-Status` for verification revisions.
 - Added local compatibility handling for v3 senders without session IDs/timestamps,
   session reset on waiting/disconnect, ABS mapping and protected live-state fields.
   Automated native checks cover these compatibility paths.
@@ -79,4 +83,4 @@ last completed checks, not a guarantee of current device state.
 - Expanded native log tests passed locally with optimization and `NDEBUG`.
   These additional tests have not been copied to the Pi; runtime code is unchanged.
 - Hosted CI and live four-simulator acceptance remain pending. Overall boot still
-  takes about 25 seconds. See [status](docs/STATUS.md) for remaining limitations.
+  takes about 25 seconds. See [status](https://github.com/2thgun/rapid/wiki/Validation-Status) for remaining limitations.

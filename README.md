@@ -26,7 +26,7 @@ raPId is a Raspberry Pi racing dashboard, Windows telemetry companion, and MoTeC
 
 ## Build
 
-On Linux, install the dependencies in [operations](docs/OPERATIONS.md), then run
+On Linux, install the dependencies in [operations](https://github.com/2thgun/rapid/wiki/Operations), then run
 from the repository root:
 
 ```sh
@@ -35,14 +35,25 @@ cmake --build build/cpp
 ctest --test-dir build/cpp --output-on-failure
 ```
 
-See the [Windows companion guide](companion/README.md) for Windows builds and setup.
+See the [Windows companion guide](https://github.com/2thgun/rapid/wiki/Windows-Companion) for Windows builds and setup.
 
 ## Documentation
 
-- [Original Assetto Corsa / Content Manager demo guide](docs/AC1_DEMO_GUIDE.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Installation and operations](docs/OPERATIONS.md)
-- [Testing](docs/TESTING.md)
-- [Qt touchscreen display migration](docs/QT_DISPLAY.md)
-- [Telemetry v4 setup and protocol](docs/TELEMETRY_V4.md)
+- [Original Assetto Corsa / Content Manager demo guide](https://github.com/2thgun/rapid/wiki/AC1-Demo-Guide)
+- [Architecture](https://github.com/2thgun/rapid/wiki/Architecture)
+- [Installation and operations](https://github.com/2thgun/rapid/wiki/Operations)
+- [Testing](https://github.com/2thgun/rapid/wiki/Testing)
+- [Qt touchscreen display migration](https://github.com/2thgun/rapid/wiki/Qt-Display)
+- [Telemetry v4 setup and protocol](https://github.com/2thgun/rapid/wiki/Telemetry-v4)
 - [Changelog](CHANGELOG.md)
+
+The [wiki](https://github.com/2thgun/rapid/wiki) contains the full guides and
+[development log](https://github.com/2thgun/rapid/wiki/Development-Log).
+Clone source and its pinned documentation together:
+
+```sh
+git clone --recurse-submodules https://github.com/2thgun/rapid.git
+```
+
+For an existing checkout, run `git submodule update --init --recursive`.
+See [HANDOFF.md](HANDOFF.md) to resume development.

@@ -1,12 +1,17 @@
 # Contributing to raPId
 
-Use a focused branch and pull request. Do not commit credentials, recordings,
-generated binaries, screenshots, caches, or Pi-specific configuration.
+Read HANDOFF.md and initialize documentation with
+`git submodule update --init --recursive`.
 
-Run the relevant tests and report both automated and hardware validation. Changes
-to deployment, recording, transport, or the Windows installer must include a
-rollback note.
+Use a focused branch and pull request. Run relevant tests and report automated
+and hardware validation separately. Runtime work belongs in C++.
 
-New application runtime work belongs in `cpp/`. Check the current deployment in
-`docs/STATUS.md`; a native source implementation does not establish deployment.
-Switch `rapid.service` only after native tests, a rollback backup and device checks.
+Guides and development logs live in the
+[wiki](https://github.com/2thgun/rapid/wiki). Follow its
+[documentation workflow](https://github.com/2thgun/rapid/wiki/Documentation-Workflow):
+publish wiki changes first, then commit the updated submodule pointer and handoff.
+
+Keep temporary outputs under ignored .local/sessions/. Never commit credentials,
+paired keys, recordings, generated binaries or private raw logs to source or wiki.
+Preserve rollback copies outside tracked source before deployment. Check the
+recorder is idle and verify device state rather than trusting old log entries.

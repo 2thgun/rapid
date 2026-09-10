@@ -23,14 +23,27 @@ if ($keyText -notmatch '\A[0-9a-fA-F]{64}\z') {
 
 $bundle = [IO.Path]::GetFullPath($Destination).TrimEnd('\', '/')
 $repository = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\', '/')
-$guide = Join-Path $repository 'docs\AC1_DEMO_GUIDE.md'
+$wiki = Join-Path $repository 'wiki'
+$guides = [ordered]@{
+    'AC1-Demo-Guide' = 'AC1_DEMO_GUIDE.md'
+    'Architecture' = 'ARCHITECTURE.md'
+    'Operations' = 'OPERATIONS.md'
+    'Portable-Setup' = 'PORTABLE_SETUP.md'
+    'Qt-Display' = 'QT_DISPLAY.md'
+    'Validation-Status' = 'STATUS.md'
+    'Telemetry-v4' = 'TELEMETRY_V4.md'
+    'Testing' = 'TESTING.md'
+    'Windows-Companion' = 'WINDOWS_COMPANION.md'
+}
 foreach ($required in @('START-RAPID.cmd', 'start-rapid-daemon.vbs', 'install-demo.cmd')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $required) -PathType Leaf)) {
         throw "Package launcher is missing: $required"
     }
 }
-if (-not (Test-Path -LiteralPath $guide -PathType Leaf)) {
-    throw 'docs/AC1_DEMO_GUIDE.md must be present before packaging the demo.'
+foreach ($page in $guides.Keys) {
+    if (-not (Test-Path -LiteralPath (Join-Path $wiki ($page + '.md')) -PathType Leaf)) {
+        throw 'Wiki guides are missing. Run git submodule update --init --recursive before packaging.'
+    }
 }
 $comparison = [StringComparison]::OrdinalIgnoreCase
 function Test-InDirectory([string]$Candidate, [string]$Directory) {
@@ -87,9 +100,14 @@ $configuration = @(
     'no_forward=false'
 )
 [IO.File]::WriteAllLines((Join-Path $bundle 'daemon.conf'), $configuration, $encoding)
-Copy-Item -LiteralPath $guide -Destination $bundle
-foreach ($reference in @('TELEMETRY_V4.md', 'OPERATIONS.md')) {
-    Copy-Item -LiteralPath (Join-Path $repository ('docs\' + $reference)) -Destination $bundle
+foreach ($page in $guides.Keys) {
+    $content = [IO.File]::ReadAllText((Join-Path $wiki ($page + '.md')))
+    foreach ($linkedPage in $guides.Keys) {
+        $content = $content.Replace(
+            'https://github.com/2thgun/rapid/wiki/' + $linkedPage,
+            $guides[$linkedPage])
+    }
+    [IO.File]::WriteAllText((Join-Path $bundle $guides[$page]), $content, $encoding)
 }
 $instructions = @(
     'raPId paired Assetto Corsa demo companion'
