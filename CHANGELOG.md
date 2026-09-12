@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Added opt-in browser owner enrollment to the loopback setup service using a
+  private activation token, bounded attempts and permanent owner-claim protection.
+  Automatic AP bootstrap and physical token display are still pending.
+
 - Fixed Wi-Fi AP/Off requests reporting success after NetworkManager errors;
   added regression checks for failure reporting and Home-to-AP recovery.
 

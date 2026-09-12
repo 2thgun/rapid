@@ -15,6 +15,18 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <h1>raPId setup</h1>
 <p>Manage your device.</p>
 <p id="message" role="status" aria-live="polite"></p>
+<section id="enrollment" hidden>
+<h2>Create the owner account</h2>
+<form id="enrollment-form">
+<label for="activation-token">Device activation token</label>
+<input id="activation-token" type="password" autocomplete="off" required minlength="64" maxlength="64" pattern="[0-9a-f]{64}">
+<label for="new-password">New owner password (at least 12 characters)</label>
+<input id="new-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+<label for="confirm-password">Confirm password</label>
+<input id="confirm-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+<button id="create-owner" type="submit">Create owner account</button>
+</form>
+</section>
 <section id="login" hidden>
 <h2>Owner sign-in</h2>
 <form id="login-form">
@@ -56,9 +68,36 @@ async function api(path, method='GET', body) {
 }
 function showLogin() {
   csrf = '';
+  document.getElementById('enrollment').hidden = true;
   document.getElementById('profile').hidden = true;
   document.getElementById('login').hidden = false;
 }
+document.getElementById('enrollment-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const token = document.getElementById('activation-token');
+  const password = document.getElementById('new-password');
+  const confirmation = document.getElementById('confirm-password');
+  const button = document.getElementById('create-owner');
+  if (password.value !== confirmation.value) {
+    message.textContent = 'The passwords do not match.';
+    return;
+  }
+  button.disabled = true;
+  message.textContent = '';
+  try {
+    await api('/api/v1/auth/enroll', 'POST', {token: token.value, password: password.value});
+    token.value = '';
+    showLogin();
+    message.textContent = 'Owner account created. Sign in to continue setup.';
+  } catch (error) {
+    if (error.status === 409) showLogin();
+    message.textContent = error.message;
+  } finally {
+    password.value = '';
+    confirmation.value = '';
+    button.disabled = false;
+  }
+});
 async function showProfile() {
   const data = await api('/api/v1/settings');
   revision = data.revision;
@@ -112,7 +151,11 @@ document.getElementById('sign-out').addEventListener('click', async () => {
   try {
     const status = await api('/api/v1/setup');
     if (!status.owner_configured) {
-      message.textContent = 'Setup needs to be activated on this device.';
+      if (status.capabilities.browser_owner_enrollment) {
+        document.getElementById('enrollment').hidden = false;
+      } else {
+        message.textContent = 'Setup needs to be activated on this device.';
+      }
       return;
     }
     try {

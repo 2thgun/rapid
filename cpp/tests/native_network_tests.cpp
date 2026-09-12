@@ -260,11 +260,10 @@ int main(int argc, char **argv) {
             hash_file(fs::path(state["last_bundle_path"].get<std::string>()) /
                       "full-session.ld"),
         "uploaded LD digest matches recorder");
-    {
-      SetupStore owner(root / "owner");
-      SetupAuth auth(owner, port + 2);
-      require(auth.enroll("network-test-owner-password"), "isolated owner enrolled");
-    }
+    const auto activation_token = unique_id() + unique_id();
+    const auto token_file = root / "enrollment-token";
+    atomic_file(token_file, activation_token + "\n");
+    fs::permissions(token_file, fs::perms::owner_read | fs::perms::owner_write);
     Process management{fork()};
     if (management.pid == 0) {
       int fd = ::open((root / "setup.log").c_str(), O_WRONLY | O_CREAT, 0600);
@@ -272,7 +271,8 @@ int main(int argc, char **argv) {
       dup2(fd, STDERR_FILENO);
       ::close(fd);
       execl(argv[4], argv[4], "--state-directory", (root / "owner").c_str(),
-            "--assets", argv[2], "--port", std::to_string(port + 2).c_str(), nullptr);
+            "--assets", argv[2], "--port", std::to_string(port + 2).c_str(),
+            "--enrollment-token-file", token_file.c_str(), nullptr);
       _exit(127);
     }
     bool management_ready = false;
@@ -291,6 +291,11 @@ int main(int argc, char **argv) {
             !page["Content-Security-Policy"].empty(), "setup page served with security policy");
     require(request(port + 2, http::verb::get, "/api/v1/settings").result_int() == 401,
             "HTTP settings require authentication");
+    const auto claimed = request(port + 2, http::verb::post, "/api/v1/auth/enroll",
+        Json{{"token", activation_token}, {"password", "network-test-owner-password"}}.dump(),
+        {{"Origin", "http://127.0.0.1:" + std::to_string(port + 2)}});
+    require(claimed.result_int() == 201 && Json::parse(claimed.body())["setup_complete"] == false,
+            "HTTP browser enrollment consumes private file token without claiming setup completion");
     const auto login = request(port + 2, http::verb::post, "/api/v1/auth/login",
         Json{{"password", "network-test-owner-password"}}.dump(),
         {{"Origin", "http://127.0.0.1:" + std::to_string(port + 2)}});

@@ -25,6 +25,42 @@ std::string cookie(const Response &response) {
 int main() {
   try {
     TemporaryDirectory root;
+    {
+      SetupStore fresh(root.path / "browser-enrollment");
+      double enrollment_time = 0;
+      const auto token = unique_id() + unique_id();
+      SetupAuth disabled(fresh, 8002);
+      const auto enroll_request = request("/api/v1/auth/enroll", "POST",
+          {{"token", token}, {"password", "browser-owner-password"}});
+      require(disabled.handle(enroll_request).status == 403, "browser enrollment is opt-in");
+      SetupAuth browser(fresh, 8002, [&] { return enrollment_time; }, token);
+      auto status = browser.handle(request("/api/v1/setup"));
+      require(Json::parse(status.body)["capabilities"]["browser_owner_enrollment"] == true &&
+              status.body.find(token) == std::string::npos, "enrollment capability never exposes token");
+      auto unsafe = enroll_request;
+      unsafe.headers["origin"] = "https://attacker.example";
+      require(browser.handle(unsafe).status == 403, "cross-origin enrollment rejected");
+      auto wrong = request("/api/v1/auth/enroll", "POST",
+          {{"token", std::string(64, '0')}, {"password", "browser-owner-password"}});
+      for (int i = 0; i < 5; ++i)
+        require(browser.handle(wrong).status == 403, "wrong activation token rejected");
+      require(browser.handle(enroll_request).status == 429, "enrollment guesses rate limited");
+      enrollment_time = 61;
+      auto weak = request("/api/v1/auth/enroll", "POST", {{"token", token}, {"password", "short"}});
+      require(browser.handle(weak).status == 400 && fresh.owner_hash().empty(),
+              "invalid password does not consume enrollment");
+      require(browser.handle(enroll_request).status == 201, "browser claims owner with activation token");
+      require(browser.handle(enroll_request).status == 409, "token cannot replace owner");
+      SetupAuth restarted(fresh, 8002, monotonic, token);
+      require(restarted.handle(enroll_request).status == 409 &&
+          Json::parse(restarted.handle(request("/api/v1/setup")).body)
+              ["capabilities"]["browser_owner_enrollment"] == false,
+          "restarting with old token cannot reopen enrollment");
+      require(restarted.handle(request("/api/v1/auth/login", "POST",
+          {{"password", "browser-owner-password"}})).status == 200,
+          "browser owner can sign in after restart");
+      require(fresh.snapshot()["setup_complete"] == false, "enrollment is not complete provisioning");
+    }
     // Construct an actual schema-1 database, then migrate without losing identity.
     const auto directory = root.path / "state";
     fs::create_directory(directory);

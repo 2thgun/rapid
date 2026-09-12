@@ -1,5 +1,14 @@
 # Current handoff
 
+Active onboarding slice: opt-in browser owner enrollment using a private
+activation token file. AP provisioning, physical token display and packaged
+activation remain pending; the setup service still binds only to loopback.
+See wiki/Provisioning.md for the API/security boundary and Development-Log
+for verification. No production deployment is part of this slice.
+The final isolated Pi Release build passed all nine CTests, including real
+HTTP token-file enrollment/login/settings. Browser script syntax and graph
+regressions passed locally; hosted CI remains to be checked after push.
+
 Latest source correction: Wi-Fi AP/Off failures no longer report success.
 Mocked shell regression checks passed, including rejection of the original bug;
 the test is now part of CTest. This correction is not deployed. Check hosted CI

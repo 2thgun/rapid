@@ -11,10 +11,12 @@ class SetupAuth {
   std::deque<double> attempts_;
   std::string origin_;
   std::string authority_;
+  std::string enrollment_token_;
   void expire(double time);
 
 public:
-  SetupAuth(SetupStore &store, int port, std::function<double()> clock = monotonic);
+  SetupAuth(SetupStore &store, int port, std::function<double()> clock = monotonic,
+            std::string enrollment_token = {});
   // Local enrollment only until physical/AP bootstrap authorization is built.
   bool enroll(const std::string &password);
   Response handle(const Request &request);

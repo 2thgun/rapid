@@ -34,10 +34,16 @@ std::string cookie_token(const Request &request) {
 }
 } // namespace
 
-SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock)
+SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
+                     std::string enrollment_token)
     : store_(store), clock_(std::move(clock)),
       origin_("http://127.0.0.1:" + std::to_string(port)),
-      authority_("127.0.0.1:" + std::to_string(port)) {}
+      authority_("127.0.0.1:" + std::to_string(port)),
+      enrollment_token_(std::move(enrollment_token)) {
+  if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
+      enrollment_token_.find_first_not_of("0123456789abcdef") != std::string::npos))
+    throw std::invalid_argument("enrollment token must contain 64 lowercase hexadecimal characters");
+}
 
 bool SetupAuth::enroll(const std::string &password) {
   if (password.size() < 12 || password.size() > 256 || password.find('\0') != std::string::npos)
@@ -88,7 +94,33 @@ Response SetupAuth::handle(const Request &request) {
     // This loopback management service can save desired profile values. The
     // runtime endpoint uses the same public status builder but remains read-only.
     status["capabilities"]["settings_write"] = true;
+    status["capabilities"]["browser_owner_enrollment"] =
+        !enrollment_token_.empty() && store_.owner_hash().empty();
     return reply(200, status);
+  }
+  if (path == "/api/v1/auth/enroll" && request.method == "POST") {
+    if (!store_.owner_hash().empty())
+      return reply(409, {{"detail", "owner already configured; sign in"}});
+    if (enrollment_token_.empty())
+      return reply(403, {{"detail", "browser enrollment is not activated"}});
+    if (attempts_.size() >= 5)
+      return {429, "{\"detail\":\"try again shortly\"}", "application/json", {{"Retry-After", "60"}}};
+    attempts_.push_back(time);
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || body.size() != 2 || !body.contains("token") ||
+        !body["token"].is_string() || !body.contains("password") || !body["password"].is_string())
+      return reply(400, {{"detail", "activation token and password required"}});
+    if (!equal(body["token"].get<std::string>(), enrollment_token_))
+      return reply(403, {{"detail", "invalid activation token"}});
+    try {
+      if (!enroll(body["password"].get<std::string>()))
+        return reply(409, {{"detail", "owner already configured; sign in"}});
+    } catch (const std::invalid_argument &error) {
+      return reply(400, {{"detail", error.what()}});
+    }
+    OPENSSL_cleanse(enrollment_token_.data(), enrollment_token_.size());
+    enrollment_token_.clear();
+    return reply(201, {{"owner_configured", true}, {"setup_complete", false}});
   }
   if (path == "/api/v1/auth/login" && request.method == "POST") {
     if (attempts_.size() >= 5)
