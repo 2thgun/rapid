@@ -33,8 +33,10 @@ Run validation on a Linux ARM64 builder:
 bash image/prepare.sh /path/to/rpi-image-gen /path/to/rapid_arm64.deb /path/to/output
 ```
 
-After first-boot provisioning has been packaged, use `--build` with the same
-inputs. Image assembly requires the dependencies documented by upstream
+After the complete first-boot flow and release marker have been packaged, use
+`--build` with the same builder and package inputs but a new empty output
+directory. Validation leaves files behind, so its output directory cannot be
+reused. Image assembly requires the dependencies documented by upstream
 `rpi-image-gen`; it must run in a disposable build workspace and must never use
 the development Pi's data partition as an input.
 

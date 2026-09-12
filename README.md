@@ -2,6 +2,11 @@
 
 raPId is a Raspberry Pi racing dashboard, Windows telemetry companion, and MoTeC compatible .ld data recorder.
 
+Engineering preview: the prepared development kit works with existing private
+configuration. A fresh-card, terminal-free setup flow is still under development;
+no release image is available. See [Get started](https://github.com/2thgun/rapid/wiki/Get-Started)
+and the [release checklist](https://github.com/2thgun/rapid/wiki/Release-Acceptance).
+
 ## Features
 
 - 480×320 Raspberry Pi touch dashboard with Drive, Timing, Vehicle, Tyres and live Graphs pages.
@@ -23,6 +28,8 @@ raPId is a Raspberry Pi racing dashboard, Windows telemetry companion, and MoTeC
 | `rapid-qt-display` | Native Qt touchscreen with five pages and Home/AP/Off control |
 | `rapid-log-status` | Native C++ journal activity monitor |
 | `rapid-archive` | Native C++ archive ingest service |
+| `rapid-setup-server` | Loopback owner enrollment/login and saved desired settings |
+| `rapid-firstboot` | Initializes device state; AP onboarding remains incomplete |
 
 ## Build
 
@@ -30,7 +37,7 @@ On Linux, install the dependencies in [operations](https://github.com/2thgun/rap
 from the repository root:
 
 ```sh
-cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug -DRAPID_BUILD_LOG_STATUS=ON
+cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON
 cmake --build build/cpp
 ctest --test-dir build/cpp --output-on-failure
 ```
