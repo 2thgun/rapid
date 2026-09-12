@@ -305,7 +305,7 @@ async function tick() {
     setMetric('lap-position', state.lap_position == null ? null : `${Math.round((state.lap_position > 1 ? state.lap_position / 100 : state.lap_position) * 100)}%`);
     setMetric('recording-state', state.recording ? 'REC' : 'IDLE'); setMetric('sample-count', state.recorded_samples);
     setMetric('fuel', state.fuel == null ? null : `${state.fuel.toFixed(1)} L`); setMetric('tc', state.tc); setMetric('abs', state.abs_activity == null ? null : `${Math.round(state.abs_activity * 100)}%`); setMetric('limiter', state.pit_limiter == null ? null : state.pit_limiter ? 'ON' : 'OFF');
-    setMetric('wheel-front', pair(state.wheel_speed_fl, state.wheel_speed_fr, ' km/h')); setMetric('wheel-rear', pair(state.wheel_speed_rl, state.wheel_speed_rr, ' km/h'));
+    setMetric('wheel-front', pair(state.wheel_speed_fl, state.wheel_speed_fr, ' rad/s')); setMetric('wheel-rear', pair(state.wheel_speed_rl, state.wheel_speed_rr, ' rad/s'));
     setMetric('damage-front', state.damage_front == null ? null : `${Math.round(state.damage_front * 100)}%`); setMetric('damage-rear', state.damage_rear == null ? null : `${Math.round(state.damage_rear * 100)}%`);
     const tyre = corner => state[`core_temp_${corner}`] == null || state[`pressure_${corner}`] == null ? null : `${Math.round(state[`core_temp_${corner}`])} C ${state[`pressure_${corner}`].toFixed(1)}`;
     setMetric('tyre-fl', tyre('fl')); setMetric('tyre-fr', tyre('fr')); setMetric('tyre-rl', tyre('rl')); setMetric('tyre-rr', tyre('rr'));

@@ -145,7 +145,7 @@ Window {
                 entries: [["FUEL",root.numeric("fuel",1," L")],["TC",root.text("tc")],["ABS",root.percent("abs_activity")],["LIMITER",root.raw("pit_limiter") == null ? "—" : root.raw("pit_limiter") ? "ON" : "OFF"]]
             }
             MetricCard { width: 152; height: body.height; columns: 1; title: "WHEEL SPEED"
-                entries: [["FL / FR",root.pair("wheel_speed_fl","wheel_speed_fr"," km/h")],["RL / RR",root.pair("wheel_speed_rl","wheel_speed_rr"," km/h")]]
+                entries: [["FL / FR",root.pair("wheel_speed_fl","wheel_speed_fr"," rad/s")],["RL / RR",root.pair("wheel_speed_rl","wheel_speed_rr"," rad/s")]]
             }
             MetricCard { width: 152; height: body.height; columns: 1; title: "DAMAGE"
                 entries: [["FRONT",root.percent("damage_front")],["REAR",root.percent("damage_rear")]]

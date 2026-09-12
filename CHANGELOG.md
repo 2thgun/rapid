@@ -5,6 +5,9 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Corrected the browser and Qt wheel-speed labels to `rad/s`; telemetry and
+  MoTeC recordings already used angular speed rather than vehicle speed.
+
 - Moved guides and sanitized development logs to the GitHub wiki, pinned as the
   source repository's `wiki/` submodule. Added a clone-ready handoff and updated
   demo packaging to export offline guides from that documentation checkpoint.

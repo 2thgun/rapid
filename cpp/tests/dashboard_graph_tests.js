@@ -1,6 +1,17 @@
 // Run with Node in CI, or supply dashboardSource when embedding in a browser.
-const source = typeof dashboardSource === 'string' ? dashboardSource :
-  require('fs').readFileSync(require('path').join(__dirname, '../assets/dashboard.html'), 'utf8');
+const embedded = typeof dashboardSource === 'string';
+const fs = embedded ? null : require('fs');
+const path = embedded ? null : require('path');
+const source = embedded ? dashboardSource :
+  fs.readFileSync(path.join(__dirname, '../assets/dashboard.html'), 'utf8');
+const qmlSource = embedded ? null : fs.readFileSync(path.join(__dirname, '../display/Main.qml'), 'utf8');
+const wheelPair = /pair\(state\.wheel_speed_fl, state\.wheel_speed_fr, '([^']+)'\)/.exec(source);
+if (!wheelPair || wheelPair[1] !== ' rad/s' ||
+    source.includes("wheel_speed_fl, state.wheel_speed_fr, ' km/h'") ||
+    (!embedded && (!qmlSource.includes('root.pair("wheel_speed_fl","wheel_speed_fr"," rad/s")') ||
+                   qmlSource.includes('root.pair("wheel_speed_fl","wheel_speed_fr"," km/h")')))) {
+  throw new Error('Wheel angular-speed displays must use rad/s');
+}
 const sampleFunction = source.match(/function addGraphSample\(state\) \{[\s\S]*?\n\}/);
 if (!sampleFunction) throw new Error('Dashboard graph function missing');
 const run = new Function(`
