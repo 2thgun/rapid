@@ -1,5 +1,10 @@
 # Current handoff
 
+Latest source correction: Wi-Fi AP/Off failures no longer report success.
+Mocked shell regression checks passed, including rejection of the original bug;
+the test is now part of CTest. This correction is not deployed. Check hosted CI
+for the latest source commit before deployment.
+
 Active work is the flash/setup/pairing flow documented in
 `wiki/Provisioning.md`. The C++ setup service persists device identity, owner
 login and desired hostname/orientation. The package now includes the Home/AP/Off

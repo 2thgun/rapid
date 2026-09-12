@@ -5,6 +5,9 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Fixed Wi-Fi AP/Off requests reporting success after NetworkManager errors;
+  added regression checks for failure reporting and Home-to-AP recovery.
+
 - Added the packaged Home/AP/Off network worker with Home startup and automatic
   AP recovery when the saved Home connection cannot be established.
 - Added authenticated setup preference persistence and a first-boot state

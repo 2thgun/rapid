@@ -21,23 +21,25 @@ home_connection() {
 write_state() {
   mode=$1
   recovered_from=${2:-}
-  temporary=$(mktemp "$runtime/.state.XXXXXX")
+  temporary=$(mktemp "$runtime/.state.XXXXXX") || return 1
   if [ -n "$recovered_from" ]; then
     printf '{"mode":"%s","recovered_from":"%s","updated_at":"%s"}\n' \
-      "$mode" "$recovered_from" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$temporary"
+      "$mode" "$recovered_from" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$temporary" || return 1
   else
     printf '{"mode":"%s","updated_at":"%s"}\n' \
-      "$mode" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$temporary"
+      "$mode" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$temporary" || return 1
   fi
-  chmod 0640 "$temporary"
+  chmod 0640 "$temporary" || return 1
   mv -f "$temporary" "$state"
 }
 
 activate() {
   target=$1
   wait_seconds=$2
-  [ -n "$target" ]
-  nmcli radio wifi on
+  # apply_mode runs in a conditional, where shell errexit is disabled.
+  # Propagate each failure explicitly before publishing a successful mode.
+  [ -n "$target" ] || return 1
+  nmcli radio wifi on || return 1
   nmcli -w "$wait_seconds" connection up "$target" ifname wlan0
 }
 
@@ -45,7 +47,7 @@ apply_mode() {
   mode=$1
   case "$mode" in
     ap)
-      activate "$ap_connection" 15
+      activate "$ap_connection" 15 || return 1
       write_state ap
       ;;
     home)
@@ -62,7 +64,7 @@ apply_mode() {
       fi
       ;;
     off)
-      nmcli radio wifi off
+      nmcli radio wifi off || return 1
       write_state off
       ;;
     *) return 1 ;;

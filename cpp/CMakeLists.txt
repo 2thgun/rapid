@@ -80,6 +80,9 @@ target_link_libraries(rapid-archive PRIVATE rapid_native ${ARGON2_LIBRARY})
 target_compile_options(rapid-archive PRIVATE -Wall -Wextra -Wpedantic)
 
 if(BUILD_TESTING)
+  add_test(NAME rapid-network-mode-tests COMMAND sh
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/network_mode_tests.sh
+    ${CMAKE_CURRENT_SOURCE_DIR}/../systemd/rapid-network-mode)
   add_executable(rapid-setup-auth-tests tests/setup_auth_tests.cpp)
   target_link_libraries(rapid-setup-auth-tests PRIVATE rapid_setup_auth)
   add_test(NAME rapid-setup-auth-tests COMMAND rapid-setup-auth-tests)
