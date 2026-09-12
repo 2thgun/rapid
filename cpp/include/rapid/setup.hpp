@@ -22,4 +22,9 @@ public:
 // Only public setup information; never serialize the persistent document into
 // an HTTP response. Future credentials must stay behind this allowlist.
 Json setup_status(const Json &snapshot);
+
+// A deliberately public, secret-free hand-off from the boot initializer to a
+// future physical/AP-authorized setup surface.  It describes what is missing;
+// it never asserts that networking or settings have been applied.
+Json provisioning_status(const Json &snapshot, bool owner_configured);
 } // namespace rapid::native

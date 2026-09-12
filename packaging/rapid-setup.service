@@ -1,6 +1,7 @@
 [Unit]
 Description=raPId local management preview
-After=local-fs.target
+Requires=rapid-firstboot.service
+After=rapid-firstboot.service
 
 [Service]
 Type=simple

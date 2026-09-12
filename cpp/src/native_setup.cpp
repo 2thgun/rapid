@@ -151,4 +151,19 @@ Json setup_status(const Json &snapshot) {
           {"capabilities", {{"settings_write", false}, {"network_setup", false},
                             {"display_calibration", false}, {"pairing", false}}}};
 }
+
+Json provisioning_status(const Json &snapshot, bool owner_configured) {
+  const bool complete = snapshot.at("setup_complete").get<bool>();
+  const char *state = !owner_configured ? "owner_enrollment_required"
+                      : !complete ? "settings_application_required"
+                                  : "complete";
+  return {{"schema_version", snapshot.at("schema_version")},
+          {"device_id", snapshot.at("device_id")},
+          {"setup_complete", complete},
+          {"owner_configured", owner_configured},
+          {"state", state},
+          {"capabilities", {{"secure_ap_bootstrap", false},
+                             {"browser_owner_enrollment", false},
+                             {"settings_application", false}}}};
+}
 } // namespace rapid::native

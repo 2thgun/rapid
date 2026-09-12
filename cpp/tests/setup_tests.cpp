@@ -76,6 +76,15 @@ int main() {
       require(public_state.dump().find("do-not-expose") == std::string::npos &&
                   !public_state.contains("settings") && public_state["capabilities"]["pairing"] == false,
               "public status explicitly excludes private configuration and unavailable features");
+      const auto initial_provisioning = provisioning_status(initial, false);
+      require(initial_provisioning["state"] == "owner_enrollment_required" &&
+                  initial_provisioning["capabilities"]["secure_ap_bootstrap"] == false &&
+                  initial_provisioning.dump().find("do-not-expose") == std::string::npos,
+              "first-boot status identifies the missing secure bootstrap without leaking settings");
+      const auto owner_provisioning = provisioning_status(state, true);
+      require(owner_provisioning["state"] == "settings_application_required" &&
+                  owner_provisioning["setup_complete"] == false,
+              "owner enrollment alone does not report first boot complete");
     }
     // Abrupt exit in a transaction simulates interrupted configuration writes.
     auto child = fork();
