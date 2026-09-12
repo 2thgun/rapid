@@ -1,0 +1,20 @@
+[Unit]
+Description=raPId Wi-Fi mode controller
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+Group=rapid
+EnvironmentFile=-/etc/rapid-network-mode.conf
+RuntimeDirectory=rapid-network
+RuntimeDirectoryMode=0770
+ExecStart=/usr/lib/rapid/rapid-network-mode
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

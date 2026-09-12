@@ -1945,9 +1945,9 @@ void text(Bytes& mapping, std::size_t offset, std::string_view value, std::size_
 void ace() {
     const auto prefix = L"Local\\raPIdAceSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
                         L"_" + std::to_wstring(GetTickCount64());
-    TestMapping<Bytes> physics(prefix + L"_physics");
-    TestMapping<Bytes> graphics(prefix + L"_graphics");
-    TestMapping<Bytes> info(prefix + L"_static");
+    assetto_self_test::TestMapping<Bytes> physics(prefix + L"_physics");
+    assetto_self_test::TestMapping<Bytes> graphics(prefix + L"_graphics");
+    assetto_self_test::TestMapping<Bytes> info(prefix + L"_static");
     put<std::int32_t>(physics.value(), 0, 41); put<float>(physics.value(), 4, .8f);
     put<float>(physics.value(), 8, .3f); put<std::int32_t>(physics.value(), 16, 4);
     put<std::int32_t>(physics.value(), 20, 7000); put<float>(physics.value(), 28, 201.5f);
@@ -1962,10 +1962,10 @@ void ace() {
     require(bool(adapter) && adapter->live(), "ACE opens and enters driving state");
     Frame frame;
     require(adapter->read(frame), "ACE accepts coherent sample");
-    const auto near = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
-    require(near(frame.value[throttle], .8) && near(frame.value[brake], .3) && frame.value[gear] == 3 &&
-            frame.value[rpm] == 7000 && near(frame.value[speed_kmh], 201.5) &&
-            near(frame.value[wheel_speed_fl], 71) && frame.value[tc] == 3 && frame.value[abs_activity] == 1 &&
+    const auto close_enough = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
+    require(close_enough(frame.value[throttle], .8) && close_enough(frame.value[brake], .3) && frame.value[gear] == 3 &&
+            frame.value[rpm] == 7000 && close_enough(frame.value[speed_kmh], 201.5) &&
+            close_enough(frame.value[wheel_speed_fl], 71) && frame.value[tc] == 3 && frame.value[abs_activity] == 1 &&
             frame.value[lap_number] == 1 && frame.value[current_lap_ms] == 18000 &&
             frame.delta_ms == -123 && frame.completed_lap_ms == 0 && frame.valid_mask ==
             (all_field_bits() & ~field_bit(pit_limiter) & ~field_bit(damage_front) & ~field_bit(damage_rear) &
@@ -1981,7 +1981,7 @@ void ace() {
 void iracing() {
     const auto name = L"Local\\raPIdIracingSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
                       L"_" + std::to_wstring(GetTickCount64());
-    TestMapping<Bytes> mapping(name);
+    assetto_self_test::TestMapping<Bytes> mapping(name);
     auto& data = mapping.value();
     put<std::int32_t>(data, 4, 1); // connected
     put<std::int32_t>(data, 24, 17); put<std::int32_t>(data, 28, 256); // var table
@@ -2007,10 +2007,10 @@ void iracing() {
     require(bool(adapter) && adapter->connected() && adapter->live(), "iRacing opens and enters track state");
     Frame frame;
     require(adapter->read(frame), "iRacing accepts connected sample");
-    const auto near = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
-    require(near(frame.value[throttle], .6) && near(frame.value[brake], .2) && frame.value[gear] == 4 &&
-            near(frame.value[speed_kmh], 180) && near(frame.value[g_x], 1) && near(frame.value[g_y], 2) &&
-            near(frame.value[g_z], -1) && frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
+    const auto close_enough = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
+    require(close_enough(frame.value[throttle], .6) && close_enough(frame.value[brake], .2) && frame.value[gear] == 4 &&
+            close_enough(frame.value[speed_kmh], 180) && close_enough(frame.value[g_x], 1) && close_enough(frame.value[g_y], 2) &&
+            close_enough(frame.value[g_z], -1) && frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
             frame.completed_lap_ms == 91250, "iRacing conversions and lap timing");
     put<std::int32_t>(data, 4, 0);
     require(!adapter->connected() && !adapter->read(frame), "iRacing disconnect rejects samples");

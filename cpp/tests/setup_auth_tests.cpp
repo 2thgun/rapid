@@ -42,8 +42,10 @@ int main() {
             store.snapshot()["schema_version"] == 2, "schema migration preserves device identity and revision");
     double time = 0;
     SetupAuth auth(store, 8002, [&] { return time; });
-    require(Json::parse(auth.handle(request("/api/v1/setup")).body)["owner_configured"] == false,
-            "new device has no default owner");
+    const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
+    require(public_setup["owner_configured"] == false &&
+                public_setup["capabilities"]["settings_write"] == true,
+            "new device has no default owner and advertises saved-profile writes");
     require(auth.handle(request("/api/v1/settings")).status == 401, "settings require owner login");
     bool rejected = false;
     try { auth.enroll("short"); } catch (const std::invalid_argument &) { rejected = true; }

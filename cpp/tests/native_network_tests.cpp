@@ -278,7 +278,9 @@ int main(int argc, char **argv) {
     bool management_ready = false;
     for (int i = 0; i < 100; ++i) {
       try {
-        management_ready = request(port + 2, http::verb::get, "/api/v1/setup").result_int() == 200;
+        const auto setup_response = request(port + 2, http::verb::get, "/api/v1/setup");
+        management_ready = setup_response.result_int() == 200 &&
+            Json::parse(setup_response.body())["capabilities"]["settings_write"] == true;
         if (management_ready) break;
       } catch (...) {}
       std::this_thread::sleep_for(std::chrono::milliseconds(100));

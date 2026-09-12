@@ -4,7 +4,9 @@ This directory defines the reproducible image input for the supported Raspberry
 Pi 4 and PiScreen GPIO display. It is deliberately **not** a released image.
 The profile may be validated before first-boot provisioning is available, but
 `--build` refuses to assemble a filesystem until the application package
-contains `rapid-firstboot.service`.
+contains `rapid-firstboot.service` and the deliberately absent
+`rapid-image-ready-v1` release marker. Add that marker only after the complete
+customer flow below is implemented and reviewed.
 
 That guard prevents a card that requires SSH, a manually created telemetry key,
 or manual Wi-Fi configuration from being presented as a fresh installation.
@@ -38,8 +40,9 @@ the development Pi's data partition as an input.
 
 ## Required package behavior before assembly
 
-The future `rapid-firstboot.service` is the hand-off between the application
-package and this image profile. Before an image can be assembled, it must make a
+`rapid-firstboot.service` now initializes private identity and reports missing
+capabilities. It is a foundation, not proof of readiness. Before the release
+marker can be packaged and an image assembled, first boot must make a
 fresh card safe and usable without a terminal:
 
 - generate device-specific identity and telemetry credentials on the Pi;

@@ -44,8 +44,12 @@ pairing, not a silent reconnect.
    key as authenticated data.
 6. The companion verifies and decrypts the envelope, stores the key with DPAPI,
    writes no plaintext key file, pins the Pi identity/certificate, and starts
-   normal v4 telemetry. The Pi records only a non-secret PC ID, label, key
-   verifier, creation time and last-seen time.
+   normal v4 telemetry. The Pi records the PC ID, label, creation/last-seen
+   times and the distinct telemetry key in service-owned private state. The receiver
+   needs that secret to verify the existing symmetric HMAC-SHA256 packet format;
+   it must never be exposed through setup responses, logs, another customer's
+   backup, or the image. Encryption at rest may protect the state further, but
+   a non-secret verifier cannot authenticate v4 packets.
 
 The numeric code proves that the user is looking at the intended physical Pi;
 the public-key envelope prevents a network intermediary from learning the

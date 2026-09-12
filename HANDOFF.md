@@ -1,24 +1,22 @@
 # Current handoff
 
-Active work: flash/setup/pairing, documented in `wiki/Provisioning.md`.
-First slice adds opt-in C++ device identity/configuration persistence and
-read-only `/api/v1/setup`. A separate loopback C++ setup server adds owner login
-and saves desired hostname/orientation only; it cannot apply device settings;
-CPack assembles a preview Pi application package. See `wiki/Pi-Package.md`.
-The preview package is deployed; first-boot provisioning is not implemented.
-Next: HTTPS/AP bootstrap and the privileged
-service boundary. See wiki log
-for verification; do not describe the full onboarding flow as implemented.
-Current source `7b5e910` passed all eight Pi CTests, ARM64 package inspection and
-extracted-package integration. Hosted Windows/Linux Debug/Release and amd64
-packaging passed (Actions `34473689994`). ARM64 preview is in ignored `dist/`
-and installed on the Pi with key/database preservation in a timestamped `.old`
-backup. Evidence is in `.local/sessions/2026-09-10-setup-auth/` and
-`.local/sessions/2026-09-10-package-deploy/`. The image
-profile validates, but first-boot AP provisioning is still required; no image
-has been written. The build guard was checked and returns exit 2 for missing
-first-boot provisioning. Fresh installation is tracked in GitHub issue #1;
-reboot, touch and live AC1/ACC acceptance remain pending in issue #6.
+Active work is the flash/setup/pairing flow documented in
+`wiki/Provisioning.md`. The C++ setup service persists device identity, owner
+login and desired hostname/orientation. The package now includes the Home/AP/Off
+network worker and defaults to Home with automatic AP recovery. Applying device
+settings, HTTPS/AP bootstrap and pairing UI remain incomplete.
+
+The current source candidate passed the Windows Zig companion self-test,
+browser graph test, all eight Pi CTests, ARM64 package inspection and the image
+guard checks. The candidate package SHA-256 is
+`5100f3412cb410d6402ec963dccb5cfd2664568973a9c63e2bcd46c10925cb26`.
+The image build deliberately remains blocked until the package contains the
+`rapid-image-ready-v1` contract marker; no image was assembled or flashed.
+
+The Pi still runs the older `7b5e910` preview package. This candidate was built
+and tested only in `/home/rapid/.local/issue-fixes-final`; it was not deployed.
+Fresh installation is tracked in issue #1, and reboot, touch and live AC1/ACC
+acceptance remain pending in issue #6.
 
 Runtime/UI checkpoint: `bd92a46` (2026-09-09). The Qt repair is deployed.
 Documentation now lives in the pinned GitHub wiki submodule.
@@ -40,8 +38,8 @@ Then read [Resume work](https://github.com/2thgun/rapid/wiki/Resume-Work) or
 - Eight CTests including the Qt model passed for the deployed package source. Synthetic graph
   traces/gaps and screenshots were verified. Live AC1/CM/MoTeC rehearsal,
   physical finger calibration and a fresh Qt cold boot remain open.
-- Next: demo acceptance; wheel-speed unit audit; complete active v3 transport
-  retirement without changing ACC's distinct broadcast API; reproducible Pi setup.
+- Next: deploy and run the hardware acceptance guide; complete first-boot setup,
+  pairing and recovery; then produce and flash the release image.
 - Device access uses `ssh rapid@rapid`. Inspect current service state before
   deployment. Private credentials, keys and recordings are deliberately outside Git.
 - Development does not depend on the old developer folder. Use ignored

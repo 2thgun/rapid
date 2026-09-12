@@ -34,6 +34,7 @@ mmdebstrap:
       test ! -e "$root/etc/rapid/runtime.env"
       test ! -e "$root/var/lib/rapid-setup/setup.db"
       test -f "$root/usr/lib/systemd/system/rapid-firstboot.service"
+      test -f "$root/usr/share/rapid/rapid-image-ready-v1"
       chroot "$root" systemctl mask ssh.service ssh.socket
       chroot "$root" systemctl disable smbd nmbd
-      chroot "$root" systemctl enable rapid-firstboot rapid rapid-display rapid-log-status rapid-setup
+      chroot "$root" systemctl enable rapid-firstboot rapid rapid-display rapid-log-status rapid-setup rapid-network-mode

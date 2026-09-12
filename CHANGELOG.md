@@ -5,6 +5,16 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Added the packaged Home/AP/Off network worker with Home startup and automatic
+  AP recovery when the saved Home connection cannot be established.
+- Added authenticated setup preference persistence and a first-boot state
+  initializer. Image generation remains gated until the complete customer flow
+  declares the `rapid-image-ready-v1` contract marker.
+- Added native ACE and iRacing adapter fixtures and corrected their Windows test
+  build compatibility.
+- Clarified that v4 HMAC pairing requires private per-PC key material on the Pi;
+  a non-secret verifier alone cannot authenticate symmetric packets.
+
 - Corrected the browser and Qt wheel-speed labels to `rad/s`; telemetry and
   MoTeC recordings already used angular speed rather than vehicle speed.
 

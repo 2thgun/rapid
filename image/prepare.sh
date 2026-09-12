@@ -22,6 +22,14 @@ for path in "$builder" "$package" "$output" "$source_root"; do
     echo 'Build paths must not contain shell expansion characters or newlines.' >&2; exit 1;
   }
 done
+if [[ -e "$output" && ! -d "$output" ]]; then
+  echo 'Output path must be a directory.' >&2
+  exit 1
+fi
+if [[ -d "$output" && -n $(find "$output" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+  echo 'Output directory must be empty.' >&2
+  exit 1
+fi
 mkdir -p "$output/dynamic/layer"
 "$builder/bin/ig" metadata --emit "$builder/registry.defs" > "$output/registry.env"
 "$builder/bin/ig" config "$source_root/config/rapid-pi4.yaml" --write-to "$output/user.env"
@@ -49,16 +57,18 @@ ENV
 sha256sum "$package" > "$output/package.sha256"
 git -C "$builder" rev-parse HEAD > "$output/builder-revision"
 dpkg-deb --contents "$package" > "$output/package-contents"
-if grep -q '/rapid-firstboot.service$' "$output/package-contents"; then
+if grep -q '/rapid-firstboot.service$' "$output/package-contents" &&
+   grep -q '/rapid-image-ready-v1$' "$output/package-contents"; then
   printf 'ready_for_filesystem_build=yes\n' > "$output/build-readiness.env"
 else
-  printf 'ready_for_filesystem_build=no\nblocker=missing_rapid-firstboot.service\n' \
+  printf 'ready_for_filesystem_build=no\nblocker=firstboot_customer_flow_incomplete\n' \
     > "$output/build-readiness.env"
 fi
 echo 'Image configuration and layer dependencies validated.'
 if [[ "$mode" == --build ]]; then
-  if ! grep -q '/rapid-firstboot.service$' "$output/package-contents"; then
-    echo 'Image build unavailable: the package still needs first-boot AP/owner provisioning.' >&2
+  if ! grep -q '/rapid-firstboot.service$' "$output/package-contents" ||
+     ! grep -q '/rapid-image-ready-v1$' "$output/package-contents"; then
+    echo 'Image build unavailable: the package has not declared the complete first-boot customer flow ready.' >&2
     exit 2
   fi
   exec "$builder/rpi-image-gen" build -S "$source_root" -c rapid-pi4.yaml \

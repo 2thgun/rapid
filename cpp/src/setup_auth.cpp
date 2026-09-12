@@ -85,6 +85,9 @@ Response SetupAuth::handle(const Request &request) {
   if (path == "/api/v1/setup" && request.method == "GET") {
     auto status = setup_status(store_.snapshot());
     status["owner_configured"] = !store_.owner_hash().empty();
+    // This loopback management service can save desired profile values. The
+    // runtime endpoint uses the same public status builder but remains read-only.
+    status["capabilities"]["settings_write"] = true;
     return reply(200, status);
   }
   if (path == "/api/v1/auth/login" && request.method == "POST") {
