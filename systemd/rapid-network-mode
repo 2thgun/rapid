@@ -19,33 +19,60 @@ home_connection() {
 }
 
 write_state() {
-  printf '{"mode":"%s","updated_at":"%s"}\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$state"
-  chmod 0640 "$state"
+  mode=$1
+  recovered_from=${2:-}
+  temporary=$(mktemp "$runtime/.state.XXXXXX")
+  if [ -n "$recovered_from" ]; then
+    printf '{"mode":"%s","recovered_from":"%s","updated_at":"%s"}\n' \
+      "$mode" "$recovered_from" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$temporary"
+  else
+    printf '{"mode":"%s","updated_at":"%s"}\n' \
+      "$mode" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$temporary"
+  fi
+  chmod 0640 "$temporary"
+  mv -f "$temporary" "$state"
+}
+
+activate() {
+  target=$1
+  wait_seconds=$2
+  [ -n "$target" ]
+  nmcli radio wifi on
+  nmcli -w "$wait_seconds" connection up "$target" ifname wlan0
 }
 
 apply_mode() {
   mode=$1
   case "$mode" in
-    ap) target=$ap_connection ;;
-    home) target=$(home_connection) ;;
+    ap)
+      activate "$ap_connection" 15
+      write_state ap
+      ;;
+    home)
+      # Do not strand a keyboardless device after a bad password, missing
+      # network, or failed NetworkManager activation. The dashboard starts
+      # independently, while this bounded attempt restores the setup AP.
+      if activate "$(home_connection)" 30; then
+        write_state home
+      elif activate "$ap_connection" 15; then
+        write_state ap home
+      else
+        write_state unknown home
+        return 1
+      fi
+      ;;
     off)
       nmcli radio wifi off
       write_state off
-      return
       ;;
     *) return 1 ;;
   esac
-  [ -n "$target" ]
-  nmcli radio wifi on
-  nmcli connection up "$target" ifname wlan0
-  write_state "$mode"
 }
 
-# A boot always resumes the intended Home connection. AP remains the fallback
-# configured through NetworkManager priorities; Off is an explicit live choice.
+# A boot resumes the intended Home connection for at most 30 seconds, then
+# starts the setup AP. Off is an explicit live choice and is reset by reboot.
 if ! apply_mode home; then
-  active=$(nmcli -g GENERAL.CONNECTION device show wlan0 2>/dev/null || true)
-  [ "$active" = "$ap_connection" ] && write_state ap || write_state unknown
+  write_state unknown home
 fi
 
 while :; do
