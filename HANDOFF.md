@@ -6,9 +6,9 @@ login and desired hostname/orientation. The package now includes the Home/AP/Off
 network worker and defaults to Home with automatic AP recovery. Applying device
 settings, HTTPS/AP bootstrap and pairing UI remain incomplete.
 
-The current source candidate passed the Windows Zig companion self-test,
-browser graph test, all eight Pi CTests, ARM64 package inspection and the image
-guard checks. The candidate package SHA-256 is
+Current source `194e8a1` passed hosted Windows/Linux verification, the local
+Windows Zig companion self-test, browser graph test, all eight Pi CTests, ARM64
+package inspection and the image guard checks. The candidate package SHA-256 is
 `5100f3412cb410d6402ec963dccb5cfd2664568973a9c63e2bcd46c10925cb26`.
 The image build deliberately remains blocked until the package contains the
 `rapid-image-ready-v1` contract marker; no image was assembled or flashed.
@@ -21,9 +21,7 @@ acceptance remain pending in issue #6.
 Runtime/UI checkpoint: `bd92a46` (2026-09-09). The Qt repair is deployed.
 Documentation now lives in the pinned GitHub wiki submodule.
 
-CI follow-up: `973dbee` fixes network-test isolation after repeated hosted
-Linux failures. Check the latest GitHub Actions conclusion before describing a
-revision as verified; local/Pi test results alone are insufficient.
+Hosted verification for `194e8a1` passed in Actions run `34714482247`.
 
 ```sh
 git submodule update --init --recursive
