@@ -48,9 +48,15 @@ ENV
   }
 sha256sum "$package" > "$output/package.sha256"
 git -C "$builder" rev-parse HEAD > "$output/builder-revision"
+dpkg-deb --contents "$package" > "$output/package-contents"
+if grep -q '/rapid-firstboot.service$' "$output/package-contents"; then
+  printf 'ready_for_filesystem_build=yes\n' > "$output/build-readiness.env"
+else
+  printf 'ready_for_filesystem_build=no\nblocker=missing_rapid-firstboot.service\n' \
+    > "$output/build-readiness.env"
+fi
 echo 'Image configuration and layer dependencies validated.'
 if [[ "$mode" == --build ]]; then
-  dpkg-deb --contents "$package" > "$output/package-contents"
   if ! grep -q '/rapid-firstboot.service$' "$output/package-contents"; then
     echo 'Image build unavailable: the package still needs first-boot AP/owner provisioning.' >&2
     exit 2

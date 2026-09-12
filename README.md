@@ -42,6 +42,7 @@ See the [Windows companion guide](https://github.com/2thgun/rapid/wiki/Windows-C
 - [Original Assetto Corsa / Content Manager demo guide](https://github.com/2thgun/rapid/wiki/AC1-Demo-Guide)
 - [Architecture](https://github.com/2thgun/rapid/wiki/Architecture)
 - [Installation and operations](https://github.com/2thgun/rapid/wiki/Operations)
+- [Fresh Pi installation status](image/README.md)
 - [Testing](https://github.com/2thgun/rapid/wiki/Testing)
 - [Qt touchscreen display migration](https://github.com/2thgun/rapid/wiki/Qt-Display)
 - [Telemetry v4 setup and protocol](https://github.com/2thgun/rapid/wiki/Telemetry-v4)
