@@ -119,6 +119,27 @@ Response SetupAuth::handle(const Request &request) {
     return reply(200, {{"revision", state.at("revision")}, {"settings", state.at("settings")},
                        {"applied", false}});
   }
+  if (path == "/api/v1/settings" && request.method == "POST") {
+    if (!equal(header(request, "x-csrf-token"), session->second.csrf))
+      return reply(403, {{"detail", "invalid CSRF token"}});
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || body.size() != 2 || !body.contains("revision") ||
+        !body["revision"].is_number_integer() || !body.contains("settings"))
+      return reply(400, {{"detail", "revision and settings required"}});
+    try {
+      if (!store_.update(body["revision"].get<std::int64_t>(), body["settings"])) {
+        const auto state = store_.snapshot();
+        return reply(409, {{"detail", "settings changed; reload and try again"},
+                           {"revision", state.at("revision")}, {"settings", state.at("settings")},
+                           {"applied", false}});
+      }
+    } catch (const std::exception &error) {
+      return reply(400, {{"detail", error.what()}});
+    }
+    const auto state = store_.snapshot();
+    return reply(200, {{"revision", state.at("revision")}, {"settings", state.at("settings")},
+                       {"applied", false}});
+  }
   if (path == "/api/v1/auth/logout" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});

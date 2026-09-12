@@ -80,6 +80,20 @@ int main() {
     auto response = Json::parse(auth.handle(settings).body);
     require(response["applied"] == false && response.dump().find("argon2") == std::string::npos,
             "settings are explicitly unapplied and omit owner credentials");
+    auto save = request("/api/v1/settings", "POST", {{"revision", 7}, {"settings",
+        {{"hostname", "rapid-renamed"}, {"rotation", 180}, {"boot_network", "home_then_ap"}}}});
+    save.headers["cookie"] = session_cookie;
+    require(auth.handle(save).status == 403, "settings write requires CSRF token");
+    save.headers["x-csrf-token"] = credentials["csrf_token"].get<std::string>();
+    require(auth.handle(save).status == 200, "owner can save validated desired settings");
+    response = Json::parse(auth.handle(settings).body);
+    require(response["revision"] == 8 && response["settings"]["hostname"] == "rapid-renamed" &&
+                response["settings"]["rotation"] == 180 && response["applied"] == false,
+            "settings save is persistent but does not claim application");
+    require(auth.handle(save).status == 409, "stale settings revision cannot overwrite newer values");
+    auto malformed_save = save;
+    malformed_save.body = Json{{"revision", 8}, {"settings", {{"hostname", "invalid"}}}}.dump();
+    require(auth.handle(malformed_save).status == 400, "settings write validates exact settings shape");
     auto logout = request("/api/v1/auth/logout", "POST", Json::object());
     logout.headers["cookie"] = session_cookie;
     require(auth.handle(logout).status == 403, "logout requires CSRF token");

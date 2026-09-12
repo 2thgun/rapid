@@ -2,7 +2,8 @@
 
 Active work: flash/setup/pairing, documented in `wiki/Provisioning.md`.
 First slice adds opt-in C++ device identity/configuration persistence and
-read-only `/api/v1/setup`. A separate loopback C++ setup server adds owner login;
+read-only `/api/v1/setup`. A separate loopback C++ setup server adds owner login
+and saves desired hostname/orientation only; it cannot apply device settings;
 CPack assembles a preview Pi application package. See `wiki/Pi-Package.md`.
 The preview package is deployed; first-boot provisioning is not implemented.
 Next: HTTPS/AP bootstrap and the privileged

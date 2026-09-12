@@ -294,9 +294,18 @@ int main(int argc, char **argv) {
         {{"Origin", "http://127.0.0.1:" + std::to_string(port + 2)}});
     require(login.result_int() == 200, "HTTP owner login succeeds");
     const auto cookie = std::string(login[http::field::set_cookie]);
+    const auto session_cookie = cookie.substr(0, cookie.find(';'));
     require(request(port + 2, http::verb::get, "/api/v1/settings", "",
-                    {{"Cookie", cookie.substr(0, cookie.find(';'))}}).result_int() == 200,
+                    {{"Cookie", session_cookie}}).result_int() == 200,
             "HTTP session cookie authorizes settings read");
+    const auto csrf = Json::parse(login.body())["csrf_token"].get<std::string>();
+    const auto saved = request(port + 2, http::verb::post, "/api/v1/settings",
+        Json{{"revision", 1}, {"settings", {{"hostname", "rapid-network-test"},
+             {"rotation", 180}, {"boot_network", "home_then_ap"}}}}.dump(),
+        {{"Cookie", session_cookie}, {"Origin", "http://127.0.0.1:" + std::to_string(port + 2)},
+         {"X-CSRF-Token", csrf}});
+    require(saved.result_int() == 200 && Json::parse(saved.body())["applied"] == false,
+            "HTTP owner can save desired settings without applying them");
     std::cout << "Native network: HTTP, UDP, WebSocket history, disconnect "
                  "finalization and authenticated recorder-to-archive upload "
                  "passed\nEvidence: "
