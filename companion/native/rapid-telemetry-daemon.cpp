@@ -708,11 +708,14 @@ private:
 
 class AceAdapter final : public Adapter {
 public:
-    static std::unique_ptr<AceAdapter> open() {
+    static std::unique_ptr<AceAdapter> open(
+        const wchar_t* physics_name = L"Local\\acevo_pmf_physics",
+        const wchar_t* graphics_name = L"Local\\acevo_pmf_graphics",
+        const wchar_t* static_name = L"Local\\acevo_pmf_static") {
         auto adapter = std::unique_ptr<AceAdapter>(new AceAdapter);
-        if (!adapter->physics_.open(L"Local\\acevo_pmf_physics") ||
-            !adapter->graphics_.open(L"Local\\acevo_pmf_graphics") ||
-            !adapter->static_.open(L"Local\\acevo_pmf_static")) return nullptr;
+        if (!adapter->physics_.open(physics_name) ||
+            !adapter->graphics_.open(graphics_name) ||
+            !adapter->static_.open(static_name)) return nullptr;
         adapter->metadata.simulator = "ACE";
         adapter->metadata.vehicle = "Assetto Corsa EVO car";
         adapter->metadata.venue = "Assetto Corsa EVO";
@@ -778,9 +781,10 @@ class IracingAdapter final : public Adapter {
 public:
     struct Variable { int type; int offset; int count; };
 
-    static std::unique_ptr<IracingAdapter> open() {
+    static std::unique_ptr<IracingAdapter> open(
+        const wchar_t* mapping_name = L"Local\\IRSDKMemMapFileName") {
         auto adapter = std::unique_ptr<IracingAdapter>(new IracingAdapter);
-        if (!adapter->mapping_.open(L"Local\\IRSDKMemMapFileName")) return nullptr;
+        if (!adapter->mapping_.open(mapping_name)) return nullptr;
         if ((adapter->mapping_.read<std::int32_t>(4) & 1) == 0) return nullptr;
         const int count = adapter->mapping_.read<std::int32_t>(24);
         const int offset = adapter->mapping_.read<std::int32_t>(28);
@@ -1917,8 +1921,106 @@ std::pair<Frame, Metadata> run() {
 }
 } // namespace assetto_self_test
 
+// The ACE and iRacing fixtures deliberately model only the bytes consumed by
+// their adapters. They verify our reader and conversions on Windows without
+// pretending that a synthetic mapping proves a live simulator integration.
+namespace additional_adapter_self_test {
+struct Bytes { std::array<std::byte, 8192> bytes{}; };
+
+void require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(std::string("Adapter self-test: ") + message);
+}
+
+template <typename T>
+void put(Bytes& mapping, std::size_t offset, T value) {
+    require(offset + sizeof(T) <= mapping.bytes.size(), "fixture write out of bounds");
+    std::memcpy(mapping.bytes.data() + offset, &value, sizeof(T));
+}
+
+void text(Bytes& mapping, std::size_t offset, std::string_view value, std::size_t capacity) {
+    require(value.size() < capacity && offset + capacity <= mapping.bytes.size(), "fixture text out of bounds");
+    std::memcpy(mapping.bytes.data() + offset, value.data(), value.size());
+}
+
+void ace() {
+    const auto prefix = L"Local\\raPIdAceSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
+                        L"_" + std::to_wstring(GetTickCount64());
+    TestMapping<Bytes> physics(prefix + L"_physics");
+    TestMapping<Bytes> graphics(prefix + L"_graphics");
+    TestMapping<Bytes> info(prefix + L"_static");
+    put<std::int32_t>(physics.value(), 0, 41); put<float>(physics.value(), 4, .8f);
+    put<float>(physics.value(), 8, .3f); put<std::int32_t>(physics.value(), 16, 4);
+    put<std::int32_t>(physics.value(), 20, 7000); put<float>(physics.value(), 28, 201.5f);
+    put<float>(physics.value(), 44, .4f); put<float>(physics.value(), 48, 1.1f);
+    put<float>(physics.value(), 52, -.2f); put<float>(physics.value(), 104, 71.f);
+    put<std::int32_t>(physics.value(), 672, 3); put<std::int32_t>(physics.value(), 676, 1);
+    put<std::int32_t>(graphics.value(), 4, 2); put<std::int32_t>(graphics.value(), 184, -123);
+    put<std::int32_t>(graphics.value(), 188, 18000); put<float>(graphics.value(), 1244, .25f);
+    put<std::int32_t>(info.value(), 32, 3);
+    auto adapter = AceAdapter::open((prefix + L"_physics").c_str(), (prefix + L"_graphics").c_str(),
+                                    (prefix + L"_static").c_str());
+    require(bool(adapter) && adapter->live(), "ACE opens and enters driving state");
+    Frame frame;
+    require(adapter->read(frame), "ACE accepts coherent sample");
+    const auto near = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
+    require(near(frame.value[throttle], .8) && near(frame.value[brake], .3) && frame.value[gear] == 3 &&
+            frame.value[rpm] == 7000 && near(frame.value[speed_kmh], 201.5) &&
+            near(frame.value[wheel_speed_fl], 71) && frame.value[tc] == 3 && frame.value[abs_activity] == 1 &&
+            frame.value[lap_number] == 1 && frame.value[current_lap_ms] == 18000 &&
+            frame.delta_ms == -123 && frame.completed_lap_ms == 0 && frame.valid_mask ==
+            (all_field_bits() & ~field_bit(pit_limiter) & ~field_bit(damage_front) & ~field_bit(damage_rear) &
+             ~field_bit(damage_left) & ~field_bit(damage_right) & ~field_bit(damage_center)),
+            "ACE fields, unavailable-channel mask and initial lap");
+    put<std::int32_t>(physics.value(), 0, 42); put<std::int32_t>(graphics.value(), 188, 1000);
+    require(adapter->read(frame) && frame.value[lap_number] == 2 && frame.completed_lap_ms == 18000,
+            "ACE lap rollover");
+    put<std::int32_t>(graphics.value(), 4, 1);
+    require(!adapter->live(), "ACE menu state is not driving");
+}
+
+void iracing() {
+    const auto name = L"Local\\raPIdIracingSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
+                      L"_" + std::to_wstring(GetTickCount64());
+    TestMapping<Bytes> mapping(name);
+    auto& data = mapping.value();
+    put<std::int32_t>(data, 4, 1); // connected
+    put<std::int32_t>(data, 24, 17); put<std::int32_t>(data, 28, 256); // var table
+    put<std::int32_t>(data, 32, 1); put<std::int32_t>(data, 48, 7); put<std::int32_t>(data, 52, 4096);
+    const auto variable = [&](int index, int type, int offset, std::string_view name_text) {
+        const std::size_t at = 256 + static_cast<std::size_t>(index) * 144;
+        put<std::int32_t>(data, at, type); put<std::int32_t>(data, at + 4, offset); put<std::int32_t>(data, at + 8, 1);
+        text(data, at + 16, name_text, 32);
+    };
+    variable(0, 1, 0, "IsOnTrack"); variable(1, 4, 4, "Throttle"); variable(2, 4, 8, "Brake");
+    variable(3, 4, 12, "FuelLevel"); variable(4, 2, 16, "Gear"); variable(5, 4, 20, "RPM");
+    variable(6, 4, 24, "SteeringWheelAngle"); variable(7, 4, 28, "Speed"); variable(8, 4, 32, "VelocityX");
+    variable(9, 4, 36, "VelocityY"); variable(10, 4, 40, "VelocityZ"); variable(11, 4, 44, "LatAccel");
+    variable(12, 4, 48, "VertAccel"); variable(13, 4, 52, "LongAccel"); variable(14, 2, 56, "Lap");
+    variable(15, 4, 60, "LapCurrentLapTime"); variable(16, 4, 64, "LapLastLapTime");
+    put<unsigned char>(data, 4096, 1); put<float>(data, 4100, .6f); put<float>(data, 4104, .2f);
+    put<float>(data, 4108, 42.f); put<std::int32_t>(data, 4112, 4); put<float>(data, 4116, 6500.f);
+    put<float>(data, 4120, -.5f); put<float>(data, 4124, 50.f); put<float>(data, 4128, 1.f);
+    put<float>(data, 4132, 2.f); put<float>(data, 4136, 3.f); put<float>(data, 4140, 9.80665f);
+    put<float>(data, 4144, 19.6133f); put<float>(data, 4148, -9.80665f); put<std::int32_t>(data, 4152, 7);
+    put<float>(data, 4156, 12.5f); put<float>(data, 4160, 91.25f);
+    auto adapter = IracingAdapter::open(name.c_str());
+    require(bool(adapter) && adapter->connected() && adapter->live(), "iRacing opens and enters track state");
+    Frame frame;
+    require(adapter->read(frame), "iRacing accepts connected sample");
+    const auto near = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
+    require(near(frame.value[throttle], .6) && near(frame.value[brake], .2) && frame.value[gear] == 4 &&
+            near(frame.value[speed_kmh], 180) && near(frame.value[g_x], 1) && near(frame.value[g_y], 2) &&
+            near(frame.value[g_z], -1) && frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
+            frame.completed_lap_ms == 91250, "iRacing conversions and lap timing");
+    put<std::int32_t>(data, 4, 0);
+    require(!adapter->connected() && !adapter->read(frame), "iRacing disconnect rejects samples");
+}
+} // namespace additional_adapter_self_test
+
 bool run_self_test(const fs::path& directory, int sample_rate) {
     const auto [ac_frame, ac_metadata] = assetto_self_test::run();
+    additional_adapter_self_test::ace();
+    additional_adapter_self_test::iracing();
     // Public test-only key; fixtures exercise the actual Windows BCrypt encoder.
     V4Encoder encoder(std::vector<std::uint8_t>(32, 0x11));
     Metadata wire_metadata;
