@@ -13,3 +13,7 @@ For offline documentation, initialize the source repository's `wiki/` submodule.
 Before building a paired demo bundle, run
 `git submodule update --init --recursive` from the repository root. The packager
 exports the pinned wiki guides beside the executable. Pairing keys remain private.
+
+The planned replacement for private pre-paired bundles is specified in
+[the companion pairing contract](PAIRING-CONTRACT.md). It is a development
+contract, not an implemented customer flow.
