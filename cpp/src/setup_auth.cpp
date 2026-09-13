@@ -9,6 +9,10 @@ std::string header(const Request &request, const std::string &key) {
   return found == request.headers.end() ? "" : found->second;
 }
 Response reply(int code, const Json &body) { return {code, body.dump()}; }
+bool queued(const fs::path &path) {
+  std::error_code error;
+  return !path.empty() && fs::is_regular_file(path, error);
+}
 bool equal(const std::string &left, const std::string &right) {
   return left.size() == right.size() && CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
 }
@@ -180,7 +184,7 @@ Response SetupAuth::handle(const Request &request) {
     const auto state = store_.snapshot();
     Json response{{"revision", state.at("revision")}, {"settings", state.at("settings")},
                   {"applied", false},
-                  {"apply_queued", !apply_request_file_.empty()}};
+                  {"apply_queued", queued(apply_request_file_)}};
     try {
       if (!apply_result_file_.empty()) {
         const auto result = Json::parse(read_file(apply_result_file_));
@@ -262,7 +266,7 @@ Response SetupAuth::handle(const Request &request) {
       }
     }
     return reply(200, {{"revision", state.at("revision")}, {"settings", state.at("settings")},
-                       {"applied", false}, {"apply_queued", !apply_request_file_.empty()}});
+                       {"applied", false}, {"apply_queued", queued(apply_request_file_)}});
   }
   if (path == "/api/v1/auth/logout" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))

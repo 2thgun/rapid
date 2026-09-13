@@ -8,7 +8,7 @@ failure. The ARM64 native Release suite and package verifier pass; hardware
 acceptance remains pending. Rotation,
 calibration and the full pairing flow are still unapplied. Do not deploy this
 work yet.
-The latest wiki verification record is `e2cc4ed`.
+The latest wiki verification record is `53bc170`.
 The documentation audit checkpoint `b5a199e` passed hosted verification in
 run `34716780316`. All open issues remain open against their full acceptance
 criteria; #7 has its source fix but still requires real AC1/ACC evidence.
@@ -81,6 +81,10 @@ Paired-key mode also rejects v3 packets when its active key set is empty, so
 revoking the last remembered PC cannot reopen unauthenticated telemetry. That
 fix is documented in wiki commit `5e6b471` and verified by the 16.92-second
 ARM64 ten-test gate.
+Settings status now reports an apply queue only while its protected request
+file exists; the empty, queued and consumed states are covered by the setup
+authentication regression. The ARM64 ten-test gate passed in 16.97 seconds;
+this does not apply orientation or calibration.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks

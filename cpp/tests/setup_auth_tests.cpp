@@ -148,7 +148,8 @@ int main() {
     settings.headers["cookie"] = session_cookie;
     require(auth.handle(settings).status == 200, "authenticated owner can read desired settings");
     auto response = Json::parse(auth.handle(settings).body);
-    require(response["applied"] == false && response.dump().find("argon2") == std::string::npos,
+    require(response["applied"] == false && response["apply_queued"] == false &&
+                response.dump().find("argon2") == std::string::npos,
             "settings are explicitly unapplied and omit owner credentials");
     auto save = request("/api/v1/settings", "POST", {{"revision", 7}, {"settings",
         {{"hostname", "rapid-renamed"}, {"rotation", 180}, {"boot_network", "home_then_ap"}}}});
@@ -164,6 +165,10 @@ int main() {
                 response["settings"]["rotation"] == 180 && response["applied"] == false &&
                 response["apply_queued"] == true,
             "settings save is persistent but does not claim application");
+    fs::remove(apply_directory / "request.json");
+    response = Json::parse(auth.handle(settings).body);
+    require(response["apply_queued"] == false,
+            "settings status clears its queued flag after the applicator consumes the request");
     atomic_file(apply_result, Json{{"revision", 8}, {"hostname_applied", true},
                                   {"pending", Json::array({"rotation", "wifi"})}}.dump());
     response = Json::parse(auth.handle(settings).body);
