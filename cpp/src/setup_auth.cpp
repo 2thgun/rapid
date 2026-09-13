@@ -196,6 +196,20 @@ Response SetupAuth::handle(const Request &request) {
     } catch (const std::exception &) {}
     return reply(200, response);
   }
+  if (path == "/api/v1/peers" && request.method == "GET")
+    return reply(200, {{"peers", store_.peers()}});
+  if (path == "/api/v1/peers/revoke" && request.method == "POST") {
+    if (!equal(header(request, "x-csrf-token"), session->second.csrf))
+      return reply(403, {{"detail", "invalid CSRF token"}});
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || body.size() != 1 || !body.contains("id") || !body["id"].is_string())
+      return reply(400, {{"detail", "paired PC id required"}});
+    const auto id = body["id"].get<std::string>();
+    if (id.size() != 32 || id.find_first_not_of("0123456789abcdef") != std::string::npos)
+      return reply(400, {{"detail", "invalid paired PC id"}});
+    if (!store_.revoke_peer(id)) return reply(404, {{"detail", "paired PC not found"}});
+    return reply(200, {{"revoked", id}});
+  }
   if (path == "/api/v1/wifi" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});

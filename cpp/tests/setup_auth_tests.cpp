@@ -172,6 +172,19 @@ int main() {
     response = Json::parse(auth.handle(settings).body);
     require(!response.contains("application"),
             "stale root application result is hidden from the authenticated owner");
+    require(store.remember_peer(std::string(32, 'a'), "Driver PC", std::string(64, 'b'), 1.0),
+            "paired PC fixture is stored privately");
+    auto peers = request("/api/v1/peers");
+    peers.headers["cookie"] = session_cookie;
+    response = Json::parse(auth.handle(peers).body);
+    require(response["peers"].size() == 1 && response.dump().find(std::string(64, 'b')) == std::string::npos,
+            "owner peer list excludes telemetry key material");
+    auto revoke = request("/api/v1/peers/revoke", "POST", {{"id", std::string(32, 'a')}});
+    revoke.headers["cookie"] = session_cookie;
+    require(auth.handle(revoke).status == 403, "peer revoke requires CSRF token");
+    revoke.headers["x-csrf-token"] = credentials["csrf_token"].get<std::string>();
+    require(auth.handle(revoke).status == 200 && store.peers().empty(),
+            "owner can revoke one paired PC");
     require(auth.handle(save).status == 409, "stale settings revision cannot overwrite newer values");
     auto malformed_save = save;
     malformed_save.body = Json{{"revision", 8}, {"settings", {{"hostname", "invalid"}}}}.dump();
