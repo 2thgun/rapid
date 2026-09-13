@@ -68,12 +68,16 @@ SetupStore::SetupStore(const fs::path &directory)
                                      {"rotation", 0}, {"boot_network", "home_then_ap"}}}};
       store_.exec("INSERT INTO setup_state VALUES(1,1,?)", {document.dump()});
       store_.exec("PRAGMA user_version=1");
-    } else if (version != 1 && version != 2) {
+    } else if (version != 1 && version != 2 && version != 3) {
       throw std::runtime_error("unsupported setup schema; use a compatible application version");
     }
     if (version < 2) {
       store_.exec("CREATE TABLE setup_owner (id INTEGER PRIMARY KEY CHECK(id=1), password_hash TEXT NOT NULL)");
       store_.exec("PRAGMA user_version=2");
+    }
+    if (version < 3) {
+      store_.exec("CREATE TABLE setup_peer (id TEXT PRIMARY KEY, label TEXT NOT NULL, key TEXT NOT NULL, created_at REAL NOT NULL, last_seen REAL NOT NULL)");
+      store_.exec("PRAGMA user_version=3");
     }
     // Reject corrupt state, preserving it for recovery instead of reinitializing
     // identity or treating the device as unowned.
@@ -97,7 +101,7 @@ Json SetupStore::snapshot_unlocked() {
   auto document = Json::parse(row[0].at("document").get<std::string>());
   if (!document.is_object())
     throw std::runtime_error("invalid setup document");
-  document["schema_version"] = 2;
+  document["schema_version"] = 3;
   document["revision"] = row[0].at("revision");
   return document;
 }
@@ -119,6 +123,31 @@ bool SetupStore::claim_owner(const std::string &password_hash) {
   std::lock_guard lock(mutex_);
   store_.exec("INSERT OR IGNORE INTO setup_owner VALUES(1,?)", {password_hash});
   return store_.query("SELECT changes() AS count")[0]["count"] == 1;
+}
+
+bool SetupStore::remember_peer(const std::string &id, const std::string &label,
+                               const std::string &key, double created_at) {
+  if (id.size() != 32 || id.find_first_not_of("0123456789abcdef") != std::string::npos ||
+      label.empty() || label.size() > 64 || label.find_first_of("\r\n\0") != std::string::npos ||
+      key.size() != 64 || key.find_first_not_of("0123456789abcdef") != std::string::npos)
+    throw std::invalid_argument("invalid paired PC record");
+  std::lock_guard lock(mutex_);
+  const auto count = store_.query("SELECT COUNT(*) AS count FROM setup_peer")[0]["count"].get<int>();
+  if (count >= 16) return false;
+  store_.exec("INSERT INTO setup_peer VALUES(?,?,?,?,?)", {id, label, key, created_at, created_at});
+  return true;
+}
+
+bool SetupStore::revoke_peer(const std::string &id) {
+  std::lock_guard lock(mutex_);
+  store_.exec("DELETE FROM setup_peer WHERE id=?", {id});
+  return store_.query("SELECT changes() AS count")[0]["count"] == 1;
+}
+
+Json SetupStore::peers() {
+  std::lock_guard lock(mutex_);
+  // Key material deliberately stays inside the private store.
+  return store_.query("SELECT id,label,created_at,last_seen FROM setup_peer ORDER BY created_at");
 }
 
 bool SetupStore::update(std::int64_t expected_revision, const Json &settings) {

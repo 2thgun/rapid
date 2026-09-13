@@ -178,6 +178,21 @@ int main(int argc, char **argv) {
     {
       SetupStore store(directory), stale_client(directory);
       require(store.snapshot() == initial, "restart preserves identity and state");
+      require(store.remember_peer(std::string(32, 'a'), "Driver laptop", std::string(64, 'b'), 1.0),
+              "first paired PC is persisted");
+      const auto peers = store.peers();
+      require(peers.size() == 1 && peers[0]["label"] == "Driver laptop" &&
+                  !peers[0].contains("key"),
+              "paired-PC listing excludes telemetry key material");
+      require(store.revoke_peer(std::string(32, 'a')) && store.peers().empty(),
+              "individual paired-PC revocation removes its key record");
+      for (int i = 0; i < 16; ++i) {
+        std::string id(32, '0'); id.back() = "0123456789abcdef"[i];
+        require(store.remember_peer(id, "PC" + std::to_string(i), std::string(64, 'c'), 2.0 + i),
+                "paired PC fits within limit");
+      }
+      require(!store.remember_peer(std::string(31, 'd') + "e", "overflow", std::string(64, 'c'), 99.0),
+              "seventeenth paired PC is rejected");
       auto desired = initial["settings"];
       desired["rotation"] = 180;
       desired["hostname"] = "rapid-demo";
@@ -247,7 +262,7 @@ int main(int argc, char **argv) {
       Database database(directory / "setup.db");
       require(database.query("PRAGMA user_version")[0]["user_version"] == 99,
               "future schema not downgraded");
-      database.exec("PRAGMA user_version=2");
+      database.exec("PRAGMA user_version=3");
       database.exec("UPDATE setup_state SET document='{}'");
     }
     rejects([&] { SetupStore store(directory); }, "corrupt document rejected without regeneration");

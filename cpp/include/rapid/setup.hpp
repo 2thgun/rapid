@@ -17,6 +17,12 @@ public:
   bool update(std::int64_t expected_revision, const Json &settings);
   std::string owner_hash();
   bool claim_owner(const std::string &password_hash);
+  // Private pairing records are never returned by setup_status(). The caller
+  // supplies a random 32-byte telemetry key encoded as lowercase hex.
+  bool remember_peer(const std::string &id, const std::string &label,
+                     const std::string &key, double created_at);
+  bool revoke_peer(const std::string &id);
+  Json peers();
 };
 
 // Only public setup information; never serialize the persistent document into

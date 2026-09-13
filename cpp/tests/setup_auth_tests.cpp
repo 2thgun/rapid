@@ -102,7 +102,7 @@ int main() {
     }
     SetupStore store(directory);
     require(store.snapshot()["device_id"] == id && store.snapshot()["revision"] == 7 &&
-            store.snapshot()["schema_version"] == 2, "schema migration preserves device identity and revision");
+            store.snapshot()["schema_version"] == 3, "schema migration preserves device identity and revision");
     double time = 0;
     const auto apply_directory = root.path / "apply";
     fs::create_directory(apply_directory);
