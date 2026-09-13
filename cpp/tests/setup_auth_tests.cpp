@@ -1,4 +1,5 @@
 #include "rapid/setup_auth.hpp"
+#include <cmath>
 #include <iostream>
 
 using namespace rapid::native;
@@ -174,6 +175,16 @@ int main() {
             "stale root application result is hidden from the authenticated owner");
     require(store.remember_peer(std::string(32, 'a'), "Driver PC", std::string(64, 'b'), 1.0),
             "paired PC fixture is stored privately");
+    require(store.remember_peer(std::string(32, 'a'), "Driver PC 2", std::string(64, 'c'), 2.0),
+            "remembering an existing PC refreshes its record");
+    auto refreshed = store.peers();
+    require(refreshed.size() == 1 && refreshed[0]["label"] == "Driver PC 2" &&
+                refreshed[0]["last_seen"] == 2.0,
+            "reconnecting PC updates label and last-seen without duplicating it");
+    bool invalid_time = false;
+    try { store.remember_peer(std::string(32, 'd'), "Bad clock", std::string(64, 'e'), NAN); }
+    catch (const std::invalid_argument &) { invalid_time = true; }
+    require(invalid_time, "non-finite paired PC timestamps are rejected");
     auto peers = request("/api/v1/peers");
     peers.headers["cookie"] = session_cookie;
     response = Json::parse(auth.handle(peers).body);

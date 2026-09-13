@@ -1,4 +1,5 @@
 #include "rapid/setup.hpp"
+#include <cmath>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -129,9 +130,16 @@ bool SetupStore::remember_peer(const std::string &id, const std::string &label,
                                const std::string &key, double created_at) {
   if (id.size() != 32 || id.find_first_not_of("0123456789abcdef") != std::string::npos ||
       label.empty() || label.size() > 64 || label.find_first_of("\r\n\0") != std::string::npos ||
-      key.size() != 64 || key.find_first_not_of("0123456789abcdef") != std::string::npos)
+      key.size() != 64 || key.find_first_not_of("0123456789abcdef") != std::string::npos ||
+      !std::isfinite(created_at))
     throw std::invalid_argument("invalid paired PC record");
   std::lock_guard lock(mutex_);
+  const auto existing = store_.query("SELECT COUNT(*) AS count FROM setup_peer WHERE id=?", {id})[0]["count"].get<int>();
+  if (existing != 0) {
+    store_.exec("UPDATE setup_peer SET label=?, key=?, last_seen=? WHERE id=?",
+                {label, key, created_at, id});
+    return true;
+  }
   const auto count = store_.query("SELECT COUNT(*) AS count FROM setup_peer")[0]["count"].get<int>();
   if (count >= 16) return false;
   store_.exec("INSERT INTO setup_peer VALUES(?,?,?,?,?)", {id, label, key, created_at, created_at});

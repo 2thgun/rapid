@@ -71,6 +71,11 @@ was denied access to `\\rapid\Telemetry` under its `valid users = rapid` Samba
 configuration, so validate the user's Explorer credentials and refresh behavior
 before claiming network-folder acceptance.
 
+Peer-store reconnect recovery is now idempotent: an existing paired-PC identity
+refreshes its label, key and last-seen timestamp without consuming another slot;
+non-finite timestamps are rejected. The verified change is documented in wiki
+commit `7f97025`.
+
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
