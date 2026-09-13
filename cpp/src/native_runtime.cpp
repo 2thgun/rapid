@@ -172,6 +172,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
       if (v4) {
         state_["schema_version"] = 4;
         state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
+        if (m.contains("session_id")) state_["session_id"] = m["session_id"];
         for (const char *key : {"track_name", "car_model", "driver_name", "session_name"})
           if (m.contains(key)) state_[key] = m[key];
       }
@@ -257,11 +258,15 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
       if (daemon != "driving") {
         recorder_.finish();
         last_recording_packet_ = 0;
+        recording_legacy_ = false;
         last_sample_ = 0;
         state_["session_active"] = false;
+        state_["session_id"] = Json();
         session_.clear();
         sequence_ = -1;
       }
+      if (v4 && m.contains("session_id") && m["session_id"].is_string())
+        state_["session_id"] = m["session_id"];
       return true;
     }
     if (identity != session_ && version == 3)
@@ -306,10 +311,12 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     state_["samples_received"] = number(state_, "samples_received") + 1;
     last_sample_ = monotonic();
     last_recording_packet_ = last_sample_;
+    recording_legacy_ = version == 3 && session.empty() && sequence < 0;
     state_["schema_version"] = v4 ? 4 : version;
     if (v4) state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
     state_["last_sequence"] = sequence < 0 ? Json() : Json(sequence);
     state_["last_monotonic_us"] = m.value("monotonic_us", Json());
+    state_["session_id"] = m.value("session_id", Json());
     state_["session_active"] = true;
     state_["session_name"] = m.value("session_name", Json());
     if (version == 3) {
@@ -354,6 +361,12 @@ void Runtime::expire() {
   // A proper non-driving status still finalizes immediately above.  Otherwise
   // retain the durable spool for a bounded interval so the sender can resume.
   if (last_packet_ && timestamp - last_packet_ > 1.5) {
+    if (!recording_legacy_) {
+      recorder_.finish("disconnected");
+      last_recording_packet_ = 0;
+      sequence_ = -1;
+      session_.clear();
+    }
     for (const auto *key :
          {"rpm", "steering_angle", "g_x", "g_y", "g_z", "throttle", "brake",
           "companion_daemon_state", "companion_source_host"})
@@ -371,6 +384,7 @@ void Runtime::expire() {
   if (last_recording_packet_ && timestamp - last_recording_packet_ > 10.0) {
     recorder_.finish("disconnected");
     last_recording_packet_ = 0;
+    recording_legacy_ = false;
     sequence_ = -1;
     session_.clear();
   }
@@ -388,7 +402,13 @@ Json Runtime::snapshot() const {
   result["telemetry_fresh"] = sample_age >= 0 && sample_age <= 1500 &&
       state_.value("companion_connected", false) &&
       string(state_, "companion_daemon_state") == "driving";
-  result.update(recorder_.status());
+  auto recorder_status = recorder_.status();
+  // Recorder status uses a null session ID while idle. Preserve the v4 wire
+  // run ID exposed by a metadata/control packet until the next run replaces it.
+  if (recorder_status["session_id"].is_null() &&
+      result["session_id"].is_string())
+    recorder_status.erase("session_id");
+  result.update(recorder_status);
   result["upload_enabled"] = config_.upload_enabled;
   result["runtime"] = "cpp";
   return result;

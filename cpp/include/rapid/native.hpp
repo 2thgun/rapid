@@ -106,6 +106,7 @@ class Runtime {
   Recorder recorder_;
   std::string source_, session_;
   double last_packet_ = 0, last_sample_ = 0, last_recording_packet_ = 0;
+  bool recording_legacy_ = false;
   std::int64_t sequence_ = -1;
   int timing_lap_ = -1, best_lap_ = 0;
   std::vector<int> splits_;

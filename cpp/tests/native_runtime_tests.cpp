@@ -78,16 +78,35 @@ int main(int argc, char **argv) {
       require(!live.receive(sample(1).dump(), "127.0.0.1"), "replayed sample rejected");
       live.expire();
       require(live.snapshot()["companion_connected"] == false &&
-                  live.snapshot()["recording"] == true,
-              "brief disconnect leaves the recorder available for resumption");
+                  live.snapshot()["recording"] == false,
+              "replayed sample cannot extend connection lifetime");
       require(live.receive(sample(2).dump(), "127.0.0.1"), "reconnect after expiry");
-      require(live.snapshot()["recorded_samples"] == 3 &&
-                  live.snapshot()["last_bundle_path"].is_null(),
-              "resumed telemetry continues the existing recording");
       heartbeat["state"] = "ready";
       require(live.receive(heartbeat.dump(), "127.0.0.1"), "ready heartbeat");
       require(live.snapshot()["telemetry_fresh"] == false &&
                   live.snapshot()["telemetry_age_ms"].is_null(), "ready clears sample freshness");
+    }
+    {
+      Config dropout = c;
+      dropout.database = root / "dropout.db";
+      dropout.telemetry = root / "dropout-telemetry";
+      dropout.queue = root / "dropout-queue.db";
+      Runtime live(dropout);
+      auto first = sample();
+      first.erase("session_id");
+      first.erase("sequence");
+      first.erase("monotonic_us");
+      require(live.receive(first.dump(), "127.0.0.1"), "legacy dropout sample");
+      std::this_thread::sleep_for(std::chrono::milliseconds(1600));
+      live.expire();
+      require(live.snapshot()["companion_connected"] == false &&
+                  live.snapshot()["recording"] == true,
+              "brief legacy disconnect leaves the recorder available for resumption");
+      require(live.receive(first.dump(), "127.0.0.1"), "legacy telemetry resumes");
+      require(live.snapshot()["recorded_samples"] == 2 &&
+                  live.snapshot()["last_bundle_path"].is_null(),
+              "resumed legacy telemetry continues the existing recording");
+      live.finish();
     }
     require(!runtime.receive("[]", "127.0.0.1"), "non-object rejected");
     auto bad = sample();

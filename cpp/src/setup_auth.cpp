@@ -42,12 +42,12 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
     : store_(store), clock_(std::move(clock)),
       origin_("http://" + host + ":" + std::to_string(port)),
       authority_(std::move(host) + ":" + std::to_string(port)),
+      enrollment_token_(std::move(enrollment_token)),
       apply_request_file_(std::move(apply_request_file)),
       apply_result_file_(std::move(apply_result_file)),
       wifi_request_file_(std::move(wifi_request_file)),
       wifi_result_file_(std::move(wifi_result_file)),
-      firstboot_status_file_(std::move(firstboot_status_file)),
-      enrollment_token_(std::move(enrollment_token)) {
+      firstboot_status_file_(std::move(firstboot_status_file)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
       enrollment_token_.find_first_not_of("0123456789abcdef") != std::string::npos))
     throw std::invalid_argument("enrollment token must contain 64 lowercase hexadecimal characters");
@@ -179,7 +179,8 @@ Response SetupAuth::handle(const Request &request) {
   if (path == "/api/v1/settings" && request.method == "GET") {
     const auto state = store_.snapshot();
     Json response{{"revision", state.at("revision")}, {"settings", state.at("settings")},
-                  {"applied", false}};
+                  {"applied", false},
+                  {"apply_queued", !apply_request_file_.empty()}};
     try {
       if (!apply_result_file_.empty()) {
         const auto result = Json::parse(read_file(apply_result_file_));
