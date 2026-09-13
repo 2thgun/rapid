@@ -1,6 +1,7 @@
 #include "rapid/pairing.hpp"
 #include <cmath>
 #include <iomanip>
+#include <openssl/crypto.h>
 #include <sstream>
 
 namespace rapid::native {
@@ -16,6 +17,16 @@ void valid_label(const std::string &label) {
     throw std::invalid_argument("invalid paired PC label");
 }
 } // namespace
+
+void PairingWindow::clear_pending() {
+  if (!pending_) return;
+  for (auto *value : {&pending_->transaction_id, &pending_->nonce,
+                      &pending_->companion_public_key, &pending_->code}) {
+    OPENSSL_cleanse(value->data(), value->size());
+    value->clear();
+  }
+  pending_.reset();
+}
 
 PairingWindow::PairingWindow(std::string device_id,
                              std::string certificate_fingerprint)
@@ -47,11 +58,11 @@ void PairingWindow::open(double now) {
   window_open_ = true;
   window_expires_at_ = now + 120;
   failures_ = 0;
-  pending_.reset();
+  clear_pending();
 }
 
 void PairingWindow::cancel() {
-  pending_.reset();
+  clear_pending();
   window_open_ = false;
   window_expires_at_ = 0;
   failures_ = 0;
@@ -62,10 +73,10 @@ bool PairingWindow::open(double now) const {
       failures_ < 5;
 }
 
-void PairingWindow::fail(double now, bool clear_pending) {
+void PairingWindow::fail(double now, bool erase_pending) {
   ++failures_;
-  if (clear_pending)
-    pending_.reset();
+  if (erase_pending)
+    clear_pending();
   if (failures_ >= 5 || now > window_expires_at_)
     cancel();
 }
@@ -108,6 +119,8 @@ std::optional<PendingPairing> PairingWindow::consume_approved(double now) {
   }
   auto result = std::move(pending_);
   pending_.reset();
+  OPENSSL_cleanse(result->code.data(), result->code.size());
+  result->code.clear();
   return result;
 }
 

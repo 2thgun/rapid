@@ -18,7 +18,8 @@ class PairingWindow {
   int failures_ = 0;
   bool window_open_ = false;
   std::optional<PendingPairing> pending_;
-  void fail(double now, bool clear_pending = true);
+  void clear_pending();
+  void fail(double now, bool erase_pending = true);
 
 public:
   PairingWindow(std::string device_id, std::string certificate_fingerprint);
