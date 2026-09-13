@@ -19,14 +19,13 @@ int main() {
     window.open(10);
     auto pending = window.request("Driver PC", public_key, 11);
     require(window.pending(11)->code == pending.code && !window.approve(pending.transaction_id,
-                "00000000", 11), "only the displayed transaction code approves");
-    require(!window.pending(11), "failed approval clears pending material");
-    for (int i = 0; i < 4; ++i) {
-      auto retry = window.request("Driver PC", public_key, 12 + i);
-      require(!window.approve(retry.transaction_id, "00000000", 12 + i),
+                "00000000", 11) && window.pending(11),
+            "only the displayed transaction code approves");
+    for (int i = 0; i < 4; ++i)
+      require(!window.approve(pending.transaction_id, "00000000", 12 + i),
               "failed approval is bounded");
-    }
     require(!window.open(20), "five failures close physical pairing window");
+    require(!window.pending(20), "five failures erase pending material");
     window.open(30);
     pending = window.request("Driver PC", public_key, 31);
     require(!window.approve(pending.transaction_id, pending.code, 152) && !window.open(152),

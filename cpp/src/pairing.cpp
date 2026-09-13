@@ -62,9 +62,10 @@ bool PairingWindow::open(double now) const {
       failures_ < 5;
 }
 
-void PairingWindow::fail(double now) {
+void PairingWindow::fail(double now, bool clear_pending) {
   ++failures_;
-  pending_.reset();
+  if (clear_pending)
+    pending_.reset();
   if (failures_ >= 5 || now > window_expires_at_)
     cancel();
 }
@@ -93,7 +94,7 @@ bool PairingWindow::approve(const std::string &transaction_id,
                             const std::string &code, double now) {
   if (!pending_ || pending_->approved || !open(now) || now > pending_->expires_at ||
       transaction_id != pending_->transaction_id || code != pending_->code) {
-    fail(now);
+    fail(now, false);
     return false;
   }
   pending_->approved = true;
