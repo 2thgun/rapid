@@ -36,6 +36,8 @@ PairingWindow::PairingWindow(std::string device_id,
     throw std::invalid_argument("invalid pairing device identity");
 }
 
+PairingWindow::~PairingWindow() { cancel(); }
+
 std::string PairingWindow::verification_code(
     const std::string &device_id, const std::string &certificate_fingerprint,
     const std::string &transaction_id, const std::string &nonce,

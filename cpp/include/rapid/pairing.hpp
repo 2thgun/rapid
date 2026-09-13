@@ -23,6 +23,9 @@ class PairingWindow {
 
 public:
   PairingWindow(std::string device_id, std::string certificate_fingerprint);
+  ~PairingWindow();
+  PairingWindow(const PairingWindow &) = delete;
+  PairingWindow &operator=(const PairingWindow &) = delete;
   static std::string verification_code(const std::string &device_id,
                                        const std::string &certificate_fingerprint,
                                        const std::string &transaction_id,
