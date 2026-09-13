@@ -18,8 +18,8 @@ std::string fixture(const fs::path &root, const char *name) {
     bytes += char(std::stoul(hex.substr(i, 2), nullptr, 16));
   return bytes;
 }
-void resign(std::string &bytes) {
-  std::string key(32, '\x11');
+void resign(std::string &bytes, char key_byte = '\x11') {
+  std::string key(32, key_byte);
   unsigned char hash[32];
   unsigned int size = 0;
   require(HMAC(EVP_sha256(), key.data(), 32,
@@ -166,6 +166,15 @@ int main(int argc, char **argv) {
     Runtime paired_runtime(paired);
     require(paired_runtime.receive(metadata, "127.0.0.1"),
             "one paired key accepts its own Windows v4 packet");
+    auto same_run_other_peer = metadata;
+    resign(same_run_other_peer, '\x44');
+    require(paired_runtime.receive(same_run_other_peer, "127.0.0.1"),
+            "different paired key has independent replay watermark");
+    const auto paired_session =
+        paired_runtime.snapshot()["session_id"].get<std::string>();
+    require(paired_session.size() == 32 &&
+                paired_session.find(':') == std::string::npos,
+            "paired v4 session ID remains the wire run ID");
     std::cout << "Windows v4 fixtures: authentication, state, recording, "
                  "replay persistence passed\n";
     return 0;

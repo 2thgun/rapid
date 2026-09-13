@@ -1,6 +1,6 @@
 # Current handoff
 
-Published source through `bc939c6` adds first-boot AP onboarding, physical
+Published source through `f5fd25b` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
 only `rapid-home`, bounds its connection attempt and restores the setup AP on
@@ -29,9 +29,16 @@ candidate package from `194e8a1` does not contain those changes; see
 `wiki/Validation-Status.md` for artifact provenance. No image has been assembled
 or flashed; the release marker deliberately remains absent.
 
-The receiver also accepts up to 16 configured v4 keys and namespaces persisted
-watermarks by authenticated key; it still lacks durable PC records, revocation,
-physical approval and the Windows encrypted handshake.
+The receiver accepts up to 16 configured v4 keys and keeps their persisted
+watermarks separate. Private setup state now stores up to 16 paired-PC records;
+the owner can list key-free labels and revoke a record through the authenticated
+setup page. Runtime keys are loaded from that private store at startup. This is
+not a completed pairing flow: there is no graphical approved handshake, Windows
+DPAPI storage, physical approval, live key reload or verified revocation yet.
+
+The next unpublished source change keeps paired-key namespaces strictly inside
+the replay database. Dashboard and recording session IDs remain the raw 32-digit
+wire ID, avoiding a derived key fingerprint in application-visible state.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks

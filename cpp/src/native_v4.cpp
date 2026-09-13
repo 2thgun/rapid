@@ -136,20 +136,23 @@ Json receive_v4(Database &store, const std::string &bytes,
   check(flags <= 3, "invalid v4 flags");
   const auto raw_id = bytes.substr(20, 16);
   check(raw_id != std::string(16, '\0'), "zero v4 run id");
-  std::string id;
+  std::string session_id;
   const char *hex = "0123456789abcdef";
   for (unsigned char c : raw_id) {
-    id += hex[c >> 4];
-    id += hex[c & 15];
+    session_id += hex[c >> 4];
+    session_id += hex[c & 15];
   }
   // Pair-specific storage prevents one trusted PC's sequence watermark from
   // rejecting another PC that happens to use the same random run identifier.
-  id = peer_namespace + id;
+  // The namespace is intentionally storage-only: consumers retain the wire
+  // session ID, so recording paths and dashboard state do not expose a key
+  // fingerprint or change when a PC is paired.
+  const auto storage_id = peer_namespace + session_id;
   const char *simulators[] = {"", "ACC", "AC", "ACE", "iRacing"};
   Json message = {{"version", 3},
                   {"_wire_version", 4},
                   {"simulator", simulators[sim]},
-                  {"session_id", id},
+                  {"session_id", session_id},
                   {"sequence", sequence},
                   {"monotonic_us", time},
                   {"sample_rate_hz", rate}};
@@ -222,7 +225,7 @@ Json receive_v4(Database &store, const std::string &bytes,
   auto rows =
       store.query("SELECT sequence,time,simulator,metadata,closed,active FROM "
                   "v4_runs WHERE id=?",
-                  {id});
+                  {storage_id});
   std::uint64_t gap = 0;
   if (!rows.empty()) {
     const auto &previous = rows[0];
@@ -255,7 +258,7 @@ Json receive_v4(Database &store, const std::string &bytes,
                "UPDATE SET "
                "sequence=excluded.sequence,time=excluded.time,metadata="
                "excluded.metadata,closed=excluded.closed",
-               {id, sequence, time, sim, metadata.dump(), int(closed),
+               {storage_id, sequence, time, sim, metadata.dump(), int(closed),
                 int((flags & 1) != 0)});
     store.exec("COMMIT");
   } catch (...) {
