@@ -1,5 +1,10 @@
 # Current handoff
 
+Session closed on 2026-09-13: no unfinished code changes or active agent tasks.
+The documentation audit checkpoint `b5a199e` passed hosted verification in
+run `34716780316`. All open issues remain open against their full acceptance
+criteria; #7 has its source fix but still requires real AC1/ACC evidence.
+
 Source checkpoint: `6d3ee81`. Opt-in browser owner enrollment is implemented
 in the loopback C++ setup service. A private activation token authorizes the
 one-time owner claim; settings saves still record desired values only.
