@@ -1,6 +1,13 @@
 # Current handoff
 
-Session closed on 2026-09-13: no unfinished code changes or active agent tasks.
+Active source work on 2026-09-13: first-boot AP onboarding is uncommitted.
+The C++ initializer persists device-specific AP credentials and an activation
+token; the constrained root provisioner creates the fixed NetworkManager AP
+profile before starting the AP-bound setup server. The Qt panel renders the
+private local bootstrap details. Native test execution and hardware acceptance
+remain pending. Authenticated settings now queue constrained hostname application;
+Wi-Fi, rotation, calibration and pairing are still unapplied. Do not deploy this
+work yet.
 The documentation audit checkpoint `b5a199e` passed hosted verification in
 run `34716780316`. All open issues remain open against their full acceptance
 criteria; #7 has its source fix but still requires real AC1/ACC evidence.

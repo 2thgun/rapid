@@ -1,6 +1,7 @@
 [Unit]
 Description=raPId Wi-Fi mode controller
-After=NetworkManager.service
+Requires=rapid-provision.service
+After=NetworkManager.service rapid-provision.service
 Wants=NetworkManager.service
 
 [Service]

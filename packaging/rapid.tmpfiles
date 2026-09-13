@@ -1,1 +1,2 @@
 d /etc/rapid 0750 root rapid -
+d /run/rapid-apply 0770 root rapid -

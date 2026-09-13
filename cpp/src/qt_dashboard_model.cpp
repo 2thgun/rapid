@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
+#include <QFile>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -26,6 +27,23 @@ QUrl endpoint_path(QUrl endpoint, const QString &path, int port = -1) {
   if (port > 0) endpoint.setPort(port);
   return endpoint;
 }
+
+QString setup_notice(const QByteArray &contents) {
+  const auto document = QJsonDocument::fromJson(contents);
+  if (!document.isObject()) return {};
+  const auto bootstrap = document.object().value("bootstrap");
+  if (!bootstrap.isObject()) return {};
+  const auto values = bootstrap.toObject();
+  const auto ssid = values.value("ssid").toString();
+  const auto password = values.value("access_point_password").toString();
+  const auto url = values.value("setup_url").toString();
+  const auto token = values.value("activation_token").toString();
+  if (ssid.isEmpty() || password.isEmpty() || url.isEmpty() || token.size() != 64)
+    return {};
+  return QStringLiteral("SETUP AP  %1\nPASSWORD  %2\n%3\nTOKEN  %4 %5\n       %6 %7")
+      .arg(ssid, password, url, token.sliced(0, 16), token.sliced(16, 16),
+           token.sliced(32, 16), token.sliced(48, 16));
+}
 }  // namespace
 
 DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
@@ -34,6 +52,7 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   QTimer::singleShot(0, this, &DashboardModel::pollLive);
   QTimer::singleShot(0, this, &DashboardModel::pollNetworkMode);
   QTimer::singleShot(0, this, &DashboardModel::pollLogStatus);
+  QTimer::singleShot(0, this, &DashboardModel::pollSetupStatus);
 }
 
 QVariant DashboardModel::value(const QString &key) const { return state_.value(key); }
@@ -58,6 +77,17 @@ void DashboardModel::pollLive() {
     connect(reply, &QNetworkReply::finished, this, [this, reply] { consumeLive(reply); });
   }
   QTimer::singleShot(200, this, &DashboardModel::pollLive);
+}
+
+void DashboardModel::pollSetupStatus() {
+  QFile file(qEnvironmentVariable("RAPID_FIRSTBOOT_STATUS",
+                                  "/run/rapid/firstboot.json"));
+  const QString next = file.open(QIODevice::ReadOnly) ? setup_notice(file.readAll()) : QString{};
+  if (setup_notice_ != next) {
+    setup_notice_ = next;
+    bump();
+  }
+  QTimer::singleShot(1000, this, &DashboardModel::pollSetupStatus);
 }
 
 void DashboardModel::consumeLive(QNetworkReply *reply) {

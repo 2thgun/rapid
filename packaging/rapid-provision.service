@@ -1,0 +1,21 @@
+[Unit]
+Description=raPId first-boot setup access point
+Requires=rapid-firstboot.service
+After=rapid-firstboot.service NetworkManager.service
+Wants=NetworkManager.service
+Before=rapid-setup.service rapid-network-mode.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/lib/rapid/rapid-provision --status-file /run/rapid/firstboot.json
+RemainAfterExit=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

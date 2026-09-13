@@ -1,4 +1,5 @@
 #include "rapid/setup_auth.hpp"
+#include <arpa/inet.h>
 #include <csignal>
 #include <iostream>
 #include <fcntl.h>
@@ -24,19 +25,31 @@ std::string enrollment_token(const fs::path &path) {
 }
 int main(int argc, char **argv) {
   try {
-    fs::path directory, assets = "cpp/assets", token_file;
+    fs::path directory, assets = "cpp/assets", token_file, apply_request_file,
+             apply_result_file, firstboot_status_file;
     int port = 8002;
     bool enroll = false;
+    std::string listen_host = "127.0.0.1";
     for (int i = 1; i < argc; ++i) {
       const std::string option = argv[i];
       if (option == "--help") {
-        std::cout << "rapid-setup-server --state-directory PATH [--assets PATH] [--port PORT] [--set-owner] [--enrollment-token-file PATH]\n"
-                     "Loopback only. --set-owner reads a new owner password from standard input.\n";
+        std::cout << "rapid-setup-server --state-directory PATH [--assets PATH] [--port PORT] [--set-owner] [--enrollment-token-file PATH] [--apply-request-file PATH] [--apply-result-file PATH] [--firstboot-status-file PATH] [--listen IPV4]\n"
+                     "Defaults to loopback. A non-loopback listener requires an enrollment token. "
+                     "--set-owner reads a new owner password from standard input.\n";
         return 0;
       } else if (option == "--set-owner") enroll = true;
       else if (option == "--state-directory" && i + 1 < argc) directory = argv[++i];
       else if (option == "--assets" && i + 1 < argc) assets = argv[++i];
       else if (option == "--enrollment-token-file" && i + 1 < argc) token_file = argv[++i];
+      else if (option == "--apply-request-file" && i + 1 < argc) apply_request_file = argv[++i];
+      else if (option == "--apply-result-file" && i + 1 < argc) apply_result_file = argv[++i];
+      else if (option == "--firstboot-status-file" && i + 1 < argc) firstboot_status_file = argv[++i];
+      else if (option == "--listen" && i + 1 < argc) {
+        listen_host = argv[++i];
+        in_addr address{};
+        if (::inet_pton(AF_INET, listen_host.c_str(), &address) != 1)
+          throw std::invalid_argument("listen address must be a numeric IPv4 address");
+      }
       else if (option == "--port" && i + 1 < argc) {
         const std::string value = argv[++i];
         std::size_t consumed;
@@ -48,8 +61,15 @@ int main(int argc, char **argv) {
     SetupStore store(directory);
     // Once claimed, the owner database is authoritative. Removing the bootstrap
     // file must not prevent normal sign-in after a service restart.
-    SetupAuth auth(store, port, monotonic,
-                   store.owner_hash().empty() ? enrollment_token(token_file) : std::string{});
+    // Keep validating the bootstrap file after the owner claim: it remains the
+    // explicit authorization for the AP listener, while SetupAuth receives no
+    // token after enrollment and therefore cannot reopen owner creation.
+    const auto bootstrap_token = enrollment_token(token_file);
+    if (listen_host != "127.0.0.1" && bootstrap_token.empty())
+      throw std::invalid_argument("a non-loopback listener requires an enrollment token");
+    const auto token = store.owner_hash().empty() ? bootstrap_token : std::string{};
+    SetupAuth auth(store, port, monotonic, token, listen_host, apply_request_file,
+                   apply_result_file, firstboot_status_file);
     if (enroll) {
       std::string password;
       if (!std::getline(std::cin, password) || !auth.enroll(password))
@@ -61,7 +81,7 @@ int main(int argc, char **argv) {
     std::signal(SIGINT, [](int) { stopping = true; });
     std::signal(SIGTERM, [](int) { stopping = true; });
     std::signal(SIGPIPE, SIG_IGN);
-    serve("127.0.0.1", port, [&](const Request &request) -> Response {
+    serve(listen_host, port, [&](const Request &request) -> Response {
       if (request.method == "GET" && (request.target == "/" || request.target == "/setup"))
         return {200, page, "text/html; charset=utf-8", {
             {"Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"},

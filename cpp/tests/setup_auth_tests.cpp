@@ -33,7 +33,34 @@ int main() {
       const auto enroll_request = request("/api/v1/auth/enroll", "POST",
           {{"token", token}, {"password", "browser-owner-password"}});
       require(disabled.handle(enroll_request).status == 403, "browser enrollment is opt-in");
+      const auto bootstrap_status = root.path / "bootstrap-status.json";
+      atomic_file(bootstrap_status, Json{{"owner_configured", false},
+          {"state", "owner_enrollment_required"},
+          {"bootstrap", {{"activation_token", token}}}}.dump());
+      SetupAuth ap(fresh, 8002, [&] { return enrollment_time; }, token, "192.168.50.1",
+                   {}, {}, bootstrap_status);
+      auto ap_request = enroll_request;
+      ap_request.headers["host"] = "192.168.50.1:8002";
+      ap_request.headers["origin"] = "http://192.168.50.1:8002";
+      require(ap.handle(ap_request).status == 201,
+              "activation-token enrollment supports an exact AP authority");
+      const auto cleared_status = Json::parse(read_file(bootstrap_status));
+      require(cleared_status["owner_configured"] == true &&
+                  cleared_status["state"] == "settings_application_required" &&
+                  !cleared_status.contains("bootstrap"),
+              "owner enrollment clears physical bootstrap details immediately");
+      require(ap.handle(enroll_request).status == 403,
+              "AP enrollment rejects a loopback Host or Origin");
+      require(fresh.snapshot()["setup_complete"] == false,
+              "AP owner enrollment does not complete provisioning");
+    }
+    {
+      SetupStore fresh(root.path / "browser-enrollment-rate-limit");
+      double enrollment_time = 0;
+      const auto token = unique_id() + unique_id();
       SetupAuth browser(fresh, 8002, [&] { return enrollment_time; }, token);
+      const auto enroll_request = request("/api/v1/auth/enroll", "POST",
+          {{"token", token}, {"password", "browser-owner-password"}});
       auto status = browser.handle(request("/api/v1/setup"));
       require(Json::parse(status.body)["capabilities"]["browser_owner_enrollment"] == true &&
               status.body.find(token) == std::string::npos, "enrollment capability never exposes token");
@@ -77,7 +104,11 @@ int main() {
     require(store.snapshot()["device_id"] == id && store.snapshot()["revision"] == 7 &&
             store.snapshot()["schema_version"] == 2, "schema migration preserves device identity and revision");
     double time = 0;
-    SetupAuth auth(store, 8002, [&] { return time; });
+    const auto apply_directory = root.path / "apply";
+    fs::create_directory(apply_directory);
+    const auto apply_result = apply_directory / "result.json";
+    SetupAuth auth(store, 8002, [&] { return time; }, {}, "127.0.0.1",
+                   apply_directory / "request.json", apply_result);
     const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
     require(public_setup["owner_configured"] == false &&
                 public_setup["capabilities"]["settings_write"] == true,
@@ -124,10 +155,23 @@ int main() {
     require(auth.handle(save).status == 403, "settings write requires CSRF token");
     save.headers["x-csrf-token"] = credentials["csrf_token"].get<std::string>();
     require(auth.handle(save).status == 200, "owner can save validated desired settings");
+    const auto queued = Json::parse(read_file(apply_directory / "request.json"));
+    require(queued["revision"] == 8 && queued["settings"]["hostname"] == "rapid-renamed",
+            "validated settings save queues the exact root application request");
     response = Json::parse(auth.handle(settings).body);
     require(response["revision"] == 8 && response["settings"]["hostname"] == "rapid-renamed" &&
-                response["settings"]["rotation"] == 180 && response["applied"] == false,
+                response["settings"]["rotation"] == 180 && response["applied"] == false &&
+                response["apply_queued"] == true,
             "settings save is persistent but does not claim application");
+    atomic_file(apply_result, Json{{"revision", 8}, {"hostname_applied", true},
+                                  {"pending", Json::array({"rotation", "wifi"})}}.dump());
+    response = Json::parse(auth.handle(settings).body);
+    require(response["application"]["hostname_applied"] == true,
+            "matching root application result is available to the authenticated owner");
+    atomic_file(apply_result, Json{{"revision", 7}, {"hostname_applied", true}}.dump());
+    response = Json::parse(auth.handle(settings).body);
+    require(!response.contains("application"),
+            "stale root application result is hidden from the authenticated owner");
     require(auth.handle(save).status == 409, "stale settings revision cannot overwrite newer values");
     auto malformed_save = save;
     malformed_save.body = Json{{"revision", 8}, {"settings", {{"hostname", "invalid"}}}}.dump();

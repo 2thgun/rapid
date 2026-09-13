@@ -12,12 +12,18 @@ class SetupAuth {
   std::string origin_;
   std::string authority_;
   std::string enrollment_token_;
+  fs::path apply_request_file_;
+  fs::path apply_result_file_;
+  fs::path firstboot_status_file_;
   void expire(double time);
 
 public:
   SetupAuth(SetupStore &store, int port, std::function<double()> clock = monotonic,
-            std::string enrollment_token = {});
-  // Local enrollment only until physical/AP bootstrap authorization is built.
+            std::string enrollment_token = {}, std::string host = "127.0.0.1",
+            fs::path apply_request_file = {}, fs::path apply_result_file = {},
+            fs::path firstboot_status_file = {});
+  // The caller supplies an exact loopback or AP authority. It is never inferred
+  // from an untrusted Host header.
   bool enroll(const std::string &password);
   Response handle(const Request &request);
 };

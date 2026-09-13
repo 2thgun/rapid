@@ -20,7 +20,7 @@ check() (
       '-w 30 connection up home-profile ifname wlan0')
         activations=$((activations + 1))
         [ "$scenario" != home-failure ] && [ "$scenario" != all-failure ] ;;
-      '-w 15 connection up rapid-demo ifname wlan0')
+      '-w 15 connection up rapid-setup ifname wlan0')
         activations=$((activations + 1))
         [ "$scenario" != ap-failure ] && [ "$scenario" != all-failure ] ;;
       *) echo "Unexpected nmcli invocation: $*" >&2; return 1 ;;

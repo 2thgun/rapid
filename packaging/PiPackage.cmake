@@ -4,7 +4,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
   message(FATAL_ERROR "Pi packaging requires Linux, RAPID_BUILD_QT_DISPLAY=ON and RAPID_BUILD_LOG_STATUS=ON")
 endif()
 
-install(TARGETS rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot
+install(TARGETS rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot rapid-provision rapid-apply
         RUNTIME DESTINATION lib/rapid)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/" DESTINATION share/rapid)
 install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/../systemd/rapid-network-mode"
@@ -14,6 +14,9 @@ install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.service"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-display.service"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-setup.service"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-firstboot.service"
+              "${CMAKE_CURRENT_LIST_DIR}/rapid-provision.service"
+              "${CMAKE_CURRENT_LIST_DIR}/rapid-apply.service"
+              "${CMAKE_CURRENT_LIST_DIR}/rapid-apply.path"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-network-mode.service"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-log-status.service"
         DESTINATION lib/systemd/system)

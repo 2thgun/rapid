@@ -36,16 +36,16 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 </form>
 </section>
 <section id="profile" hidden>
-<h2>Saved device profile</h2>
+<h2>Device profile</h2>
 <form id="settings-form">
 <label for="hostname">Device name</label>
 <input id="hostname" autocomplete="off" required maxlength="63" pattern="[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?">
 <label for="rotation">Orientation</label>
 <select id="rotation"><option value="0">Landscape</option><option value="180">Upside-down landscape</option></select>
-<button id="save-settings" type="submit">Save profile</button>
+<button id="save-settings" type="submit">Save and apply hostname</button>
 </form>
 <dl><dt>Startup preference</dt><dd>Saved Wi-Fi, then access point</dd></dl>
-<p>Saving records your preference only. Wi-Fi and display controls are coming in a later update.</p>
+<p>Saving applies the device name shortly after submission. Orientation is saved only until its preview and rollback flow is available. Wi-Fi joining is coming next.</p>
 <button id="sign-out" type="button">Sign out</button>
 </section>
 <script>
@@ -105,6 +105,24 @@ async function showProfile() {
   document.getElementById('rotation').value = String(data.settings.rotation);
   document.getElementById('login').hidden = true;
   document.getElementById('profile').hidden = false;
+  return data;
+}
+
+async function waitForHostnameApplication(targetRevision) {
+  for (let attempt = 0; attempt < 10; ++attempt) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const profile = await showProfile();
+    if (profile.revision !== targetRevision) return;
+    if (profile.application && profile.application.hostname_applied) {
+      message.textContent = 'Device name applied. Orientation is still saved only.';
+      return;
+    }
+    if (profile.application && profile.application.hostname_applied === false) {
+      message.textContent = 'Profile saved, but the device name could not be applied. Save again to retry.';
+      return;
+    }
+  }
+  message.textContent = 'Profile saved. The device name is still waiting to be applied.';
 }
 document.getElementById('login-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -131,7 +149,12 @@ document.getElementById('settings-form').addEventListener('submit', async event 
       rotation: Number(document.getElementById('rotation').value), boot_network: 'home_then_ap'};
     const saved = await api('/api/v1/settings', 'POST', {revision, settings});
     revision = saved.revision;
-    message.textContent = 'Profile saved. It has not been applied to the device.';
+    if (saved.apply_queued) {
+      message.textContent = 'Profile saved. The device name is being applied.';
+      await waitForHostnameApplication(saved.revision);
+    } else {
+      message.textContent = 'Profile saved.';
+    }
   } catch (error) {
     if (error.status === 409) await showProfile();
     message.textContent = error.message;

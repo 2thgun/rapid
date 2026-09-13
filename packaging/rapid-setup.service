@@ -1,7 +1,7 @@
 [Unit]
 Description=raPId local management preview
-Requires=rapid-firstboot.service
-After=rapid-firstboot.service
+Requires=rapid-firstboot.service rapid-provision.service
+After=rapid-firstboot.service rapid-provision.service
 
 [Service]
 Type=simple
@@ -10,7 +10,7 @@ Group=rapid
 StateDirectory=rapid-setup
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/rapid-setup
-ExecStart=/usr/lib/rapid/rapid-setup-server --state-directory /var/lib/rapid-setup --assets /usr/share/rapid
+ExecStart=/usr/lib/rapid/rapid-setup-server --state-directory /var/lib/rapid-setup --assets /usr/share/rapid --listen 192.168.1.64 --enrollment-token-file /var/lib/rapid-setup/enrollment.token --apply-request-file /run/rapid-apply/request.json --apply-result-file /run/rapid-apply/result.json --firstboot-status-file /run/rapid/firstboot.json
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal

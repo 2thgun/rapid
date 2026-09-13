@@ -127,6 +127,25 @@ Window {
                 Label { x: 8; y: 190; text: "LAP  " + root.text("lap_number"); color: root.accent }
             }
         }
+        Card {
+            visible: dashboard.setupNotice.length > 0
+            z: 10
+            anchors.fill: parent
+            border.color: root.accent
+            border.width: 2
+            Text {
+                anchors.fill: parent
+                anchors.margins: 16
+                text: dashboard.setupNotice
+                color: "#f4f7f9"
+                font.pixelSize: 16
+                font.bold: true
+                lineHeight: 1.35
+                verticalAlignment: Text.AlignVCenter
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WrapAnywhere
+            }
+        }
         Row {
             visible: root.page === 1; spacing: 6
             MetricCard { width: 190; height: body.height; title: "LIVE TIMING"

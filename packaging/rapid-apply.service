@@ -1,0 +1,13 @@
+[Unit]
+Description=raPId constrained setup settings application
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/lib/rapid/rapid-apply --request-file /run/rapid-apply/request.json --result-file /run/rapid-apply/result.json
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true

@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <cmath>
 #include <iostream>
@@ -15,6 +16,11 @@ int main(int argc, char **argv) {
   const bool serve = app.arguments().contains("--serve");
   QTcpServer server;
   if (!server.listen(QHostAddress::LocalHost, serve ? 18080 : 0)) return 2;
+  QTemporaryFile setup_status;
+  if (!setup_status.open()) return 2;
+  setup_status.write("{\"bootstrap\":{\"setup_address\":\"192.168.1.64\",\"setup_port\":8002,\"setup_url\":\"http://192.168.1.64:8002/setup\",\"ssid\":\"rapid-123abc\",\"access_point_password\":\"1234567890abcdef\",\"activation_token\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}");
+  setup_status.flush();
+  qputenv("RAPID_FIRSTBOOT_STATUS", setup_status.fileName().toUtf8());
   QJsonObject state{{"companion_connected", true}, {"companion_daemon_state", "driving"},
                     {"telemetry_fresh", true}, {"session_id", "qt-test"},
                     {"samples_received", 1}, {"throttle", 0.75}, {"brake", 0.25},
@@ -65,6 +71,9 @@ int main(int argc, char **argv) {
     if (!ok) { std::cerr << message << '\n'; std::exit(1); }
   };
   spin(500);
+  require(model.setupNotice().contains("rapid-123abc") &&
+              model.setupNotice().contains("0123456789abcdef 0123456789abcdef"),
+          "First-boot credentials are rendered from the local status file");
   require(model.graphSamples().size() == 1, "Repeated polling duplicated a source sample");
   require(model.graphSamples().first().toMap()["throttle"].toDouble() == 75, "Pedal scale");
   state["samples_received"] = 2;

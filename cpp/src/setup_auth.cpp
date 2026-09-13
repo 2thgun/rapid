@@ -35,10 +35,15 @@ std::string cookie_token(const Request &request) {
 } // namespace
 
 SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
-                     std::string enrollment_token)
+                     std::string enrollment_token, std::string host,
+                     fs::path apply_request_file, fs::path apply_result_file,
+                     fs::path firstboot_status_file)
     : store_(store), clock_(std::move(clock)),
-      origin_("http://127.0.0.1:" + std::to_string(port)),
-      authority_("127.0.0.1:" + std::to_string(port)),
+      origin_("http://" + host + ":" + std::to_string(port)),
+      authority_(std::move(host) + ":" + std::to_string(port)),
+      apply_request_file_(std::move(apply_request_file)),
+      apply_result_file_(std::move(apply_result_file)),
+      firstboot_status_file_(std::move(firstboot_status_file)),
       enrollment_token_(std::move(enrollment_token)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
       enrollment_token_.find_first_not_of("0123456789abcdef") != std::string::npos))
@@ -68,8 +73,9 @@ void SetupAuth::expire(double time) {
 }
 
 Response SetupAuth::handle(const Request &request) {
-  // This server is deliberately loopback-only until trusted HTTPS/AP bootstrap
-  // exists. Exact Host/Origin checks also reject browser DNS-rebinding requests.
+  // Exact configured Host/Origin checks reject browser DNS-rebinding requests.
+  // setup_main keeps the listener on loopback unless an activation token
+  // explicitly authorizes the AP bootstrap listener.
   if (header(request, "host") != authority_)
     return reply(403, {{"detail", "invalid host"}});
   const auto origin = header(request, "origin");
@@ -120,6 +126,24 @@ Response SetupAuth::handle(const Request &request) {
     }
     OPENSSL_cleanse(enrollment_token_.data(), enrollment_token_.size());
     enrollment_token_.clear();
+    if (!firstboot_status_file_.empty()) {
+      try {
+        auto status = Json::parse(read_file(firstboot_status_file_));
+        if (status.is_object()) {
+          status.erase("bootstrap");
+          status["owner_configured"] = true;
+          status["state"] = "settings_application_required";
+          atomic_file(firstboot_status_file_, status.dump() + "\n");
+          fs::permissions(firstboot_status_file_,
+                          fs::perms::owner_read | fs::perms::owner_write |
+                              fs::perms::group_read,
+                          fs::perm_options::replace);
+        }
+      } catch (const std::exception &error) {
+        log(std::string("WARN setup: owner configured but cannot clear bootstrap status: ") +
+            error.what());
+      }
+    }
     return reply(201, {{"owner_configured", true}, {"setup_complete", false}});
   }
   if (path == "/api/v1/auth/login" && request.method == "POST") {
@@ -151,8 +175,16 @@ Response SetupAuth::handle(const Request &request) {
     return reply(200, {{"authenticated", true}, {"csrf_token", session->second.csrf}});
   if (path == "/api/v1/settings" && request.method == "GET") {
     const auto state = store_.snapshot();
-    return reply(200, {{"revision", state.at("revision")}, {"settings", state.at("settings")},
-                       {"applied", false}});
+    Json response{{"revision", state.at("revision")}, {"settings", state.at("settings")},
+                  {"applied", false}};
+    try {
+      if (!apply_result_file_.empty()) {
+        const auto result = Json::parse(read_file(apply_result_file_));
+        if (result.is_object() && result.value("revision", -1) == state.at("revision"))
+          response["application"] = result;
+      }
+    } catch (const std::exception &) {}
+    return reply(200, response);
   }
   if (path == "/api/v1/settings" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
@@ -172,8 +204,18 @@ Response SetupAuth::handle(const Request &request) {
       return reply(400, {{"detail", error.what()}});
     }
     const auto state = store_.snapshot();
+    if (!apply_request_file_.empty()) {
+      try {
+        atomic_file(apply_request_file_,
+                    Json{{"revision", state.at("revision")}, {"settings", state.at("settings")}}.dump());
+      } catch (const std::exception &) {
+        return reply(503, {{"detail", "settings saved but application queue is unavailable"},
+                           {"revision", state.at("revision")}, {"settings", state.at("settings")},
+                           {"applied", false}});
+      }
+    }
     return reply(200, {{"revision", state.at("revision")}, {"settings", state.at("settings")},
-                       {"applied", false}});
+                       {"applied", false}, {"apply_queued", !apply_request_file_.empty()}});
   }
   if (path == "/api/v1/auth/logout" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))

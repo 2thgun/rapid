@@ -1,4 +1,5 @@
 #include "rapid/setup.hpp"
+#include <fstream>
 #include <iostream>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -21,9 +22,126 @@ struct TemporaryDirectory {
 };
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   try {
+    require(argc == 4, "first-boot, provision and apply binaries required");
     TemporaryDirectory root;
+    const auto firstboot_directory = root.path / "firstboot";
+    const auto firstboot_status = root.path / "firstboot.json";
+    const auto token_file = firstboot_directory / "enrollment.token";
+    auto run_firstboot = [&] {
+      const auto child = fork();
+      require(child >= 0, "fork first boot");
+      if (child == 0) {
+        execl(argv[1], argv[1], "--state-directory", firstboot_directory.c_str(),
+              "--status-file", firstboot_status.c_str(), "--setup-address",
+              "192.168.50.1", nullptr);
+        _exit(127);
+      }
+      int result = 0;
+      require(waitpid(child, &result, 0) == child && WIFEXITED(result) &&
+                  WEXITSTATUS(result) == 0,
+              "first boot succeeds");
+    };
+    run_firstboot();
+    const auto bootstrap = Json::parse(read_file(firstboot_status));
+    require(bootstrap["bootstrap"]["setup_address"] == "192.168.50.1" &&
+                bootstrap["bootstrap"]["setup_url"] == "http://192.168.50.1:8002/setup",
+            "first boot publishes the configured local AP address");
+    const auto activation = bootstrap["bootstrap"]["activation_token"].get<std::string>();
+    require(activation.size() == 64 &&
+                activation.find_first_not_of("0123456789abcdef") == std::string::npos,
+            "first boot creates a 256-bit activation token");
+    const auto ap_password = bootstrap["bootstrap"]["access_point_password"].get<std::string>();
+    require(bootstrap["bootstrap"]["ssid"].get<std::string>().starts_with("rapid-") &&
+                ap_password.size() == 16 &&
+                ap_password.find_first_not_of("0123456789abcdef") == std::string::npos,
+            "first boot creates device-specific AP credentials");
+    require((fs::status(token_file).permissions() & fs::perms::group_all) == fs::perms::none &&
+                (fs::status(token_file).permissions() & fs::perms::others_all) == fs::perms::none,
+            "activation token stays private");
+    run_firstboot();
+    const auto resumed = Json::parse(read_file(firstboot_status))["bootstrap"];
+    require(resumed["activation_token"] == activation &&
+                resumed["access_point_password"] == ap_password,
+            "interrupted onboarding preserves AP credentials and activation token");
+    const auto fake_nmcli = root.path / "nmcli";
+    const auto nmcli_log = root.path / "nmcli.log";
+    {
+      std::ofstream script(fake_nmcli);
+      script << "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_NMCLI_LOG\"\n"
+                "if [ \"$1 $2 $3\" = \"connection show rapid-setup\" ]; then exit 1; fi\n"
+                "exit 0\n";
+    }
+    fs::permissions(fake_nmcli, fs::perms::owner_all);
+    setenv("RAPID_TEST_NMCLI_LOG", nmcli_log.c_str(), 1);
+    const auto provision = fork();
+    require(provision >= 0, "fork AP provisioner");
+    if (provision == 0) {
+      execl(argv[2], argv[2], "--status-file", firstboot_status.c_str(), "--nmcli",
+            fake_nmcli.c_str(), nullptr);
+      _exit(127);
+    }
+    int provision_status = 0;
+    require(waitpid(provision, &provision_status, 0) == provision &&
+                WIFEXITED(provision_status) && WEXITSTATUS(provision_status) == 0,
+            "AP provisioner configures NetworkManager");
+    unsetenv("RAPID_TEST_NMCLI_LOG");
+    const auto nmcli_calls = read_file(nmcli_log);
+    require(nmcli_calls.find("connection add type wifi ifname wlan0 con-name rapid-setup") !=
+                std::string::npos &&
+                nmcli_calls.find("wifi-sec.psk " + ap_password) != std::string::npos &&
+                nmcli_calls.find("ipv4.addresses 192.168.50.1/24") != std::string::npos &&
+                nmcli_calls.find("connection up rapid-setup ifname wlan0") != std::string::npos,
+            "AP provisioner passes only the generated profile values to NetworkManager");
+    const auto apply_request = root.path / "apply-request.json";
+    const auto apply_result = root.path / "apply-result.json";
+    const auto fake_hostnamectl = root.path / "hostnamectl";
+    const auto hostname_log = root.path / "hostnamectl.log";
+    atomic_file(apply_request, Json{{"revision", 2}, {"settings",
+        {{"hostname", "rapid-applied"}, {"rotation", 0},
+         {"boot_network", "home_then_ap"}}}}.dump());
+    {
+      std::ofstream script(fake_hostnamectl);
+      script << "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_HOSTNAME_LOG\"\n"
+                "exit 0\n";
+    }
+    fs::permissions(fake_hostnamectl, fs::perms::owner_all);
+    setenv("RAPID_TEST_HOSTNAME_LOG", hostname_log.c_str(), 1);
+    const auto apply = fork();
+    require(apply >= 0, "fork settings applicator");
+    if (apply == 0) {
+      execl(argv[3], argv[3], "--request-file", apply_request.c_str(), "--result-file",
+            apply_result.c_str(), "--hostnamectl", fake_hostnamectl.c_str(), nullptr);
+      _exit(127);
+    }
+    int apply_status = 0;
+    require(waitpid(apply, &apply_status, 0) == apply && WIFEXITED(apply_status) &&
+                WEXITSTATUS(apply_status) == 0 && !fs::exists(apply_request),
+            "settings applicator applies and consumes a valid hostname request");
+    unsetenv("RAPID_TEST_HOSTNAME_LOG");
+    require(read_file(hostname_log) == "set-hostname rapid-applied\n",
+            "settings applicator invokes only fixed hostnamectl arguments");
+    require(Json::parse(read_file(apply_result))["hostname_applied"] == true,
+            "settings applicator records a secret-free completion result");
+    atomic_file(apply_request, Json{{"revision", 3}, {"settings",
+        {{"hostname", "rapid.bad"}, {"rotation", 0},
+         {"boot_network", "home_then_ap"}}}}.dump());
+    const auto rejected_apply = fork();
+    require(rejected_apply >= 0, "fork invalid settings applicator");
+    if (rejected_apply == 0) {
+      execl(argv[3], argv[3], "--request-file", apply_request.c_str(), "--result-file",
+            apply_result.c_str(), "--hostnamectl", fake_hostnamectl.c_str(), nullptr);
+      _exit(127);
+    }
+    int rejected_status = 0;
+    require(waitpid(rejected_apply, &rejected_status, 0) == rejected_apply &&
+                WIFEXITED(rejected_status) && WEXITSTATUS(rejected_status) != 0 &&
+                !fs::exists(apply_request) &&
+                Json::parse(read_file(apply_result))["hostname_applied"] == false,
+            "invalid settings request is consumed with a terminal application result");
     const auto directory = root.path / "device";
     Json initial;
     {

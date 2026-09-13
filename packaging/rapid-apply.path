@@ -1,0 +1,9 @@
+[Unit]
+Description=raPId setup settings request watcher
+
+[Path]
+PathExists=/run/rapid-apply/request.json
+Unit=rapid-apply.service
+
+[Install]
+WantedBy=multi-user.target

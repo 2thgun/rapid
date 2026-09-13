@@ -1,7 +1,7 @@
 [Unit]
 Description=raPId first-boot state initialization
 After=local-fs.target
-Before=rapid-setup.service
+Before=rapid-provision.service rapid-setup.service
 
 [Service]
 Type=oneshot
