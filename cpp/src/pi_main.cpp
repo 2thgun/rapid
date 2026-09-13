@@ -20,8 +20,11 @@ int main(int argc, char **argv) {
       throw std::runtime_error("use --config path or --help");
     auto settings = Config::load(config);
     std::unique_ptr<SetupStore> setup;
-    if (!settings.setup_directory.empty())
+    if (!settings.setup_directory.empty()) {
       setup = std::make_unique<SetupStore>(settings.setup_directory);
+      const auto paired_keys = setup->peer_keys();
+      if (!paired_keys.empty()) settings.companion_keys = paired_keys;
+    }
     Runtime runtime(settings);
     auto dashboard = read_file(settings.assets / "dashboard.html"),
          telemetry = read_file(settings.assets / "telemetry.html"),

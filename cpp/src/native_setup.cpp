@@ -150,6 +150,14 @@ Json SetupStore::peers() {
   return store_.query("SELECT id,label,created_at,last_seen FROM setup_peer ORDER BY created_at");
 }
 
+std::vector<std::string> SetupStore::peer_keys() {
+  std::lock_guard lock(mutex_);
+  std::vector<std::string> keys;
+  for (const auto &row : store_.query("SELECT key FROM setup_peer ORDER BY created_at"))
+    keys.push_back(telemetry_key(row["key"].get<std::string>()));
+  return keys;
+}
+
 bool SetupStore::update(std::int64_t expected_revision, const Json &settings) {
   validate_settings(settings);
   std::lock_guard lock(mutex_);

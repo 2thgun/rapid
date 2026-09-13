@@ -23,6 +23,7 @@ public:
                      const std::string &key, double created_at);
   bool revoke_peer(const std::string &id);
   Json peers();
+  std::vector<std::string> peer_keys();
 };
 
 // Only public setup information; never serialize the persistent document into

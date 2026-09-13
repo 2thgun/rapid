@@ -180,6 +180,8 @@ int main(int argc, char **argv) {
       require(store.snapshot() == initial, "restart preserves identity and state");
       require(store.remember_peer(std::string(32, 'a'), "Driver laptop", std::string(64, 'b'), 1.0),
               "first paired PC is persisted");
+      require(store.peer_keys().size() == 1 && store.peer_keys()[0].size() == 32,
+              "private paired telemetry key is available to the runtime only");
       const auto peers = store.peers();
       require(peers.size() == 1 && peers[0]["label"] == "Driver laptop" &&
                   !peers[0].contains("key"),
