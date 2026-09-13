@@ -1,10 +1,11 @@
 # Current handoff
 
-Published source through `b29fda7` adds first-boot AP onboarding, physical
+Published source through `9880289` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
 only `rapid-home`, bounds its connection attempt and restores the setup AP on
-failure. Native test execution and hardware acceptance remain pending. Rotation,
+failure. The ARM64 native Release suite and package verifier pass; hardware
+acceptance remains pending. Rotation,
 calibration and the full pairing flow are still unapplied. Do not deploy this
 work yet.
 The documentation audit checkpoint `b5a199e` passed hosted verification in
@@ -18,8 +19,10 @@ AP provisioning, physical token display and applied Wi-Fi have since been
 implemented in source but remain unverified on hardware. Display settings,
 calibration and companion pairing remain incomplete.
 
-Verification: all nine isolated Pi Release CTests passed, including HTTP
-enrollment/login/settings; browser syntax and graph regressions passed.
+Verification: all ten isolated Pi Release CTests passed, including HTTP
+enrollment/login/settings, v4, pairing, network delivery and recorder recovery;
+the generated ARM64 preview package passed its contents/dependency/conffile
+verifier. Browser syntax and graph regressions passed.
 Hosted Windows companion/MSI and Linux Debug/Release verification passed:
 https://github.com/2thgun/rapid/actions/runs/34716119927
 
@@ -59,11 +62,11 @@ retaining `dpkg-deb` as the real package-build default.
 Demo review, 2026-09-13: the companion saved one 12.5-minute ACC recording
 while the Pi split it into five finalized bundles after brief packet silences.
 The Pi retained and published received telemetry; this was recorder
-fragmentation, not loss of the final laps. The next unpublished source change
-keeps the dashboard's 1.5-second disconnect indication but retains the spool
-and session identity for ten seconds, unless an explicit non-driving status
-arrives. Its `rapid-native-tests` regression passed in the isolated ARM64 Pi
-Release staging build. The live Pi remains untouched. The Codex sandbox account
+fragmentation, not loss of the final laps. Published source keeps the
+dashboard's 1.5-second disconnect indication but retains the spool and session
+identity for ten seconds, unless an explicit non-driving status arrives. The
+same release also reports queued settings application and preserves v4 wire
+session IDs while idle. The live Pi remains untouched. The Codex sandbox account
 was denied access to `\\rapid\Telemetry` under its `valid users = rapid` Samba
 configuration, so validate the user's Explorer credentials and refresh behavior
 before claiming network-folder acceptance.
