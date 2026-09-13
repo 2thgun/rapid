@@ -44,6 +44,7 @@ std::string PairingWindow::verification_code(
 
 void PairingWindow::open(double now) {
   if (!std::isfinite(now)) throw std::invalid_argument("invalid pairing clock");
+  window_open_ = true;
   window_expires_at_ = now + 120;
   failures_ = 0;
   pending_.reset();
@@ -51,12 +52,14 @@ void PairingWindow::open(double now) {
 
 void PairingWindow::cancel() {
   pending_.reset();
+  window_open_ = false;
   window_expires_at_ = 0;
   failures_ = 0;
 }
 
 bool PairingWindow::open(double now) const {
-  return std::isfinite(now) && now <= window_expires_at_ && failures_ < 5;
+  return window_open_ && std::isfinite(now) && now <= window_expires_at_ &&
+      failures_ < 5;
 }
 
 void PairingWindow::fail(double now) {
