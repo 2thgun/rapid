@@ -174,6 +174,13 @@ int main() {
     response = Json::parse(auth.handle(settings).body);
     require(response["application"]["hostname_applied"] == true,
             "matching root application result is available to the authenticated owner");
+    auto retry = request("/api/v1/settings/retry", "POST", {{"revision", 8}});
+    retry.headers["cookie"] = session_cookie;
+    require(auth.handle(retry).status == 403, "settings retry requires CSRF token");
+    retry.headers["x-csrf-token"] = credentials["csrf_token"].get<std::string>();
+    require(auth.handle(retry).status == 202 && fs::is_regular_file(apply_directory / "request.json"),
+            "owner can retry the current settings application without changing its revision");
+    fs::remove(apply_directory / "request.json");
     atomic_file(apply_result, Json{{"revision", 7}, {"hostname_applied", true}}.dump());
     response = Json::parse(auth.handle(settings).body);
     require(!response.contains("application"),

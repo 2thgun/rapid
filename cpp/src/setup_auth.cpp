@@ -201,6 +201,28 @@ Response SetupAuth::handle(const Request &request) {
     } catch (const std::exception &) {}
     return reply(200, response);
   }
+  if (path == "/api/v1/settings/retry" && request.method == "POST") {
+    if (!equal(header(request, "x-csrf-token"), session->second.csrf))
+      return reply(403, {{"detail", "invalid CSRF token"}});
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || body.size() != 1 || !body.contains("revision") ||
+        !body["revision"].is_number_integer())
+      return reply(400, {{"detail", "revision required"}});
+    const auto state = store_.snapshot();
+    if (body["revision"] != state.at("revision"))
+      return reply(409, {{"detail", "settings changed; reload and try again"},
+                         {"revision", state.at("revision")}});
+    if (apply_request_file_.empty())
+      return reply(503, {{"detail", "settings application is unavailable"}});
+    try {
+      atomic_file(apply_request_file_,
+                  Json{{"revision", state.at("revision")},
+                       {"settings", state.at("settings")}}.dump());
+    } catch (const std::exception &) {
+      return reply(503, {{"detail", "settings application queue is unavailable"}});
+    }
+    return reply(202, {{"revision", state.at("revision")}, {"queued", true}});
+  }
   if (path == "/api/v1/peers" && request.method == "GET")
     return reply(200, {{"peers", store_.peers()}});
   if (path == "/api/v1/peers/revoke" && request.method == "POST") {

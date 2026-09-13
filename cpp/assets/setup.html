@@ -43,6 +43,7 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <label for="rotation">Orientation</label>
 <select id="rotation"><option value="0">Landscape</option><option value="180">Upside-down landscape</option></select>
 <button id="save-settings" type="submit">Save and apply hostname</button>
+<button id="retry-settings" type="button" hidden>Retry failed hostname application</button>
 </form>
 <dl><dt>Startup preference</dt><dd>Saved Wi-Fi, then access point</dd></dl>
 <p>Saving applies the device name shortly after submission. Orientation is saved only until its preview and rollback flow is available. Wi-Fi joining is coming next.</p>
@@ -107,9 +108,21 @@ async function showProfile() {
   document.getElementById('rotation').value = String(data.settings.rotation);
   document.getElementById('login').hidden = true;
   document.getElementById('profile').hidden = false;
+  document.getElementById('retry-settings').hidden =
+    !(data.application && data.application.hostname_applied === false);
   await showPeers();
   return data;
 }
+document.getElementById('retry-settings').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await api('/api/v1/settings/retry', 'POST', {revision});
+    message.textContent = 'Retry queued. The device name is being applied.';
+    await waitForHostnameApplication(revision);
+  } catch (error) { message.textContent = error.message; }
+  finally { button.disabled = false; }
+});
 
 async function showPeers() {
   const container = document.getElementById('peers');
