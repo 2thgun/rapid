@@ -12,6 +12,25 @@ struct PendingPairing {
   bool approved = false;
 };
 
+struct PairingEnvelope {
+  std::string ephemeral_public_key, nonce, ciphertext, tag;
+};
+
+struct SealedPairingKey {
+  std::string telemetry_key;
+  PairingEnvelope envelope;
+};
+
+SealedPairingKey seal_pairing_key(const std::string &device_id,
+                                  const std::string &transaction_id,
+                                  const std::string &nonce,
+                                  const std::string &companion_public_key);
+std::string open_pairing_key(const std::string &device_id,
+                             const std::string &transaction_id,
+                             const std::string &nonce,
+                             const std::string &companion_private_key,
+                             const PairingEnvelope &envelope);
+
 class PairingWindow {
   std::string device_id_, certificate_fingerprint_;
   double window_expires_at_ = 0;

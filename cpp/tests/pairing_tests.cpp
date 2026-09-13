@@ -1,9 +1,27 @@
 #include "rapid/pairing.hpp"
 #include <iostream>
+#include <iomanip>
+#include <openssl/evp.h>
+#include <sstream>
 
 using namespace rapid::native;
 void require(bool value, const char *message) {
   if (!value) throw std::runtime_error(message);
+}
+std::string derive_public_key(const std::string &private_hex) {
+  std::string bytes(32, '\0');
+  for (std::size_t i = 0; i < 32; ++i)
+    bytes[i] = static_cast<char>(std::stoi(private_hex.substr(i * 2, 2), nullptr, 16));
+  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr,
+      reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size());
+  std::string result(32, '\0'); std::size_t size = result.size();
+  require(key && EVP_PKEY_get_raw_public_key(key, reinterpret_cast<unsigned char *>(result.data()), &size) > 0,
+          "derive test X25519 public key");
+  EVP_PKEY_free(key);
+  std::ostringstream out;
+  for (unsigned char byte : result)
+    out << std::hex << std::setw(2) << std::setfill('0') << int(byte);
+  return out.str();
 }
 int main() {
   try {
@@ -14,6 +32,19 @@ int main() {
                 code == PairingWindow::verification_code(device, certificate,
                     std::string(32, 'd'), std::string(32, 'e'), public_key),
             "verification code is deterministic and eight numeric digits");
+    const std::string private_key(64, '1');
+    const auto sealed = seal_pairing_key(device, std::string(32, 'd'),
+                                         std::string(32, 'e'), derive_public_key(private_key));
+    require(sealed.telemetry_key.size() == 64 && sealed.envelope.tag.size() > 0 &&
+                open_pairing_key(device, std::string(32, 'd'), std::string(32, 'e'),
+                                 private_key, sealed.envelope) == sealed.telemetry_key,
+            "X25519 HKDF AES-GCM pairing envelope round trips");
+    auto tampered = sealed.envelope;
+    tampered.ciphertext[0] = tampered.ciphertext[0] == 'A' ? 'B' : 'A';
+    bool rejected = false;
+    try { (void)open_pairing_key(device, std::string(32, 'd'), std::string(32, 'e'), private_key, tampered); }
+    catch (const std::exception &) { rejected = true; }
+    require(rejected, "tampered pairing envelope is rejected");
     PairingWindow window(device, certificate);
     require(!window.active(0), "pairing starts physically closed");
     window.open(10);
