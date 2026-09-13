@@ -158,6 +158,14 @@ int main(int argc, char **argv) {
     require(!wrong.receive(metadata, "127.0.0.1"), "wrong key rejected");
     require(wrong.snapshot()["packets_auth_failed"] == 1,
             "authentication counter");
+    Config paired = c;
+    paired.database = root / "paired-keys.db";
+    paired.telemetry = root / "paired-keys-telemetry";
+    paired.companion_keys = {telemetry_key(std::string(64, '1')),
+                             telemetry_key(std::string(64, '4'))};
+    Runtime paired_runtime(paired);
+    require(paired_runtime.receive(metadata, "127.0.0.1"),
+            "one paired key accepts its own Windows v4 packet");
     std::cout << "Windows v4 fixtures: authentication, state, recording, "
                  "replay persistence passed\n";
     return 0;
