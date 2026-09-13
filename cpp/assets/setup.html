@@ -47,6 +47,7 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <dl><dt>Startup preference</dt><dd>Saved Wi-Fi, then access point</dd></dl>
 <p>Saving applies the device name shortly after submission. Orientation is saved only until its preview and rollback flow is available. Wi-Fi joining is coming next.</p>
 <form id="wifi-form"><label for="wifi-ssid">Home Wi-Fi name</label><input id="wifi-ssid" required maxlength="32" autocomplete="off"><label for="wifi-password">Home Wi-Fi password</label><input id="wifi-password" type="password" required minlength="8" maxlength="64" autocomplete="new-password"><button id="join-wifi" type="submit">Join Home Wi-Fi</button></form>
+<h3>Remembered PCs</h3><div id="peers">No paired PCs.</div>
 <button id="sign-out" type="button">Sign out</button>
 </section>
 <script>
@@ -106,7 +107,27 @@ async function showProfile() {
   document.getElementById('rotation').value = String(data.settings.rotation);
   document.getElementById('login').hidden = true;
   document.getElementById('profile').hidden = false;
+  await showPeers();
   return data;
+}
+
+async function showPeers() {
+  const container = document.getElementById('peers');
+  const data = await api('/api/v1/peers');
+  container.replaceChildren();
+  if (!data.peers.length) { container.textContent = 'No paired PCs.'; return; }
+  for (const peer of data.peers) {
+    const row = document.createElement('p');
+    const revoke = document.createElement('button');
+    revoke.type = 'button'; revoke.textContent = 'Revoke ' + peer.label;
+    revoke.addEventListener('click', async () => {
+      revoke.disabled = true;
+      try { await api('/api/v1/peers/revoke', 'POST', {id: peer.id}); await showPeers(); message.textContent = 'Paired PC revoked.'; }
+      catch (error) { message.textContent = error.message; revoke.disabled = false; }
+    });
+    row.textContent = peer.label + ' (' + peer.id.slice(0, 8) + ') ';
+    row.appendChild(revoke); container.appendChild(row);
+  }
 }
 
 async function waitForHostnameApplication(targetRevision) {
