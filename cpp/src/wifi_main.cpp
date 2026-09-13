@@ -17,6 +17,10 @@ bool printable(const std::string &text) {
   return true;
 }
 
+bool hexadecimal(const std::string &text) {
+  return text.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
+}
+
 void run(const fs::path &program, const std::vector<std::string> &arguments, bool required = true) {
   const auto child = fork();
   if (child < 0) throw std::runtime_error("cannot start NetworkManager command");
@@ -59,7 +63,9 @@ int main(int argc, char **argv) {
     revision = request["revision"].get<std::int64_t>();
     const auto ssid = request["ssid"].get<std::string>(), password = request["password"].get<std::string>();
     require(!ssid.empty() && ssid.size() <= 32 && printable(ssid), "invalid Wi-Fi SSID");
-    require(password.size() >= 8 && password.size() <= 63 && printable(password), "invalid Wi-Fi password");
+    require(password.size() >= 8 && printable(password) &&
+                (password.size() <= 63 || (password.size() == 64 && hexadecimal(password))),
+            "invalid Wi-Fi password");
     require(fs::is_regular_file(nmcli) && ::access(nmcli.c_str(), X_OK) == 0, "nmcli is unavailable");
     // Recreate one fixed profile. No browser-provided profile name or command is used.
     run(nmcli, {"connection", "delete", "rapid-home"}, false);

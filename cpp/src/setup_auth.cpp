@@ -206,7 +206,9 @@ Response SetupAuth::handle(const Request &request) {
       return reply(400, {{"detail", "revision, Wi-Fi name and password required"}});
     const auto ssid = body["ssid"].get<std::string>(), password = body["password"].get<std::string>();
     const auto printable = [](const std::string &value) { for (unsigned char c : value) if (c < 0x20 || c == 0x7f) return false; return true; };
-    if (ssid.empty() || ssid.size() > 32 || !printable(ssid) || password.size() < 8 || password.size() > 63 || !printable(password))
+    const bool hexadecimal = password.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
+    if (ssid.empty() || ssid.size() > 32 || !printable(ssid) || password.size() < 8 || !printable(password) ||
+        (password.size() > 63 && (password.size() != 64 || !hexadecimal)))
       return reply(400, {{"detail", "invalid Wi-Fi name or password"}});
     const auto state = store_.snapshot();
     if (body["revision"] != state.at("revision"))
