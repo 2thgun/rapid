@@ -179,6 +179,10 @@ int main(int argc, char **argv) {
     paired_runtime.replace_paired_keys({});
     require(!paired_runtime.receive(metadata, "127.0.0.1"),
             "revoking every paired key rejects future packets without fallback");
+    require(!paired_runtime.receive(
+                "{\"version\":3,\"type\":\"status\",\"state\":\"waiting\"}",
+                "127.0.0.1"),
+            "revoked paired mode rejects unauthenticated v3 fallback");
     std::cout << "Windows v4 fixtures: authentication, state, recording, "
                  "replay persistence passed\n";
     return 0;

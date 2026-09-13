@@ -132,7 +132,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
           (ip >> 20) == 0xac1 || (ip >> 16) == 0xa9fe))
       return false;
     const bool v4 = payload.starts_with("RPD4");
-    if (!v4 && !config_.companion_key.empty())
+    if (!v4 && (config_.paired_key_mode || !config_.companion_key.empty()))
       throw AuthenticationError("unauthenticated telemetry disabled");
     const std::vector<std::string> keys = config_.paired_key_mode
         ? paired_keys_

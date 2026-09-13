@@ -77,6 +77,10 @@ non-finite timestamp rejection. An exact-path ARM64 Release rebuild passed all
 ten CTests in 16.83 seconds. This store helper still needs production pairing
 integration before it represents a complete reconnect flow. Pairing-window approval comparison is now
 constant-time; the corrected ARM64 gate passed all ten tests in 16.74 seconds.
+Paired-key mode also rejects v3 packets when its active key set is empty, so
+revoking the last remembered PC cannot reopen unauthenticated telemetry. That
+fix is documented in wiki commit `5e6b471` and verified by the 16.92-second
+ARM64 ten-test gate.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
