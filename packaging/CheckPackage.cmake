@@ -1,7 +1,10 @@
 if(NOT EXISTS "${PACKAGE}")
   message(FATAL_ERROR "Pass -DPACKAGE=/absolute/path/to/rapid.deb")
 endif()
-execute_process(COMMAND dpkg-deb --contents "${PACKAGE}" OUTPUT_VARIABLE contents
+if(NOT DEFINED DPKG_DEB)
+  set(DPKG_DEB dpkg-deb)
+endif()
+execute_process(COMMAND "${DPKG_DEB}" --contents "${PACKAGE}" OUTPUT_VARIABLE contents
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "Cannot inspect package")
@@ -37,7 +40,7 @@ if(contents MATCHES "[.]key\n|[.]db\n|runtime[.]env\n|/home/rapid/|/usr/etc/")
   message(FATAL_ERROR "Package contains private state or invalid installation paths")
 endif()
 set(data_tar "${PACKAGE}.data.tar")
-execute_process(COMMAND dpkg-deb --fsys-tarfile "${PACKAGE}" OUTPUT_FILE "${data_tar}"
+execute_process(COMMAND "${DPKG_DEB}" --fsys-tarfile "${PACKAGE}" OUTPUT_FILE "${data_tar}"
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "Cannot inspect packaged service definitions")
@@ -71,12 +74,12 @@ if(NOT setup_service MATCHES "User=rapid" OR
    NOT setup_service MATCHES "--enrollment-token-file /var/lib/rapid-setup/enrollment[.]token")
   message(FATAL_ERROR "Setup service must use the generated rapid-owned AP state and fixed listener")
 endif()
-execute_process(COMMAND dpkg-deb --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
+execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0 OR NOT dependencies MATCHES "libargon2" OR NOT dependencies MATCHES "libqt6core")
   message(FATAL_ERROR "Missing generated runtime library dependencies")
 endif()
-execute_process(COMMAND dpkg-deb --ctrl-tarfile "${PACKAGE}" OUTPUT_FILE "${PACKAGE}.control.tar"
+execute_process(COMMAND "${DPKG_DEB}" --ctrl-tarfile "${PACKAGE}" OUTPUT_FILE "${PACKAGE}.control.tar"
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "Cannot inspect package control files")

@@ -1,6 +1,6 @@
 # Current handoff
 
-Published source through `4077e2b` adds first-boot AP onboarding, physical
+Published source through `0b6308e` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
 only `rapid-home`, bounds its connection attempt and restores the setup AP on
@@ -46,6 +46,8 @@ The package verifier also inspects the installed first-boot, AP-provisioning and
 setup service definitions. It rejects a package unless private setup state is
 created by `rapid`, only the NetworkManager provisioner runs as root, and the
 setup listener/token paths match the fixed bootstrap contract.
+The verifier accepts an explicit `DPKG_DEB` path for its test harness while
+retaining `dpkg-deb` as the real package-build default.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
