@@ -1,6 +1,6 @@
 # Current handoff
 
-Published source through `171171d` adds first-boot AP onboarding, physical
+Published source through `a694da8` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
 only `rapid-home`, bounds its connection attempt and restores the setup AP on
@@ -8,6 +8,7 @@ failure. The ARM64 native Release suite and package verifier pass; hardware
 acceptance remains pending. Rotation,
 calibration and the full pairing flow are still unapplied. Do not deploy this
 work yet.
+The latest wiki verification record is `e2cc4ed`.
 The documentation audit checkpoint `b5a199e` passed hosted verification in
 run `34716780316`. All open issues remain open against their full acceptance
 criteria; #7 has its source fix but still requires real AC1/ACC evidence.
