@@ -42,6 +42,13 @@ The paired-replay source change keeps key namespaces strictly inside the replay
 database. Dashboard and recording session IDs remain the raw 32-digit wire ID,
 avoiding a derived key fingerprint in application-visible state.
 
+An internal pairing-window state machine now creates random transaction/nonce
+pairs and derives deterministic eight-digit comparison codes. It enforces one
+pending request, a two-minute window, cancellation, five failures and one-time
+approval consumption. It is not an HTTP endpoint or a customer pairing flow:
+certificate transport, X25519/AES envelope, panel approval and Windows DPAPI
+storage still remain.
+
 The package verifier also inspects the installed first-boot, AP-provisioning and
 setup service definitions. It rejects a package unless private setup state is
 created by `rapid`, only the NetworkManager provisioner runs as root, and the
