@@ -1,6 +1,6 @@
 # Current handoff
 
-Published source through `9880289` adds first-boot AP onboarding, physical
+Published source through `171171d` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
 only `rapid-home`, bounds its connection attempt and restores the setup AP on
