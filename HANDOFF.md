@@ -96,8 +96,9 @@ consumes an approved request, stores its generated telemetry key privately and
 returns the envelope once; this core integration is covered by the 16.80-second
 ARM64 gate. See wiki evidence `dc2524e`.
 
-Next: implement pairing records/approval and Windows handshake, then display
-rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
+Next: wire the pairing coordinator to authenticated HTTPS, panel approval and
+the Windows DPAPI handshake, then implement display rotation/calibration
+recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
 
 Initialize pinned documentation with `git submodule update --init --recursive`,
