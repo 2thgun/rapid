@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
     }
     std::cout << provisioning_status(store.snapshot(), owner_configured).dump() << '\n';
     log("INFO firstboot: provisioning state is " + status.at("state").get<std::string>() +
-        "; AP profile creation and physical display remain pending");
+        "; bootstrap details are available only to the local provisioner and panel");
     return 0;
   } catch (const std::exception &error) {
     log(std::string("ERROR firstboot: ") + error.what());
