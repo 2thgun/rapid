@@ -71,9 +71,10 @@ was denied access to `\\rapid\Telemetry` under its `valid users = rapid` Samba
 configuration, so validate the user's Explorer credentials and refresh behavior
 before claiming network-folder acceptance.
 
-The local unpublished peer-store edit proposes idempotent reconnect records and
-non-finite timestamp rejection, but it has not yet passed an exact-path ARM64
-build and is not release evidence. Pairing-window approval comparison is now
+The published peer-store edit provides idempotent reconnect records and
+non-finite timestamp rejection. An exact-path ARM64 Release rebuild passed all
+ten CTests in 16.83 seconds. This store helper still needs production pairing
+integration before it represents a complete reconnect flow. Pairing-window approval comparison is now
 constant-time; the corrected ARM64 gate passed all ten tests in 16.74 seconds.
 
 Next: implement pairing records/approval and Windows handshake, then display
