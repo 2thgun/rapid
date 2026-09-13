@@ -21,6 +21,8 @@ int main() {
     require(window.pending(11)->code == pending.code && !window.approve(pending.transaction_id,
                 "00000000", 11) && window.pending(11),
             "only the displayed transaction code approves");
+    require(window.pending(11).has_value(),
+            "wrong verification code leaves pending material available");
     for (int i = 0; i < 4; ++i)
       require(!window.approve(pending.transaction_id, "00000000", 12 + i),
               "failed approval is bounded");

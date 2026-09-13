@@ -71,10 +71,10 @@ was denied access to `\\rapid\Telemetry` under its `valid users = rapid` Samba
 configuration, so validate the user's Explorer credentials and refresh behavior
 before claiming network-folder acceptance.
 
-Peer-store reconnect recovery is now idempotent: an existing paired-PC identity
-refreshes its label, key and last-seen timestamp without consuming another slot;
-non-finite timestamps are rejected. The verified change is documented in wiki
-commit `7f97025`.
+The local unpublished peer-store edit proposes idempotent reconnect records and
+non-finite timestamp rejection, but it has not yet passed an exact-path ARM64
+build and is not release evidence. Pairing-window approval comparison is now
+constant-time; the corrected ARM64 gate passed all ten tests in 16.74 seconds.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks

@@ -10,6 +10,10 @@ bool lower_hex(const std::string &value, std::size_t length) {
   return value.size() == length &&
       value.find_first_not_of("0123456789abcdef") == std::string::npos;
 }
+bool secret_equal(const std::string &left, const std::string &right) {
+  return left.size() == right.size() &&
+      CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
+}
 void valid_label(const std::string &label) {
   if (label.empty() || label.size() > 64 ||
       label.find_first_of("\r\n") != std::string::npos ||
@@ -107,7 +111,7 @@ PendingPairing PairingWindow::request(const std::string &label,
 bool PairingWindow::approve(const std::string &transaction_id,
                             const std::string &code, double now) {
   if (!pending_ || pending_->approved || !active(now) || now > pending_->expires_at ||
-      transaction_id != pending_->transaction_id || code != pending_->code) {
+      transaction_id != pending_->transaction_id || !secret_equal(code, pending_->code)) {
     fail(now, false);
     return false;
   }
