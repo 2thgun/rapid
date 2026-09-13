@@ -125,6 +125,22 @@ async function waitForHostnameApplication(targetRevision) {
   }
   message.textContent = 'Profile saved. The device name is still waiting to be applied.';
 }
+async function waitForWifiApplication(targetRevision) {
+  for (let attempt = 0; attempt < 70; ++attempt) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const profile = await showProfile();
+    if (profile.revision !== targetRevision) return;
+    if (profile.wifi && profile.wifi.connected === true) {
+      message.textContent = 'Home Wi-Fi connected. Reopen setup at the device address if this access point disconnects.';
+      return;
+    }
+    if (profile.wifi && profile.wifi.connected === false) {
+      message.textContent = 'Home Wi-Fi could not connect. The setup access point has been restored.';
+      return;
+    }
+  }
+  message.textContent = 'Home Wi-Fi is still being checked. The setup access point remains available if it fails.';
+}
 document.getElementById('login-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = document.getElementById('sign-in');
@@ -171,6 +187,7 @@ document.getElementById('wifi-form').addEventListener('submit', async event => {
     await api('/api/v1/wifi', 'POST', {revision, ssid: document.getElementById('wifi-ssid').value, password: password.value});
     password.value = '';
     message.textContent = 'Joining Home Wi-Fi. The setup access point returns if it cannot connect.';
+    await waitForWifiApplication(revision);
   } catch (error) { message.textContent = error.message; }
   finally { password.value = ''; button.disabled = false; }
 });
