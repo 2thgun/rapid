@@ -1,6 +1,6 @@
 # Current handoff
 
-Published source through `219868d` adds first-boot AP onboarding, physical
+Published source through `b29fda7` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
 only `rapid-home`, bounds its connection attempt and restores the setup AP on
@@ -55,6 +55,18 @@ created by `rapid`, only the NetworkManager provisioner runs as root, and the
 setup listener/token paths match the fixed bootstrap contract.
 The verifier accepts an explicit `DPKG_DEB` path for its test harness while
 retaining `dpkg-deb` as the real package-build default.
+
+Demo review, 2026-09-13: the companion saved one 12.5-minute ACC recording
+while the Pi split it into five finalized bundles after brief packet silences.
+The Pi retained and published received telemetry; this was recorder
+fragmentation, not loss of the final laps. The next unpublished source change
+keeps the dashboard's 1.5-second disconnect indication but retains the spool
+and session identity for ten seconds, unless an explicit non-driving status
+arrives. Its `rapid-native-tests` regression passed in the isolated ARM64 Pi
+Release staging build. The live Pi remains untouched. Windows access to
+`\\rapid\Telemetry` was denied under the current Samba `valid users = rapid`
+configuration, so validate or redesign the share credentials before claiming
+network-folder acceptance.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks

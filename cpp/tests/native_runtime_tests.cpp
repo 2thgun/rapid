@@ -78,9 +78,12 @@ int main(int argc, char **argv) {
       require(!live.receive(sample(1).dump(), "127.0.0.1"), "replayed sample rejected");
       live.expire();
       require(live.snapshot()["companion_connected"] == false &&
-                  live.snapshot()["recording"] == false,
-              "replayed sample cannot extend connection lifetime");
+                  live.snapshot()["recording"] == true,
+              "brief disconnect leaves the recorder available for resumption");
       require(live.receive(sample(2).dump(), "127.0.0.1"), "reconnect after expiry");
+      require(live.snapshot()["recorded_samples"] == 3 &&
+                  live.snapshot()["last_bundle_path"].is_null(),
+              "resumed telemetry continues the existing recording");
       heartbeat["state"] = "ready";
       require(live.receive(heartbeat.dump(), "127.0.0.1"), "ready heartbeat");
       require(live.snapshot()["telemetry_fresh"] == false &&

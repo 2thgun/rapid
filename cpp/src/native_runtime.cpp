@@ -256,6 +256,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     if (type == "status") {
       if (daemon != "driving") {
         recorder_.finish();
+        last_recording_packet_ = 0;
         last_sample_ = 0;
         state_["session_active"] = false;
         session_.clear();
@@ -304,6 +305,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     state_["rpm"] = int(number(frame, "rpm"));
     state_["samples_received"] = number(state_, "samples_received") + 1;
     last_sample_ = monotonic();
+    last_recording_packet_ = last_sample_;
     state_["schema_version"] = v4 ? 4 : version;
     if (v4) state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
     state_["last_sequence"] = sequence < 0 ? Json() : Json(sequence);
@@ -346,8 +348,12 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
 }
 void Runtime::expire() {
   std::lock_guard lock(mutex_);
-  if (last_packet_ && monotonic() - last_packet_ > 1.5) {
-    recorder_.finish("disconnected");
+  const auto timestamp = monotonic();
+  // The live dashboard must show a broken connection promptly, but closing a
+  // recording after the same short interval fragments a lap when Wi-Fi pauses.
+  // A proper non-driving status still finalizes immediately above.  Otherwise
+  // retain the durable spool for a bounded interval so the sender can resume.
+  if (last_packet_ && timestamp - last_packet_ > 1.5) {
     for (const auto *key :
          {"rpm", "steering_angle", "g_x", "g_y", "g_z", "throttle", "brake",
           "companion_daemon_state", "companion_source_host"})
@@ -358,16 +364,21 @@ void Runtime::expire() {
     state_["session_ended_at"] = now();
     last_packet_ = 0;
     last_sample_ = 0;
-    sequence_ = -1;
-    session_.clear();
     if (!state_.value("acc_connected", false))
       state_["simulator"] = nullptr;
     source_ = config_.companion_host;
+  }
+  if (last_recording_packet_ && timestamp - last_recording_packet_ > 10.0) {
+    recorder_.finish("disconnected");
+    last_recording_packet_ = 0;
+    sequence_ = -1;
+    session_.clear();
   }
 }
 void Runtime::finish() {
   std::lock_guard lock(mutex_);
   recorder_.finish("shutdown");
+  last_recording_packet_ = 0;
 }
 Json Runtime::snapshot() const {
   std::lock_guard lock(mutex_);
