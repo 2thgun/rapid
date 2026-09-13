@@ -1,6 +1,6 @@
 # Current handoff
 
-Published source through `b441036` adds first-boot AP onboarding, physical
+Published source through `146f8f0` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
 only `rapid-home`, bounds its connection attempt and restores the setup AP on
@@ -44,8 +44,8 @@ avoiding a derived key fingerprint in application-visible state.
 
 An internal pairing-window state machine now creates random transaction/nonce
 pairs and derives deterministic eight-digit comparison codes. It enforces one
-pending request, a two-minute window, cancellation, five failures and one-time
-approval consumption. It is not an HTTP endpoint or a customer pairing flow:
+pending request, a two-minute window, cancellation, five retries against the
+same request and one-time approval consumption. It is not an HTTP endpoint or a customer pairing flow:
 certificate transport, X25519/AES envelope, panel approval and Windows DPAPI
 storage still remain.
 
