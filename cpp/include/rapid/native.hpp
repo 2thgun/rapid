@@ -49,6 +49,8 @@ struct AuthenticationError : std::runtime_error {
 Json receive_v4(Database &store, const std::string &payload,
                 const std::string &key);
 Json receive_v4(Database &store, const std::string &payload,
+                const std::string &key, const std::string &peer_namespace);
+Json receive_v4(Database &store, const std::string &payload,
                 const std::vector<std::string> &keys);
 
 struct Config {

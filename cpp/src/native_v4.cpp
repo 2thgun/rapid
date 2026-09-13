@@ -103,6 +103,11 @@ std::string telemetry_key(std::string hex) {
 
 Json receive_v4(Database &store, const std::string &bytes,
                 const std::string &key) {
+  return receive_v4(store, bytes, key, {});
+}
+
+Json receive_v4(Database &store, const std::string &bytes,
+                const std::string &key, const std::string &peer_namespace) {
   if (key.size() != 32 || bytes.size() < 84 || bytes.size() > 4096)
     throw AuthenticationError(
         "v4 authentication unavailable or invalid packet length");
@@ -137,6 +142,9 @@ Json receive_v4(Database &store, const std::string &bytes,
     id += hex[c >> 4];
     id += hex[c & 15];
   }
+  // Pair-specific storage prevents one trusted PC's sequence watermark from
+  // rejecting another PC that happens to use the same random run identifier.
+  id = peer_namespace + id;
   const char *simulators[] = {"", "ACC", "AC", "ACE", "iRacing"};
   Json message = {{"version", 3},
                   {"_wire_version", 4},
@@ -260,7 +268,7 @@ Json receive_v4(Database &store, const std::string &bytes,
 Json receive_v4(Database &store, const std::string &bytes,
                 const std::vector<std::string> &keys) {
   for (const auto &key : keys) {
-    try { return receive_v4(store, bytes, key); }
+    try { return receive_v4(store, bytes, key, hash_text(key) + ":"); }
     catch (const AuthenticationError &) {}
   }
   throw AuthenticationError("v4 authentication failed for every paired PC");
