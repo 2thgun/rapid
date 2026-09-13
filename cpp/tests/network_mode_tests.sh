@@ -5,6 +5,14 @@ set -eu
 worker_functions=$(sed '/^# A boot resumes/,$d' "$1")
 eval "$worker_functions"
 
+# The future authenticated Wi-Fi applicator owns rapid-home. It must take
+# precedence over incidental saved profiles when no deployment override exists.
+(
+  RAPID_HOME_CONNECTION=
+  nmcli() { printf '%s\n' 'other:802-11-wireless' 'rapid-home:802-11-wireless'; }
+  test "$(home_connection)" = rapid-home
+)
+
 check() (
   scenario=$1
   requested=$2

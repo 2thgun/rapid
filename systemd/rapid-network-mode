@@ -14,6 +14,14 @@ home_connection() {
     printf '%s\n' "$RAPID_HOME_CONNECTION"
     return
   fi
+  # The privileged onboarding service owns this fixed profile name. Prefer it
+  # over unrelated historical wireless profiles without exposing its passphrase
+  # to this controller or its state file.
+  if nmcli -t -f NAME,TYPE connection show | awk -F: \
+    '$1 == "rapid-home" && $2 == "802-11-wireless" { found=1 } END { exit !found }'; then
+    printf '%s\n' rapid-home
+    return
+  fi
   nmcli -t -f NAME,TYPE connection show | awk -F: \
     '$2 == "802-11-wireless" && $1 != "'"$ap_connection"'" { print $1; exit }'
 }
