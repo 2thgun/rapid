@@ -134,7 +134,9 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     const bool v4 = payload.starts_with("RPD4");
     if (!v4 && !config_.companion_key.empty())
       throw AuthenticationError("unauthenticated telemetry disabled");
-    auto m = v4 ? receive_v4(store_, payload, config_.companion_key) : Json::parse(payload);
+    const std::vector<std::string> keys = config_.companion_keys.empty()
+        ? std::vector<std::string>{config_.companion_key} : config_.companion_keys;
+    auto m = v4 ? receive_v4(store_, payload, keys) : Json::parse(payload);
     if (!m.is_object())
       throw std::runtime_error("packet must be an object");
     if (!v4) m.erase("_packet_gap");

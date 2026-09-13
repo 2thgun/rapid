@@ -272,8 +272,12 @@ int main(int argc, char **argv) {
     rejects([&] { (void)Config::load(config); }, "packaged runtime refuses missing authentication key");
     setenv("RAPID_COMPANION_KEY", std::string(64, '1').c_str(), 1);
     require(Config::load(config).companion_key.size() == 32, "packaged runtime accepts configured v4 key");
-    unsetenv("RAPID_REQUIRE_V4");
     unsetenv("RAPID_COMPANION_KEY");
+    setenv("RAPID_COMPANION_KEYS", (std::string(64, '2') + "," + std::string(64, '3')).c_str(), 1);
+    require(Config::load(config).companion_keys.size() == 2,
+            "packaged runtime accepts a bounded paired-key set");
+    unsetenv("RAPID_COMPANION_KEYS");
+    unsetenv("RAPID_REQUIRE_V4");
     std::cout << "setup persistence, validation, isolation and recovery tests passed\n";
     return 0;
   } catch (const std::exception &error) {

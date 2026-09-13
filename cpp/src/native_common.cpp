@@ -214,7 +214,19 @@ Config Config::load(const fs::path &path) {
                              c.companion_port);
   c.companion_host = text("app", "companion_host", "RAPID_COMPANION_HOST", "");
   c.companion_key = telemetry_key(text("app", "companion_key", "RAPID_COMPANION_KEY", ""));
-  if (boolean("app", "require_v4", "RAPID_REQUIRE_V4", false) && c.companion_key.empty())
+  const auto paired_keys = text("app", "companion_keys", "RAPID_COMPANION_KEYS", "");
+  std::size_t start = 0;
+  while (start < paired_keys.size()) {
+    const auto end = paired_keys.find(',', start);
+    const auto value = paired_keys.substr(start, end == std::string::npos ? end : end - start);
+    if (value.empty()) throw std::runtime_error("paired companion keys must be comma-separated hexadecimal keys");
+    c.companion_keys.push_back(telemetry_key(value));
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  if (c.companion_keys.size() > 16)
+    throw std::runtime_error("at most 16 paired companion keys are supported");
+  if (boolean("app", "require_v4", "RAPID_REQUIRE_V4", false) && c.companion_key.empty() && c.companion_keys.empty())
     throw std::runtime_error("authenticated v4 key required before runtime activation");
   c.database =
       text("app", "database_path", "RAPID_DATABASE_PATH", c.database.string());

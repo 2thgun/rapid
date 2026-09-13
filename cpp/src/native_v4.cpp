@@ -256,4 +256,13 @@ Json receive_v4(Database &store, const std::string &bytes,
   }
   return message;
 }
+
+Json receive_v4(Database &store, const std::string &bytes,
+                const std::vector<std::string> &keys) {
+  for (const auto &key : keys) {
+    try { return receive_v4(store, bytes, key); }
+    catch (const AuthenticationError &) {}
+  }
+  throw AuthenticationError("v4 authentication failed for every paired PC");
+}
 } // namespace rapid::native
