@@ -21,7 +21,8 @@ void valid_label(const std::string &label) {
 void PairingWindow::clear_pending() {
   if (!pending_) return;
   for (auto *value : {&pending_->transaction_id, &pending_->nonce,
-                      &pending_->companion_public_key, &pending_->code}) {
+                      &pending_->label, &pending_->companion_public_key,
+                      &pending_->code}) {
     OPENSSL_cleanse(value->data(), value->size());
     value->clear();
   }
