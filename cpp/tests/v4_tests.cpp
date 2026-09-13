@@ -163,6 +163,7 @@ int main(int argc, char **argv) {
     paired.telemetry = root / "paired-keys-telemetry";
     paired.companion_keys = {telemetry_key(std::string(64, '1')),
                              telemetry_key(std::string(64, '4'))};
+    paired.paired_key_mode = true;
     Runtime paired_runtime(paired);
     require(paired_runtime.receive(metadata, "127.0.0.1"),
             "one paired key accepts its own Windows v4 packet");
@@ -175,6 +176,9 @@ int main(int argc, char **argv) {
     require(paired_session.size() == 32 &&
                 paired_session.find(':') == std::string::npos,
             "paired v4 session ID remains the wire run ID");
+    paired_runtime.replace_paired_keys({});
+    require(!paired_runtime.receive(metadata, "127.0.0.1"),
+            "revoking every paired key rejects future packets without fallback");
     std::cout << "Windows v4 fixtures: authentication, state, recording, "
                  "replay persistence passed\n";
     return 0;

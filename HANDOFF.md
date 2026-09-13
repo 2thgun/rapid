@@ -34,11 +34,13 @@ watermarks separate. Private setup state now stores up to 16 paired-PC records;
 the owner can list key-free labels and revoke a record through the authenticated
 setup page. Runtime keys are loaded from that private store at startup. This is
 not a completed pairing flow: there is no graphical approved handshake, Windows
-DPAPI storage, physical approval, live key reload or verified revocation yet.
+DPAPI storage or physical approval yet. For an existing paired store, the Pi
+reloads its private key records at most one second after a change; removing the
+last record rejects packets rather than restoring a legacy shared key.
 
-The next unpublished source change keeps paired-key namespaces strictly inside
-the replay database. Dashboard and recording session IDs remain the raw 32-digit
-wire ID, avoiding a derived key fingerprint in application-visible state.
+The paired-replay source change keeps key namespaces strictly inside the replay
+database. Dashboard and recording session IDs remain the raw 32-digit wire ID,
+avoiding a derived key fingerprint in application-visible state.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks

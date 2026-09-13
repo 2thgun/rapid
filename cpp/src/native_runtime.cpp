@@ -54,7 +54,7 @@ Runtime::Runtime(Config config)
                        "CONFLICT(path) DO NOTHING",
                        {path.string(), double(std::time(nullptr))});
           }),
-      source_(config_.companion_host) {
+      source_(config_.companion_host), paired_keys_(config_.companion_keys) {
   store_.exec("CREATE TABLE IF NOT EXISTS v4_runs(id TEXT PRIMARY KEY,sequence INTEGER NOT NULL,time INTEGER NOT NULL,simulator INTEGER NOT NULL,metadata TEXT NOT NULL,closed INTEGER NOT NULL,active INTEGER NOT NULL)");
   store_.exec(
       "CREATE TABLE IF NOT EXISTS native_acc_packets(id INTEGER PRIMARY "
@@ -134,8 +134,11 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     const bool v4 = payload.starts_with("RPD4");
     if (!v4 && !config_.companion_key.empty())
       throw AuthenticationError("unauthenticated telemetry disabled");
-    const std::vector<std::string> keys = config_.companion_keys.empty()
-        ? std::vector<std::string>{config_.companion_key} : config_.companion_keys;
+    const std::vector<std::string> keys = config_.paired_key_mode
+        ? paired_keys_
+        : (config_.companion_keys.empty()
+               ? std::vector<std::string>{config_.companion_key}
+               : config_.companion_keys);
     auto m = v4 ? receive_v4(store_, payload, keys) : Json::parse(payload);
     if (!m.is_object())
       throw std::runtime_error("packet must be an object");
@@ -387,6 +390,11 @@ void Runtime::upload(bool enabled) {
 void Runtime::upload_state(const std::string &state) {
   std::lock_guard lock(mutex_);
   state_["upload_state"] = state;
+}
+void Runtime::replace_paired_keys(std::vector<std::string> keys) {
+  std::lock_guard lock(mutex_);
+  if (config_.paired_key_mode)
+    paired_keys_ = std::move(keys);
 }
 Json Runtime::events(std::uint64_t &cursor, int history) const {
   std::lock_guard lock(mutex_);

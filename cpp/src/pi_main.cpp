@@ -23,7 +23,10 @@ int main(int argc, char **argv) {
     if (!settings.setup_directory.empty()) {
       setup = std::make_unique<SetupStore>(settings.setup_directory);
       const auto paired_keys = setup->peer_keys();
-      if (!paired_keys.empty()) settings.companion_keys = paired_keys;
+      if (!paired_keys.empty()) {
+        settings.companion_keys = paired_keys;
+        settings.paired_key_mode = true;
+      }
     }
     Runtime runtime(settings);
     auto dashboard = read_file(settings.assets / "dashboard.html"),
@@ -50,6 +53,17 @@ int main(int argc, char **argv) {
       start([&] { acc_loop(runtime, settings); });
     if (settings.upload_enabled)
       start([&] { upload_loop(runtime, settings); });
+    if (settings.paired_key_mode)
+      start([&] {
+        while (!stopping) {
+          // SetupAuth writes the same private SQLite store. Reloading under
+          // SetupStore's mutex makes revocation effective without a runtime
+          // restart while keeping keys out of HTTP and control files.
+          runtime.replace_paired_keys(setup->peer_keys());
+          for (int i = 0; i < 4 && !stopping; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+      });
     start([&] {
       while (!stopping) {
         runtime.power();

@@ -62,6 +62,10 @@ struct Config {
   int port = 8000, companion_port = 9001, acc_port = 9000,
       acc_local_port = 9000, protocol_version = 4, interval_ms = 100;
   bool acc_enabled = false, upload_enabled = false;
+  // Set only when the runtime has adopted records from private setup state.
+  // In this mode an empty refreshed set means every paired PC was revoked; it
+  // must not silently fall back to a legacy configured shared key.
+  bool paired_key_mode = false;
   fs::path database = "data/rapid.db", telemetry = "data/telemetry",
            queue = "data/upload-queue.db", assets = "cpp/assets",
            network_control = "/run/rapid-network", setup_directory;
@@ -105,6 +109,7 @@ class Runtime {
   std::int64_t sequence_ = -1;
   int timing_lap_ = -1, best_lap_ = 0;
   std::vector<int> splits_;
+  std::vector<std::string> paired_keys_;
   int best_sectors_[3]{};
   std::deque<std::pair<std::uint64_t, Json>> events_;
   std::uint64_t next_event_ = 1;
@@ -121,6 +126,7 @@ public:
   void power();
   void acc(int type, const Json &packet);
   void upload_state(const std::string &state);
+  void replace_paired_keys(std::vector<std::string> keys);
 };
 
 void udp_loop(Runtime &runtime, const Config &config);
