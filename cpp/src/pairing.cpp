@@ -71,7 +71,7 @@ void PairingWindow::cancel() {
   failures_ = 0;
 }
 
-bool PairingWindow::open(double now) const {
+bool PairingWindow::active(double now) const {
   return window_open_ && std::isfinite(now) && now <= window_expires_at_ &&
       failures_ < 5;
 }
@@ -87,7 +87,7 @@ void PairingWindow::fail(double now, bool erase_pending) {
 PendingPairing PairingWindow::request(const std::string &label,
                                       const std::string &companion_public_key,
                                       double now) {
-  if (!open(now)) {
+  if (!active(now)) {
     fail(now);
     throw std::runtime_error("pairing window is closed or expired");
   }
@@ -106,7 +106,7 @@ PendingPairing PairingWindow::request(const std::string &label,
 
 bool PairingWindow::approve(const std::string &transaction_id,
                             const std::string &code, double now) {
-  if (!pending_ || pending_->approved || !open(now) || now > pending_->expires_at ||
+  if (!pending_ || pending_->approved || !active(now) || now > pending_->expires_at ||
       transaction_id != pending_->transaction_id || code != pending_->code) {
     fail(now, false);
     return false;
@@ -116,7 +116,7 @@ bool PairingWindow::approve(const std::string &transaction_id,
 }
 
 std::optional<PendingPairing> PairingWindow::consume_approved(double now) {
-  if (!pending_ || !pending_->approved || !open(now) || now > pending_->expires_at) {
+  if (!pending_ || !pending_->approved || !active(now) || now > pending_->expires_at) {
     if (pending_) fail(now);
     return {};
   }
@@ -128,7 +128,7 @@ std::optional<PendingPairing> PairingWindow::consume_approved(double now) {
 }
 
 std::optional<PendingPairing> PairingWindow::pending(double now) {
-  if (pending_ && (!open(now) || now > pending_->expires_at))
+  if (pending_ && (!active(now) || now > pending_->expires_at))
     fail(now);
   return pending_;
 }

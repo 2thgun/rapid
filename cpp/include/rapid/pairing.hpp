@@ -39,6 +39,6 @@ public:
                double now);
   std::optional<PendingPairing> consume_approved(double now);
   std::optional<PendingPairing> pending(double now);
-  bool open(double now) const;
+  bool active(double now) const;
 };
 } // namespace rapid::native
