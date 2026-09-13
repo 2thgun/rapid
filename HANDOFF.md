@@ -63,10 +63,10 @@ fragmentation, not loss of the final laps. The next unpublished source change
 keeps the dashboard's 1.5-second disconnect indication but retains the spool
 and session identity for ten seconds, unless an explicit non-driving status
 arrives. Its `rapid-native-tests` regression passed in the isolated ARM64 Pi
-Release staging build. The live Pi remains untouched. Windows access to
-`\\rapid\Telemetry` was denied under the current Samba `valid users = rapid`
-configuration, so validate or redesign the share credentials before claiming
-network-folder acceptance.
+Release staging build. The live Pi remains untouched. The Codex sandbox account
+was denied access to `\\rapid\Telemetry` under its `valid users = rapid` Samba
+configuration, so validate the user's Explorer credentials and refresh behavior
+before claiming network-folder acceptance.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
