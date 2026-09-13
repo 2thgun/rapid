@@ -8,7 +8,7 @@ failure. The ARM64 native Release suite and package verifier pass; hardware
 acceptance remains pending. Rotation,
 calibration and the full pairing flow are still unapplied. Do not deploy this
 work yet.
-The latest wiki verification record is `dc2524e`.
+The latest wiki verification record is `17ed821`.
 The documentation audit checkpoint `b5a199e` passed hosted verification in
 run `34716780316`. All open issues remain open against their full acceptance
 criteria; #7 has its source fix but still requires real AC1/ACC evidence.
