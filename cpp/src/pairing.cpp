@@ -309,4 +309,40 @@ std::optional<PendingPairing> PairingWindow::pending(double now) {
     fail(now);
   return pending_;
 }
+
+PairingCoordinator::PairingCoordinator(SetupStore &store, std::string device_id,
+                                       std::string certificate_fingerprint)
+    : store_(store), device_id_(std::move(device_id)),
+      window_(device_id_, std::move(certificate_fingerprint)) {}
+
+void PairingCoordinator::open(double now) { window_.open(now); }
+
+PendingPairing PairingCoordinator::request(const std::string &label,
+                                           const std::string &companion_public_key,
+                                           double now) {
+  return window_.request(label, companion_public_key, now);
+}
+
+bool PairingCoordinator::approve(const std::string &transaction_id,
+                                 const std::string &code, double now) {
+  return window_.approve(transaction_id, code, now);
+}
+
+std::optional<CompletedPairing> PairingCoordinator::consume(double now) {
+  const auto request = window_.consume_approved(now);
+  if (!request) return {};
+  const auto sealed = seal_pairing_key(
+      device_id_, request->transaction_id, request->nonce,
+      request->companion_public_key);
+  const auto peer_id = hash_text("rapid-pairing-peer-v1|" + request->companion_public_key).substr(0, 32);
+  if (!store_.remember_peer(peer_id, request->label, sealed.telemetry_key, now))
+    return {};
+  return CompletedPairing{peer_id, request->label, sealed.envelope};
+}
+
+std::optional<PendingPairing> PairingCoordinator::pending(double now) {
+  return window_.pending(now);
+}
+
+bool PairingCoordinator::active(double now) const { return window_.active(now); }
 } // namespace rapid::native

@@ -8,7 +8,7 @@ failure. The ARM64 native Release suite and package verifier pass; hardware
 acceptance remains pending. Rotation,
 calibration and the full pairing flow are still unapplied. Do not deploy this
 work yet.
-The latest wiki verification record is `c4d74b2`.
+The latest wiki verification record is `dc2524e`.
 The documentation audit checkpoint `b5a199e` passed hosted verification in
 run `34716780316`. All open issues remain open against their full acceptance
 criteria; #7 has its source fix but still requires real AC1/ACC evidence.
@@ -91,8 +91,10 @@ The UI and route regression passed the exact ARM64 ten-test gate in 17.03
 seconds. Wiki evidence is `45f0ba2`.
 The pairing library now also provides a tested X25519/HKDF-SHA-256/AES-256-GCM
 key envelope primitive with transaction-bound authenticated data. It is not
-yet wired to HTTP, TLS, the panel or the Windows companion; see wiki evidence
-`c4d74b2`.
+yet wired to HTTP, TLS, the panel or the Windows companion. The new coordinator
+consumes an approved request, stores its generated telemetry key privately and
+returns the envelope once; this core integration is covered by the 16.80-second
+ARM64 gate. See wiki evidence `dc2524e`.
 
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks

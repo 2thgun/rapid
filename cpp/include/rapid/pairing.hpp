@@ -1,5 +1,6 @@
 #pragma once
 #include "rapid/native.hpp"
+#include "rapid/setup.hpp"
 #include <optional>
 
 namespace rapid::native {
@@ -57,6 +58,31 @@ public:
   bool approve(const std::string &transaction_id, const std::string &code,
                double now);
   std::optional<PendingPairing> consume_approved(double now);
+  std::optional<PendingPairing> pending(double now);
+  bool active(double now) const;
+};
+
+struct CompletedPairing {
+  std::string peer_id, label;
+  PairingEnvelope envelope;
+};
+
+// Couples the in-memory approval window to private peer storage. Transport
+// layers should call consume() only after local approval has succeeded.
+class PairingCoordinator {
+  SetupStore &store_;
+  std::string device_id_;
+  PairingWindow window_;
+
+public:
+  PairingCoordinator(SetupStore &store, std::string device_id,
+                     std::string certificate_fingerprint);
+  void open(double now);
+  PendingPairing request(const std::string &label,
+                         const std::string &companion_public_key, double now);
+  bool approve(const std::string &transaction_id, const std::string &code,
+               double now);
+  std::optional<CompletedPairing> consume(double now);
   std::optional<PendingPairing> pending(double now);
   bool active(double now) const;
 };

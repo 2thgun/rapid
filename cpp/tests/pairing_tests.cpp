@@ -45,6 +45,21 @@ int main() {
     try { (void)open_pairing_key(device, std::string(32, 'd'), std::string(32, 'e'), private_key, tampered); }
     catch (const std::exception &) { rejected = true; }
     require(rejected, "tampered pairing envelope is rejected");
+    const auto store_path = fs::temp_directory_path() / ("rapid-pairing-coordinator-" + unique_id());
+    SetupStore store(store_path);
+    PairingCoordinator coordinator(store, device, certificate);
+    coordinator.open(0);
+    const auto coordinated = coordinator.request("Driver PC", derive_public_key(private_key), 1);
+    require(coordinator.approve(coordinated.transaction_id, coordinated.code, 2),
+            "coordinator accepts an approved request");
+    const auto completed = coordinator.consume(2);
+    require(completed && completed->peer_id.size() == 32 && store.peers().size() == 1 &&
+                open_pairing_key(device, coordinated.transaction_id, coordinated.nonce,
+                                 private_key, completed->envelope).size() == 64,
+            "approved pairing stores one private peer and returns its envelope");
+    require(!coordinator.consume(2), "coordinator consumes an approved request once");
+    std::error_code cleanup_error;
+    fs::remove_all(store_path, cleanup_error);
     PairingWindow window(device, certificate);
     require(!window.active(0), "pairing starts physically closed");
     window.open(10);
