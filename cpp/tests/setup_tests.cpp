@@ -24,7 +24,7 @@ struct TemporaryDirectory {
 
 int main(int argc, char **argv) {
   try {
-    require(argc == 4, "first-boot, provision and apply binaries required");
+    require(argc == 5, "first-boot, provision, apply and Wi-Fi binaries required");
     TemporaryDirectory root;
     const auto firstboot_directory = root.path / "firstboot";
     const auto firstboot_status = root.path / "firstboot.json";
@@ -126,6 +126,23 @@ int main(int argc, char **argv) {
             "settings applicator invokes only fixed hostnamectl arguments");
     require(Json::parse(read_file(apply_result))["hostname_applied"] == true,
             "settings applicator records a secret-free completion result");
+    const auto wifi_request = root.path / "wifi-request.json";
+    const auto wifi_result = root.path / "wifi-result.json";
+    const auto wifi_log = root.path / "wifi.log";
+    atomic_file(wifi_request, Json{{"revision", 2}, {"ssid", "test-network"}, {"password", "password123"}}.dump());
+    setenv("RAPID_TEST_HOSTNAME_LOG", wifi_log.c_str(), 1);
+    const auto wifi = fork();
+    require(wifi >= 0, "fork Wi-Fi applicator");
+    if (wifi == 0) {
+      execl(argv[4], argv[4], "--request-file", wifi_request.c_str(), "--result-file", wifi_result.c_str(), "--nmcli", fake_hostnamectl.c_str(), nullptr);
+      _exit(127);
+    }
+    int wifi_status = 0;
+    require(waitpid(wifi, &wifi_status, 0) == wifi && WIFEXITED(wifi_status) && WEXITSTATUS(wifi_status) == 0 && !fs::exists(wifi_request),
+            "Wi-Fi applicator consumes a valid request");
+    unsetenv("RAPID_TEST_HOSTNAME_LOG");
+    require(Json::parse(read_file(wifi_result))["connected"] == true && read_file(wifi_log).find("connection add type wifi ifname wlan0 con-name rapid-home ssid test-network") != std::string::npos,
+            "Wi-Fi applicator uses the fixed Home profile and no browser command");
     atomic_file(apply_request, Json{{"revision", 3}, {"settings",
         {{"hostname", "rapid.bad"}, {"rotation", 0},
          {"boot_network", "home_then_ap"}}}}.dump());

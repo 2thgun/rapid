@@ -1,0 +1,6 @@
+[Path]
+PathExists=/run/rapid-apply/wifi-request.json
+Unit=rapid-wifi.service
+
+[Install]
+WantedBy=multi-user.target

@@ -37,12 +37,15 @@ std::string cookie_token(const Request &request) {
 SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      std::string enrollment_token, std::string host,
                      fs::path apply_request_file, fs::path apply_result_file,
-                     fs::path firstboot_status_file)
+                     fs::path firstboot_status_file, fs::path wifi_request_file,
+                     fs::path wifi_result_file)
     : store_(store), clock_(std::move(clock)),
       origin_("http://" + host + ":" + std::to_string(port)),
       authority_(std::move(host) + ":" + std::to_string(port)),
       apply_request_file_(std::move(apply_request_file)),
       apply_result_file_(std::move(apply_result_file)),
+      wifi_request_file_(std::move(wifi_request_file)),
+      wifi_result_file_(std::move(wifi_result_file)),
       firstboot_status_file_(std::move(firstboot_status_file)),
       enrollment_token_(std::move(enrollment_token)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
@@ -184,7 +187,34 @@ Response SetupAuth::handle(const Request &request) {
           response["application"] = result;
       }
     } catch (const std::exception &) {}
+    try {
+      if (!wifi_result_file_.empty()) {
+        const auto result = Json::parse(read_file(wifi_result_file_));
+        if (result.is_object() && result.value("revision", -1) == state.at("revision"))
+          response["wifi"] = result;
+      }
+    } catch (const std::exception &) {}
     return reply(200, response);
+  }
+  if (path == "/api/v1/wifi" && request.method == "POST") {
+    if (!equal(header(request, "x-csrf-token"), session->second.csrf))
+      return reply(403, {{"detail", "invalid CSRF token"}});
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || body.size() != 3 || !body.contains("revision") ||
+        !body["revision"].is_number_integer() || !body.contains("ssid") || !body["ssid"].is_string() ||
+        !body.contains("password") || !body["password"].is_string())
+      return reply(400, {{"detail", "revision, Wi-Fi name and password required"}});
+    const auto ssid = body["ssid"].get<std::string>(), password = body["password"].get<std::string>();
+    const auto printable = [](const std::string &value) { for (unsigned char c : value) if (c < 0x20 || c == 0x7f) return false; return true; };
+    if (ssid.empty() || ssid.size() > 32 || !printable(ssid) || password.size() < 8 || password.size() > 63 || !printable(password))
+      return reply(400, {{"detail", "invalid Wi-Fi name or password"}});
+    const auto state = store_.snapshot();
+    if (body["revision"] != state.at("revision"))
+      return reply(409, {{"detail", "settings changed; reload and try again"}, {"revision", state.at("revision")}});
+    if (wifi_request_file_.empty()) return reply(503, {{"detail", "Wi-Fi application is unavailable"}});
+    try { atomic_file(wifi_request_file_, Json{{"revision", state.at("revision")}, {"ssid", ssid}, {"password", password}}.dump()); }
+    catch (const std::exception &) { return reply(503, {{"detail", "Wi-Fi application queue is unavailable"}}); }
+    return reply(202, {{"revision", state.at("revision")}, {"queued", true}});
   }
   if (path == "/api/v1/settings" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))

@@ -15,6 +15,7 @@ foreach(path IN ITEMS
     "./usr/lib/rapid/rapid-firstboot"
     "./usr/lib/rapid/rapid-provision"
     "./usr/lib/rapid/rapid-apply"
+    "./usr/lib/rapid/rapid-wifi"
     "./usr/lib/rapid/rapid-network-mode"
     "./usr/share/rapid/setup.html"
     "./usr/lib/systemd/system/rapid.service"
@@ -24,6 +25,8 @@ foreach(path IN ITEMS
     "./usr/lib/systemd/system/rapid-provision.service"
     "./usr/lib/systemd/system/rapid-apply.service"
     "./usr/lib/systemd/system/rapid-apply.path"
+    "./usr/lib/systemd/system/rapid-wifi.service"
+    "./usr/lib/systemd/system/rapid-wifi.path"
     "./usr/lib/systemd/system/rapid-network-mode.service")
   string(FIND "${contents}" " ${path}\n" position)
   if(position EQUAL -1)

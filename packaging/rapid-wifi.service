@@ -1,0 +1,11 @@
+[Unit]
+Description=raPId constrained Wi-Fi application
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/lib/rapid/rapid-wifi --request-file /run/rapid-apply/wifi-request.json --result-file /run/rapid-apply/wifi-result.json
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

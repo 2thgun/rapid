@@ -27,6 +27,7 @@ int main(int argc, char **argv) {
   try {
     fs::path directory, assets = "cpp/assets", token_file, apply_request_file,
              apply_result_file, firstboot_status_file;
+    fs::path wifi_request_file, wifi_result_file;
     int port = 8002;
     bool enroll = false;
     std::string listen_host = "127.0.0.1";
@@ -43,6 +44,8 @@ int main(int argc, char **argv) {
       else if (option == "--enrollment-token-file" && i + 1 < argc) token_file = argv[++i];
       else if (option == "--apply-request-file" && i + 1 < argc) apply_request_file = argv[++i];
       else if (option == "--apply-result-file" && i + 1 < argc) apply_result_file = argv[++i];
+      else if (option == "--wifi-request-file" && i + 1 < argc) wifi_request_file = argv[++i];
+      else if (option == "--wifi-result-file" && i + 1 < argc) wifi_result_file = argv[++i];
       else if (option == "--firstboot-status-file" && i + 1 < argc) firstboot_status_file = argv[++i];
       else if (option == "--listen" && i + 1 < argc) {
         listen_host = argv[++i];
@@ -69,7 +72,7 @@ int main(int argc, char **argv) {
       throw std::invalid_argument("a non-loopback listener requires an enrollment token");
     const auto token = store.owner_hash().empty() ? bootstrap_token : std::string{};
     SetupAuth auth(store, port, monotonic, token, listen_host, apply_request_file,
-                   apply_result_file, firstboot_status_file);
+                   apply_result_file, firstboot_status_file, wifi_request_file, wifi_result_file);
     if (enroll) {
       std::string password;
       if (!std::getline(std::cin, password) || !auth.enroll(password))
