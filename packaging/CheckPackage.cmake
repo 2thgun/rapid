@@ -36,6 +36,41 @@ endforeach()
 if(contents MATCHES "[.]key\n|[.]db\n|runtime[.]env\n|/home/rapid/|/usr/etc/")
   message(FATAL_ERROR "Package contains private state or invalid installation paths")
 endif()
+set(data_tar "${PACKAGE}.data.tar")
+execute_process(COMMAND dpkg-deb --fsys-tarfile "${PACKAGE}" OUTPUT_FILE "${data_tar}"
+                RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Cannot inspect packaged service definitions")
+endif()
+function(read_service path output)
+  execute_process(COMMAND tar -xOf "${data_tar}" "${path}"
+                  OUTPUT_VARIABLE value RESULT_VARIABLE result)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Cannot read packaged ${path}")
+  endif()
+  set(${output} "${value}" PARENT_SCOPE)
+endfunction()
+read_service("./usr/lib/systemd/system/rapid-firstboot.service" firstboot_service)
+read_service("./usr/lib/systemd/system/rapid-provision.service" provision_service)
+read_service("./usr/lib/systemd/system/rapid-setup.service" setup_service)
+file(REMOVE "${data_tar}")
+if(NOT firstboot_service MATCHES "User=rapid" OR
+   NOT firstboot_service MATCHES "Group=rapid" OR
+   NOT firstboot_service MATCHES "StateDirectory=rapid-setup" OR
+   NOT firstboot_service MATCHES "RuntimeDirectory=rapid")
+  message(FATAL_ERROR "First boot must create private setup state as the rapid service user")
+endif()
+if(NOT provision_service MATCHES "User=root" OR
+   NOT provision_service MATCHES "Requires=rapid-firstboot[.]service" OR
+   NOT provision_service MATCHES "--status-file /run/rapid/firstboot[.]json")
+  message(FATAL_ERROR "Only the provisioner may run as root for the generated setup-AP state")
+endif()
+if(NOT setup_service MATCHES "User=rapid" OR
+   NOT setup_service MATCHES "Requires=rapid-firstboot[.]service rapid-provision[.]service" OR
+   NOT setup_service MATCHES "--listen 192[.]168[.]1[.]64" OR
+   NOT setup_service MATCHES "--enrollment-token-file /var/lib/rapid-setup/enrollment[.]token")
+  message(FATAL_ERROR "Setup service must use the generated rapid-owned AP state and fixed listener")
+endif()
 execute_process(COMMAND dpkg-deb --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0 OR NOT dependencies MATCHES "libargon2" OR NOT dependencies MATCHES "libqt6core")

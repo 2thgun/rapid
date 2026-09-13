@@ -42,6 +42,11 @@ The paired-replay source change keeps key namespaces strictly inside the replay
 database. Dashboard and recording session IDs remain the raw 32-digit wire ID,
 avoiding a derived key fingerprint in application-visible state.
 
+The package verifier also inspects the installed first-boot, AP-provisioning and
+setup service definitions. It rejects a package unless private setup state is
+created by `rapid`, only the NetworkManager provisioner runs as root, and the
+setup listener/token paths match the fixed bootstrap contract.
+
 Next: implement pairing records/approval and Windows handshake, then display
 rotation/calibration recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
