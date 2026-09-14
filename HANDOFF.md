@@ -13,6 +13,10 @@ Windows HTTPS pairing request/result client, DPAPI handoff integration and
 pinned reconnect; ARM64, clean-device, reboot, display, Wi-Fi and simulator
 acceptance still require hardware.
 
+Latest local source checkpoint: `23aee14`; latest wiki evidence: `25d5ec2`.
+The rebuilt amd64 package and full candidate gate passed after this checkpoint
+in 26.62 seconds.
+
 The constrained settings applicator now invokes `rapid-display-recovery` with a
 preview and confirmation when the packaged service applies a saved rotation;
 the recovery state remains protected by boot-time rollback. The focused setup
