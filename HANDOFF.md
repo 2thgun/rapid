@@ -12,6 +12,10 @@ software work is persistent reconnect identity enforcement and real input
 calibration; ARM64, clean-device, reboot, display, Wi-Fi and simulator
 acceptance still require hardware.
 
+The current source and freshly reconfigured amd64 Debian package passed the
+local candidate gate: eleven WSL CTests, browser graph checks, launcher
+recovery, pinned Zig companion self-test and package verifier.
+
 Architecture direction: first-time setup remains a separate component. The
 current pairing coordinator is still hosted by `rapid-setup-server`; rehome it
 to `rapid-pi` before completing the Windows client. Setup services may expose
