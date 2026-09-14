@@ -307,6 +307,31 @@ int main(int argc, char **argv) {
             "packaged runtime accepts a bounded paired-key set");
     unsetenv("RAPID_COMPANION_KEYS");
     unsetenv("RAPID_REQUIRE_V4");
+    const auto broken_identity = root.path / "broken-identity";
+    const auto broken_status = root.path / "broken-identity.json";
+    const auto broken_cert = broken_identity / "device.crt";
+    const auto broken_key = broken_identity / "device.key";
+    fs::create_directory(broken_identity);
+    fs::permissions(broken_identity, fs::perms::owner_all,
+                    fs::perm_options::replace);
+    auto run_broken_firstboot = [&] {
+      const auto process = fork();
+      require(process >= 0, "fork broken identity first boot");
+      if (process == 0) {
+        execl(argv[1], argv[1], "--state-directory", broken_identity.c_str(),
+              "--status-file", broken_status.c_str(), "--setup-address", "192.168.50.1", nullptr);
+        _exit(127);
+      }
+      int result = 0;
+      require(waitpid(process, &result, 0) == process && WIFEXITED(result),
+              "broken identity first boot exits");
+      return WEXITSTATUS(result);
+    };
+    require(run_broken_firstboot() == 0 && fs::exists(broken_cert) && fs::exists(broken_key),
+            "baseline identity for missing-half test created");
+    fs::remove(broken_key);
+    require(run_broken_firstboot() != 0 && !fs::exists(broken_key),
+            "missing private certificate half fails closed without regeneration");
     std::cout << "setup persistence, validation, isolation and recovery tests passed\n";
     return 0;
   } catch (const std::exception &error) {
