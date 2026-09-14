@@ -2,8 +2,9 @@
 
 This is the implementation contract for GitHub issue #10. It describes the
 customer pairing flow that will replace copying a shared `telemetry.key`.
-The Pi transport and envelope primitives are implemented; the companion client
-and panel approval UI remain to be completed against this contract.
+The Pi transport and envelope primitives are implemented; the panel now shows
+the request and accepts local approval through its private handoff. The
+companion client remains to be completed against this contract.
 
 ## Goal and boundary
 

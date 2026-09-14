@@ -18,7 +18,9 @@ The pairing credential storage primitive is available in the native daemon. A
 paired 256-bit key can be imported into the current user's DPAPI scope with
 `--store-auth-key-dpapi PATH` and loaded with `--auth-key-dpapi-file PATH`;
 neither operation writes a plaintext key. The Pi now exposes the HTTPS pairing
-state API, while the companion HTTPS request/approval UI remains pending.
+state API, and the physical panel can approve a displayed request through its
+private local handoff. The companion HTTPS request, envelope decryption and
+reconnect client remain pending.
 
 The companion can verify a Pi setup certificate before a pairing client uses it:
 
