@@ -2256,6 +2256,7 @@ void apply_low_impact_policy() {
 }
 
 std::atomic<bool> g_console_stop{false};
+bool g_show_error_dialog = true;
 BOOL WINAPI console_handler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT || signal == CTRL_CLOSE_EVENT) {
         g_console_stop.store(true, std::memory_order_relaxed);
@@ -2270,6 +2271,9 @@ int wmain(int argc, wchar_t** argv) {
     using namespace rapid;
     try {
         const Options options = parse_options(argc, argv);
+        g_show_error_dialog = !options.headless && !options.self_test &&
+                              options.verify_setup_url.empty() &&
+                              options.store_auth_key_dpapi_file.empty();
         if (!options.verify_setup_url.empty())
             return verify_setup_certificate(options.verify_setup_url,
                                             options.pinned_certificate_fingerprint);
@@ -2320,7 +2324,8 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "raPId native daemon: %s\n", error.what());
-        MessageBoxA(nullptr, error.what(), "raPId native daemon", MB_OK | MB_ICONERROR);
+        if (g_show_error_dialog && !GetConsoleWindow())
+            MessageBoxA(nullptr, error.what(), "raPId native daemon", MB_OK | MB_ICONERROR);
         return 1;
     }
 }
