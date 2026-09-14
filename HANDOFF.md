@@ -1,5 +1,19 @@
 ﻿# Current handoff
 
+## Current state ? 2026-09-14
+
+The local v1.0 candidate now has persistent first-boot TLS identity, protected
+pairing-window state, Qt physical-panel code display/touch approval, verified
+Windows CNG Curve25519/HKDF/AES-GCM primitives, DPAPI-first launchers with
+atomic recovery writes, and package checks that exclude private artifacts. The
+full local candidate gate is green: eleven WSL CTests, browser graph checks,
+launcher recovery checks, the pinned Zig companion self-test and the amd64
+package verifier all pass. The remaining unimplemented customer flow is the
+Windows HTTPS pairing request/result client, DPAPI handoff integration and
+pinned reconnect; ARM64, clean-device, reboot, display, Wi-Fi and simulator
+acceptance still require hardware.
+
+
 Published source through `a694da8` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
 application and protected Home Wi-Fi onboarding. The root Wi-Fi service manages
