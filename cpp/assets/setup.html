@@ -153,6 +153,19 @@ async function showPairing() {
   const state = document.getElementById('pairing-state');
   const pending = document.getElementById('pairing-pending');
   try {
+    const pairing = await api('/api/v1/pairing/state');
+    if (!pairing.active) {
+      pending.hidden = true; document.getElementById('pairing-open').hidden = false;
+      document.getElementById('pairing-cancel').hidden = true;
+      state.textContent = 'Pairing window is closed.';
+      return null;
+    }
+    if (!pairing.pending) {
+      pending.hidden = true; document.getElementById('pairing-open').hidden = true;
+      document.getElementById('pairing-cancel').hidden = false;
+      state.textContent = 'Pairing window is open; waiting for a PC request.';
+      return null;
+    }
     const data = await api('/api/v1/pairing/pending');
     pending.hidden = false;
     document.getElementById('pairing-code').textContent = data.code;
@@ -165,7 +178,7 @@ async function showPairing() {
     pending.hidden = true;
     document.getElementById('pairing-open').hidden = false;
     document.getElementById('pairing-cancel').hidden = true;
-    state.textContent = error.status === 404 ? 'Pairing window is open; waiting for a PC request.' : error.message;
+    state.textContent = error.message;
     return null;
   }
 }

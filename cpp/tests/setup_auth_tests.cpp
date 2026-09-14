@@ -262,6 +262,10 @@ int main() {
     window.headers["cookie"] = pairing_cookie;
     window.headers["x-csrf-token"] = pairing_csrf;
     require(pairing_auth.handle(window).status == 200, "owner opens pairing window");
+    auto state_request = secure("/api/v1/pairing/state");
+    state_request.headers["cookie"] = pairing_cookie;
+    require(Json::parse(pairing_auth.handle(state_request).body)["active"] == true,
+            "pairing state reports an open window");
     require(Json::parse(pairing_auth.handle(secure("/api/v1/setup")).body)
                 ["capabilities"]["pairing"] == true,
             "HTTPS setup advertises configured pairing capability");

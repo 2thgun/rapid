@@ -233,6 +233,10 @@ Response SetupAuth::handle(const Request &request) {
                        {"companion_public_key", pending->companion_public_key},
                        {"code", pending->code}, {"expires_at", pending->expires_at}});
   }
+  if (pairing_ && path == "/api/v1/pairing/state" && request.method == "GET") {
+    const auto pending = pairing_->pending(time);
+    return reply(200, {{"active", pairing_->active(time)}, {"pending", pending.has_value()}});
+  }
   if (pairing_ && path == "/api/v1/pairing/approve" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});
