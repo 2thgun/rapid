@@ -36,6 +36,8 @@ neither operation writes a plaintext key. The Pi now exposes the HTTPS pairing
 state API, and the physical panel can approve a displayed request through its
 private local handoff. The companion HTTPS request, envelope decryption and
 reconnect client remain pending.
+Credential writes are committed through a flushed temporary file and atomic
+replace so an interrupted settings recovery cannot leave a truncated blob.
 
 The companion can verify a Pi setup certificate before a pairing client uses it:
 

@@ -92,14 +92,30 @@ std::vector<std::uint8_t> dpapi_unprotect(std::span<const std::uint8_t> blob) {
 void write_dpapi_credential(const fs::path& path, std::span<const std::uint8_t> plain) {
     constexpr std::array<char, 8> magic{'R','P','D','P','A','P','I','1'};
     const auto protected_blob = dpapi_protect(plain);
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    std::error_code directory_error;
+    if (!path.parent_path().empty()) fs::create_directories(path.parent_path(), directory_error);
+    if (directory_error) throw std::runtime_error("cannot create DPAPI credential directory");
+    const auto temporary = path.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
+    std::ofstream output(fs::path(temporary), std::ios::binary | std::ios::trunc);
     if (!output) throw std::runtime_error("cannot create DPAPI pairing credential");
     output.write(magic.data(), static_cast<std::streamsize>(magic.size()));
     const std::uint32_t size = static_cast<std::uint32_t>(protected_blob.size());
     output.write(reinterpret_cast<const char *>(&size), sizeof(size));
     output.write(reinterpret_cast<const char *>(protected_blob.data()),
                  static_cast<std::streamsize>(protected_blob.size()));
-    if (!output) throw std::runtime_error("cannot write DPAPI pairing credential");
+    output.flush();
+    if (!output) {
+        output.close();
+        DeleteFileW(temporary.c_str());
+        throw std::runtime_error("cannot write DPAPI pairing credential");
+    }
+    output.close();
+    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str());
+        throw std::runtime_error("cannot commit DPAPI pairing credential");
+    }
+    if (!protected_blob.empty())
+        SecureZeroMemory(const_cast<std::uint8_t *>(protected_blob.data()), protected_blob.size());
 }
 
 std::vector<std::uint8_t> read_dpapi_credential(const fs::path& path) {
