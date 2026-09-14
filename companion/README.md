@@ -29,16 +29,14 @@ known-answer vectors.
 The code derivation used for the two-screen comparison is also checked against
 a fixed Pi-compatible vector, including its field delimiters and byte order.
 
-The pairing credential storage primitive is available in the native daemon. A
-paired 256-bit key can be imported into the current user's DPAPI scope with
-`--store-auth-key-dpapi PATH` and loaded with `--auth-key-dpapi-file PATH`;
-neither operation writes a plaintext key. The Pi now exposes the HTTPS pairing
-state API, and the physical panel can approve a displayed request through its
-private local handoff. The companion HTTPS request, envelope decryption and
-reconnect client remain pending.
-The Pi-side HTTPS integration test now exercises a real X25519 request and
-decrypts the one-use envelope end to end; only the Windows transport/client
-orchestration remains to be connected.
+The native daemon can pair directly with the Pi over its pinned HTTPS endpoint.
+It creates the X25519 request, displays the comparison code, unwraps the
+one-use envelope and stores the resulting 256-bit key in the current user's
+DPAPI scope. Use `--pairing-url`, `--pairing-label` and
+`--certificate-fingerprint`; `--store-auth-key-dpapi` and
+`--auth-key-dpapi-file` remain available for migrated installations.
+The Pi-side HTTPS integration test exercises a real X25519 request and decrypts
+the one-use envelope end to end.
 That integration also pairs two independent PCs and verifies revocation of one
 does not remove the other.
 Credential writes are committed through a flushed temporary file and atomic
@@ -58,15 +56,12 @@ The companion can verify a Pi setup certificate before a pairing client uses it:
   --certificate-fingerprint <64 lowercase hex characters>
 ```
 
-This explicitly pinned probe is the only path that accepts the Pi's self-signed
-certificate. It fails on a non-HTTPS URL or fingerprint mismatch and does not
-write credentials. The full request, code comparison, envelope decryption and
-DPAPI handoff are still pending.
+This explicitly pinned probe is also used by the pairing client. It fails on a
+non-HTTPS URL or fingerprint mismatch and does not write credentials.
 
-The planned replacement for private pre-paired bundles is specified in
-[the companion pairing contract](PAIRING-CONTRACT.md). The Pi transport and
-physical panel approval are implemented; the Windows request, envelope and
-reconnect client remain the unimplemented customer flow.
+The full flow and its remaining hardware acceptance requirements are specified
+in [the companion pairing contract](PAIRING-CONTRACT.md). Pairing belongs to
+the two main telemetry programs; first-time provisioning remains separate.
 
 The shipped `START-RAPID.cmd` and `start-rapid-daemon.vbs` launchers prefer
 `%LOCALAPPDATA%\raPId\pairing.key.dpapi` when it exists. This lets a recovered

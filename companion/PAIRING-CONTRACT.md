@@ -3,8 +3,10 @@
 This is the implementation contract for GitHub issue #10. It describes the
 customer pairing flow that will replace copying a shared `telemetry.key`.
 The Pi transport and envelope primitives are implemented; the panel now shows
-the request and accepts local approval through its private handoff. The
-companion client remains to be completed against this contract.
+the request and accepts local approval through its private handoff. The native
+Windows companion implements the HTTPS request, code comparison, envelope
+decryption and DPAPI handoff. Clean-account and hardware acceptance remain
+release evidence rather than development prerequisites.
 
 ## Goal and boundary
 
@@ -23,9 +25,9 @@ reconnect belong to the two main telemetry programs: `rapid-pi` and the native
 Windows companion. Setup surfaces may open a pairing window or display its
 state, but they must not become the credential-issuing pairing service.
 
-The current Pi implementation still hosts the pairing coordinator in
-`rapid-setup-server`; moving that orchestration into `rapid-pi` is required
-before this contract can be considered implemented.
+The packaged Pi runtime owns the credential-issuing pairing transport and
+coordinator. `rapid-setup-server` only provides authenticated owner/panel
+controls and a private handoff to that runtime.
 
 The pairing service is available only while the Pi has a physical pairing
 window open. The panel must show the requesting PC name and the verification
