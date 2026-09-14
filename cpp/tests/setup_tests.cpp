@@ -323,6 +323,11 @@ int main(int argc, char **argv) {
             "packaged runtime accepts a bounded paired-key set");
     unsetenv("RAPID_COMPANION_KEYS");
     unsetenv("RAPID_REQUIRE_V4");
+    atomic_file(config, "[app]\nrequire_v4 = true\n[setup]\nstate_directory = \"/var/lib/rapid-setup\"\n[pairing]\nenabled = true\nhost = \"0.0.0.0\"\nport = 8003\n");
+    const auto pairing_config = Config::load(config);
+    require(pairing_config.pairing_enabled && pairing_config.pairing_host == "0.0.0.0" &&
+                pairing_config.pairing_port == 8003,
+            "pairing-only fresh-device runtime has an AP-reachable listener");
     const auto broken_identity = root.path / "broken-identity";
     const auto broken_status = root.path / "broken-identity.json";
     const auto broken_cert = broken_identity / "device.crt";

@@ -59,6 +59,7 @@ endfunction()
 read_service("./usr/lib/systemd/system/rapid-firstboot.service" firstboot_service)
 read_service("./usr/lib/systemd/system/rapid-provision.service" provision_service)
 read_service("./usr/lib/systemd/system/rapid-setup.service" setup_service)
+read_service("./usr/lib/systemd/system/rapid.service" runtime_service)
 file(REMOVE "${data_tar}")
 if(NOT firstboot_service MATCHES "User=rapid" OR
    NOT firstboot_service MATCHES "Group=rapid" OR
@@ -83,6 +84,11 @@ endif()
 if(NOT firstboot_service MATCHES "--tls-certificate /var/lib/rapid-setup/device[.]crt" OR
    NOT firstboot_service MATCHES "--tls-private-key /var/lib/rapid-setup/device[.]key")
   message(FATAL_ERROR "First boot must provision the setup TLS identity")
+endif()
+if(NOT runtime_service MATCHES "Requires=rapid-firstboot[.]service rapid-provision[.]service" OR
+   runtime_service MATCHES "ConditionPathExists=/etc/rapid/runtime[.]env" OR
+   NOT runtime_service MATCHES "EnvironmentFile=-/etc/rapid/runtime[.]env")
+  message(FATAL_ERROR "Runtime must start after fresh-device provisioning and permit pairing-only startup")
 endif()
 execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)

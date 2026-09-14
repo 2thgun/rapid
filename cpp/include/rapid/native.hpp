@@ -54,7 +54,7 @@ Json receive_v4(Database &store, const std::string &payload,
                 const std::vector<std::string> &keys);
 
 struct Config {
-  std::string host = "0.0.0.0", companion_host, acc_host = "192.168.1.89",
+  std::string host = "0.0.0.0", pairing_host = "0.0.0.0", companion_host, acc_host = "192.168.1.89",
               acc_password, companion_key;
   std::vector<std::string> companion_keys;
   std::string display_name = "raPId", upload_url, upload_token,

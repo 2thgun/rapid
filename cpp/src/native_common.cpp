@@ -209,6 +209,7 @@ Config Config::load(const fs::path &path) {
     throw std::runtime_error("invalid boolean configuration");
   };
   c.host = text("app", "host", "RAPID_APP_HOST", c.host);
+  c.pairing_host = text("pairing", "host", "RAPID_PAIRING_HOST", c.pairing_host);
   c.port = integer("app", "port", "RAPID_APP_PORT", c.port);
   c.companion_port = integer("app", "companion_port", "RAPID_COMPANION_PORT",
                              c.companion_port);

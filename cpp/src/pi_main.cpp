@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     };
     if (pairing && pairing_transport) {
       start([&] {
-        serve_tls(settings.host, settings.pairing_port,
+        serve_tls(settings.pairing_host, settings.pairing_port,
                   [&](const Request &request) -> Response {
                     const auto path = request.target.substr(0, request.target.find('?'));
                     if (request.method == "GET" && path == "/api/v1/setup") {

@@ -1,7 +1,7 @@
 [Unit]
 Description=raPId telemetry runtime
-After=network.target
-ConditionPathExists=/etc/rapid/runtime.env
+Requires=rapid-firstboot.service rapid-provision.service
+After=network.target rapid-firstboot.service rapid-provision.service
 
 [Service]
 Type=simple
@@ -11,7 +11,7 @@ StateDirectory=rapid
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/rapid
 Environment=RAPID_CONFIG=/etc/rapid/config.toml
-EnvironmentFile=/etc/rapid/runtime.env
+EnvironmentFile=-/etc/rapid/runtime.env
 ExecStart=/usr/lib/rapid/rapid-pi
 Restart=on-failure
 RestartSec=3

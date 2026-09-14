@@ -37,6 +37,9 @@ state_directory = ""
 # identity files exist; setup-server remains the onboarding/control surface.
 # Keep disabled until the setup service has been migrated to private handoffs.
 enabled = false
+# Keep the pairing listener reachable from the setup AP even when the regular
+# dashboard API remains bound to loopback.
+host = "0.0.0.0"
 port = 8003
 
 [upload]

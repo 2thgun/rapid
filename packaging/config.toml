@@ -13,6 +13,7 @@ state_directory = "/var/lib/rapid-setup"
 # Pairing is served by rapid-pi over its own TLS listener. The setup service
 # remains the owner/panel control surface.
 enabled = true
+host = "0.0.0.0"
 port = 8003
 
 [acc]
