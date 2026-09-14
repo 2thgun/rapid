@@ -49,6 +49,11 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <p>Saving applies the device name shortly after submission. Orientation is saved only until its preview and rollback flow is available. Wi-Fi joining is coming next.</p>
 <form id="wifi-form"><label for="wifi-ssid">Home Wi-Fi name</label><input id="wifi-ssid" required maxlength="32" autocomplete="off"><label for="wifi-password">Home Wi-Fi password</label><input id="wifi-password" type="password" required minlength="8" maxlength="64" autocomplete="new-password"><button id="join-wifi" type="submit">Join Home Wi-Fi</button></form>
 <h3>Remembered PCs</h3><div id="peers">No paired PCs.</div>
+<h3>Pair a PC</h3>
+<p id="pairing-state">Pairing window is closed.</p>
+<button id="pairing-open" type="button">Open pairing window</button>
+<button id="pairing-cancel" type="button" hidden>Cancel pairing window</button>
+<div id="pairing-pending" hidden><p>Compare this code with the requesting PC, then approve it on the Pi:</p><strong id="pairing-code"></strong><p id="pairing-label"></p><button id="pairing-approve" type="button">Approve displayed PC</button></div>
 <button id="sign-out" type="button">Sign out</button>
 </section>
 <script>
@@ -111,6 +116,7 @@ async function showProfile() {
   document.getElementById('retry-settings').hidden =
     !(data.application && data.application.hostname_applied === false);
   await showPeers();
+  await showPairing();
   return data;
 }
 document.getElementById('retry-settings').addEventListener('click', async event => {
@@ -142,6 +148,48 @@ async function showPeers() {
     row.appendChild(revoke); container.appendChild(row);
   }
 }
+
+async function showPairing() {
+  const state = document.getElementById('pairing-state');
+  const pending = document.getElementById('pairing-pending');
+  try {
+    const data = await api('/api/v1/pairing/pending');
+    pending.hidden = false;
+    document.getElementById('pairing-code').textContent = data.code;
+    document.getElementById('pairing-label').textContent = 'Request from ' + data.label;
+    state.textContent = 'Pairing window is open.';
+    document.getElementById('pairing-open').hidden = true;
+    document.getElementById('pairing-cancel').hidden = false;
+    return data;
+  } catch (error) {
+    pending.hidden = true;
+    document.getElementById('pairing-open').hidden = false;
+    document.getElementById('pairing-cancel').hidden = true;
+    state.textContent = error.status === 404 ? 'Pairing window is open; waiting for a PC request.' : error.message;
+    return null;
+  }
+}
+document.getElementById('pairing-open').addEventListener('click', async event => {
+  event.currentTarget.disabled = true;
+  try { await api('/api/v1/pairing/window', 'POST', {open: true}); await showPairing(); }
+  catch (error) { message.textContent = error.message; event.currentTarget.disabled = false; }
+});
+document.getElementById('pairing-cancel').addEventListener('click', async event => {
+  event.currentTarget.disabled = true;
+  try { await api('/api/v1/pairing/window', 'POST', {open: false}); await showPairing(); }
+  catch (error) { message.textContent = error.message; }
+  finally { event.currentTarget.disabled = false; }
+});
+document.getElementById('pairing-approve').addEventListener('click', async event => {
+  event.currentTarget.disabled = true;
+  try {
+    const pending = await api('/api/v1/pairing/pending');
+    await api('/api/v1/pairing/approve', 'POST', {transaction_id: pending.transaction_id, code: pending.code});
+    message.textContent = 'PC approved. The companion can now finish pairing.';
+    await showPeers(); await showPairing();
+  } catch (error) { message.textContent = error.message; }
+  finally { event.currentTarget.disabled = false; }
+});
 
 async function waitForHostnameApplication(targetRevision) {
   for (let attempt = 0; attempt < 10; ++attempt) {
