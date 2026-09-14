@@ -3,10 +3,10 @@ pi_host=192.168.1.64
 pi_port=9001
 sample_rate=50
 protocol=v4
-# Put the paired 64-hex-character key in telemetry.key beside your copied
-# daemon.conf, then add: auth_key_file=telemetry.key
-# New pairings should instead use a per-user DPAPI blob:
-# auth_key_dpapi_file=%LOCALAPPDATA%\raPId\pairing.key.dpapi
+# Existing demo bundles may put the paired 64-hex-character key in telemetry.key
+# beside this file, then add: auth_key_file=telemetry.key
+# New pairings use a per-user DPAPI blob. The launcher supplies its absolute
+# path as --auth-key-dpapi-file; environment variables are not expanded here.
 output_directory=recordings
 local_recording=true
 no_forward=false
