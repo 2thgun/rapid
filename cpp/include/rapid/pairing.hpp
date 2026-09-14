@@ -73,10 +73,12 @@ class PairingCoordinator {
   SetupStore &store_;
   std::string device_id_;
   PairingWindow window_;
+  fs::path panel_file_;
+  void publish_panel(double now);
 
 public:
   PairingCoordinator(SetupStore &store, std::string device_id,
-                     std::string certificate_fingerprint);
+                     std::string certificate_fingerprint, fs::path panel_file = {});
   void open(double now);
   void cancel();
   PendingPairing request(const std::string &label,

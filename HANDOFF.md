@@ -110,8 +110,11 @@ uses TLS in the packaged service, and first boot provisions a persistent
 self-signed device certificate/key; the network regression covers a real
 HTTPS request. SetupAuth exposes pairing transitions over HTTPS, and the owner
 setup page can open/cancel the window and approve the displayed code. Plain HTTP
-does not expose those pairing routes. Physical panel presentation, the Windows
-pairing request/envelope/DPAPI client flow and pinned reconnect remain pending;
+does not expose those pairing routes. The coordinator now publishes only
+transaction, label, code and expiry metadata to `/run/rapid/pairing.json` with
+private permissions, clearing it on expiry, cancellation or consumption.
+Physical panel rendering and touch approval, the Windows pairing
+request/envelope/DPAPI client flow and pinned reconnect remain pending;
 the Pi ARM64 rebuild and hardware flow are still required.
 
 Latest local checkpoint: source `758afaf` plus the subsequent clean handoff
@@ -121,8 +124,9 @@ regression passed. The Windows companion was rebuilt with the pinned Zig
 toolchain and its adapter self-test passed; the negative HTTPS probe exits
 non-modally with a clear error.
 
-Next: connect the pairing API to panel presentation and the Windows pairing
-request/envelope client, then complete pinned reconnect. Complete the fresh-card
+Next: render the local pairing metadata on the physical panel and connect its
+approval input, then complete the Windows pairing request/envelope client and
+pinned reconnect. Complete the fresh-card
 and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
 

@@ -6,6 +6,7 @@
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
 #include <sstream>
+#include <sys/stat.h>
 
 namespace rapid::native {
 namespace {
@@ -311,22 +312,36 @@ std::optional<PendingPairing> PairingWindow::pending(double now) {
 }
 
 PairingCoordinator::PairingCoordinator(SetupStore &store, std::string device_id,
-                                       std::string certificate_fingerprint)
+                                       std::string certificate_fingerprint, fs::path panel_file)
     : store_(store), device_id_(std::move(device_id)),
-      window_(device_id_, std::move(certificate_fingerprint)) {}
+      window_(device_id_, std::move(certificate_fingerprint)), panel_file_(std::move(panel_file)) {}
 
-void PairingCoordinator::open(double now) { window_.open(now); }
-void PairingCoordinator::cancel() { window_.cancel(); }
+void PairingCoordinator::publish_panel(double now) {
+  if (panel_file_.empty()) return;
+  const auto pending = window_.pending(now);
+  std::error_code error;
+  if (!pending) { fs::remove(panel_file_, error); return; }
+  atomic_file(panel_file_, Json{{"transaction_id", pending->transaction_id},
+                               {"label", pending->label}, {"code", pending->code},
+                               {"expires_at", pending->expires_at}}.dump() + "\n");
+  if (::chmod(panel_file_.c_str(), 0640) != 0)
+    throw std::runtime_error("cannot secure pairing panel state");
+}
+
+void PairingCoordinator::open(double now) { window_.open(now); publish_panel(now); }
+void PairingCoordinator::cancel() { window_.cancel(); publish_panel(monotonic()); }
 
 PendingPairing PairingCoordinator::request(const std::string &label,
                                            const std::string &companion_public_key,
                                            double now) {
-  return window_.request(label, companion_public_key, now);
+  const auto result = window_.request(label, companion_public_key, now);
+  publish_panel(now); return result;
 }
 
 bool PairingCoordinator::approve(const std::string &transaction_id,
                                  const std::string &code, double now) {
-  return window_.approve(transaction_id, code, now);
+  const auto result = window_.approve(transaction_id, code, now);
+  publish_panel(now); return result;
 }
 
 std::optional<CompletedPairing> PairingCoordinator::consume(double now) {
@@ -347,11 +362,14 @@ std::optional<CompletedPairing> PairingCoordinator::consume(
   const auto peer_id = hash_text("rapid-pairing-peer-v1|" + request->companion_public_key).substr(0, 32);
   if (!store_.remember_peer(peer_id, request->label, sealed.telemetry_key, now))
     return {};
+  publish_panel(now);
   return CompletedPairing{peer_id, request->label, sealed.envelope};
 }
 
 std::optional<PendingPairing> PairingCoordinator::pending(double now) {
-  return window_.pending(now);
+  const auto result = window_.pending(now);
+  publish_panel(now);
+  return result;
 }
 
 bool PairingCoordinator::active(double now) const { return window_.active(now); }

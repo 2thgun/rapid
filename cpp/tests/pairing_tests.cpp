@@ -46,10 +46,17 @@ int main() {
     catch (const std::exception &) { rejected = true; }
     require(rejected, "tampered pairing envelope is rejected");
     const auto store_path = fs::temp_directory_path() / ("rapid-pairing-coordinator-" + unique_id());
+    const auto panel_file = store_path / "pairing.json";
     SetupStore store(store_path);
-    PairingCoordinator coordinator(store, device, certificate);
+    PairingCoordinator coordinator(store, device, certificate, panel_file);
     coordinator.open(0);
     const auto coordinated = coordinator.request("Driver PC", derive_public_key(private_key), 1);
+    require(fs::exists(panel_file), "pairing panel state is published");
+    const auto panel = Json::parse(read_file(panel_file));
+    require(panel["transaction_id"] == coordinated.transaction_id &&
+                panel["label"] == "Driver PC" && panel["code"] == coordinated.code &&
+                !panel.contains("companion_public_key") && !panel.contains("telemetry_key"),
+            "pairing panel state contains display metadata without secrets");
     require(coordinator.approve(coordinated.transaction_id, coordinated.code, 2),
             "coordinator accepts an approved request");
     const auto completed = coordinator.consume(2);
@@ -57,7 +64,12 @@ int main() {
                 open_pairing_key(device, coordinated.transaction_id, coordinated.nonce,
                                  private_key, completed->envelope).size() == 64,
             "approved pairing stores one private peer and returns its envelope");
+    require(!fs::exists(panel_file), "pairing panel state clears after consumption");
     require(!coordinator.consume(2), "coordinator consumes an approved request once");
+    coordinator.open(10);
+    (void)coordinator.request("Expiring PC", derive_public_key(private_key), 11);
+    require(!coordinator.pending(132) && !fs::exists(panel_file),
+            "expired pairing clears the panel state");
     std::error_code cleanup_error;
     fs::remove_all(store_path, cleanup_error);
     PairingWindow window(device, certificate);
