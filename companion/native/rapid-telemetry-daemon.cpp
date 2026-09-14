@@ -58,6 +58,8 @@ using namespace std::chrono_literals;
 
 namespace rapid {
 
+std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key);
+
 // Pairing credentials are deliberately protected before they leave the
 // current Windows user's profile.  DPAPI binds the blob to that user's
 // profile and Windows entropy, so the portable build has the same at-rest
@@ -395,6 +397,10 @@ struct Options {
     bool self_test = false;
     std::wstring verify_setup_url;
     std::string pinned_certificate_fingerprint;
+    bool pairing = false;
+    std::wstring pairing_url;
+    std::string pairing_label;
+    fs::path pairing_credential_file;
 };
 
 std::string wide_to_utf8(std::wstring_view input) {
@@ -422,6 +428,35 @@ std::string lower_ascii(std::string input) {
     return input;
 }
 
+std::string hex_text(std::span<const std::uint8_t> bytes) {
+    std::ostringstream output;
+    for (const auto byte : bytes)
+        output << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+    return output.str();
+}
+
+std::vector<std::uint8_t> hex_bytes(std::string_view value, std::size_t expected) {
+    if (value.size() != expected * 2 || value.find_first_not_of("0123456789abcdef") != std::string_view::npos)
+        throw std::runtime_error("invalid pairing hexadecimal value");
+    std::vector<std::uint8_t> output(expected);
+    for (std::size_t i = 0; i < expected; ++i)
+        output[i] = static_cast<std::uint8_t>(std::stoi(std::string(value.substr(i * 2, 2)), nullptr, 16));
+    return output;
+}
+
+std::vector<std::uint8_t> base64_decode(std::string_view value) {
+    DWORD size = 0;
+    if (value.empty() || !CryptStringToBinaryA(std::string(value).c_str(), 0,
+            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &size, nullptr, nullptr))
+        throw std::runtime_error("invalid pairing base64 value");
+    std::vector<std::uint8_t> output(size);
+    if (!CryptStringToBinaryA(std::string(value).c_str(), 0,
+            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, output.data(), &size, nullptr, nullptr))
+        throw std::runtime_error("invalid pairing base64 value");
+    output.resize(size);
+    return output;
+}
+
 std::string certificate_fingerprint(PCCERT_CONTEXT certificate) {
     std::array<BYTE, 32> digest{}; DWORD length = static_cast<DWORD>(digest.size());
     if (!CryptHashCertificate(0, CALG_SHA_256, 0, certificate->pbCertEncoded,
@@ -433,6 +468,50 @@ std::string certificate_fingerprint(PCCERT_CONTEXT certificate) {
         output << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
     return output.str();
 }
+
+struct PairingHttpResponse { DWORD status = 0; std::string body; };
+
+PairingHttpResponse pairing_http(const std::wstring& url, std::wstring method,
+                                 const std::string& body, std::string_view expected_fp) {
+    URL_COMPONENTS parts{}; parts.dwStructSize = sizeof(parts);
+    wchar_t host[256]{}, path[4096]{}; parts.lpszHostName = host; parts.dwHostNameLength = std::size(host);
+    parts.lpszUrlPath = path; parts.dwUrlPathLength = std::size(path);
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
+        throw std::runtime_error("pairing requires an https URL");
+    HINTERNET session = WinHttpOpen(L"raPId pairing", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) throw std::runtime_error("cannot open Windows HTTPS session");
+    HINTERNET connection = WinHttpConnect(session, host, parts.nPort, 0);
+    HINTERNET request = connection ? WinHttpOpenRequest(connection, method.c_str(), path, nullptr, WINHTTP_NO_REFERER,
+                                                         WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr;
+    if (!request) { if (connection) WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("cannot create pairing request"); }
+    DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID;
+    WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
+    const wchar_t headers[] = L"Content-Type: application/json\r\n";
+    if (!WinHttpSendRequest(request, body.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers,
+                            body.empty() ? 0 : static_cast<DWORD>(-1L), body.empty() ? nullptr : (LPVOID)body.data(),
+                            static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) ||
+        !WinHttpReceiveResponse(request, nullptr)) {
+        WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("pairing HTTPS request failed");
+    }
+    PCCERT_CONTEXT cert = nullptr; DWORD cert_size = sizeof(cert);
+    if (!WinHttpQueryOption(request, WINHTTP_OPTION_SERVER_CERT_CONTEXT, &cert, &cert_size)) {
+        WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("pairing server did not provide a certificate");
+    }
+    const auto actual = certificate_fingerprint(cert); CertFreeCertificateContext(cert);
+    if (actual != expected_fp) { WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("pairing certificate fingerprint mismatch"); }
+    DWORD status = 0, status_size = sizeof(status); WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
+    std::string response; DWORD available = 0;
+    while (WinHttpQueryDataAvailable(request, &available) && available) { const auto at = response.size(); response.resize(at + available); DWORD got = 0; if (!WinHttpReadData(request, response.data() + at, available, &got)) break; response.resize(at + got); }
+    WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session);
+    return {status, std::move(response)};
+}
+
+std::string json_field(std::string_view json, std::string_view name) {
+    const std::string needle = "\"" + std::string(name) + "\""; const auto key = json.find(needle); if (key == std::string_view::npos) throw std::runtime_error("pairing response missing " + std::string(name));
+    auto p = json.find(':', key + needle.size()); p = json.find('"', p); if (p == std::string_view::npos) throw std::runtime_error("invalid pairing response"); ++p; const auto end = json.find('"', p); if (end == std::string_view::npos) throw std::runtime_error("invalid pairing response"); return std::string(json.substr(p, end - p));
+}
+
+std::string json_escape(std::string_view value) { std::string out; for (char c : value) { if (c == '"' || c == '\\') out += '\\'; out += c; } return out; }
 
 int verify_setup_certificate(const std::wstring& url, const std::string& expected) {
     if (expected.size() != 64 || expected.find_first_not_of("0123456789abcdef") != std::string::npos)
@@ -467,6 +546,44 @@ int verify_setup_certificate(const std::wstring& url, const std::string& expecte
     if (actual != expected) throw std::runtime_error("setup certificate fingerprint mismatch");
     std::cout << "Setup certificate fingerprint verified: " << actual << '\n';
     return 0;
+}
+
+std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std::string_view tx, std::string_view nonce,
+                                                    std::string_view companion, std::string_view ephemeral,
+                                                    std::string_view ciphertext64, std::string_view tag64,
+                                                    std::span<const std::uint8_t> private_blob) {
+    auto peer = hex_bytes(ephemeral, 32); auto cipher = base64_decode(ciphertext64); auto tagv = base64_decode(tag64);
+    auto nonce_bytes = hex_bytes(nonce, 16); if (cipher.size() != 32 || tagv.size() != 16) throw std::runtime_error("invalid pairing envelope sizes");
+    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_KEY_HANDLE local = nullptr, peer_key = nullptr; BCRYPT_SECRET_HANDLE secret = nullptr;
+    try {
+        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0) throw std::runtime_error("CNG ECDH unavailable");
+        const wchar_t curve[] = L"Curve25519"; if (BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME, (PUCHAR)curve, sizeof(curve), 0) < 0 || BCryptImportKeyPair(alg, nullptr, BCRYPT_ECCPRIVATE_BLOB, &local, const_cast<PUCHAR>(private_blob.data()), static_cast<ULONG>(private_blob.size()), 0) < 0) throw std::runtime_error("CNG Curve25519 private-key import failed");
+        ULONG blob_size = 0; if (BCryptExportKey(local, nullptr, BCRYPT_ECCPUBLIC_BLOB, nullptr, 0, &blob_size, 0) < 0 || blob_size != 72) throw std::runtime_error("CNG public blob export failed");
+        std::vector<std::uint8_t> blob(blob_size); if (BCryptExportKey(local, nullptr, BCRYPT_ECCPUBLIC_BLOB, blob.data(), blob_size, &blob_size, 0) < 0) throw std::runtime_error("CNG public blob export failed");
+        std::copy(peer.begin(), peer.end(), blob.begin() + 8);
+        if (BCryptImportKeyPair(alg, nullptr, BCRYPT_ECCPUBLIC_BLOB, &peer_key, blob.data(), blob_size, 0) < 0 || BCryptSecretAgreement(local, peer_key, &secret, 0) < 0) throw std::runtime_error("CNG Curve25519 agreement failed");
+        std::array<std::uint8_t, 32> shared{}; ULONG shared_size = 0; if (BCryptDeriveKey(secret, BCRYPT_KDF_RAW_SECRET, nullptr, shared.data(), shared.size(), &shared_size, 0) < 0 || shared_size != shared.size()) throw std::runtime_error("CNG shared secret derivation failed");
+        const std::string salt = "rapid-pairing-salt-v1|" + std::string(tx) + "|" + std::string(nonce); const std::string info = "rapid-pairing-envelope-v1";
+        const std::string aad = "rapid-pairing-envelope-v1|" + std::string(device) + "|" + std::string(tx) + "|" + std::string(nonce) + "|" + std::string(companion) + "|" + std::string(ephemeral);
+        auto key = cng_hkdf_sha256(shared, std::span<const std::uint8_t>((const std::uint8_t*)salt.data(), salt.size()), std::span<const std::uint8_t>((const std::uint8_t*)info.data(), info.size()));
+        std::array<std::uint8_t, 16> tag{}; std::copy(tagv.begin(), tagv.end(), tag.begin()); auto plain = cng_aes256_gcm(false, key, nonce_bytes, std::span<const std::uint8_t>((const std::uint8_t*)aad.data(), aad.size()), cipher, &tag);
+        BCryptDestroySecret(secret); BCryptDestroyKey(peer_key); BCryptDestroyKey(local); BCryptCloseAlgorithmProvider(alg, 0); SecureZeroMemory(shared.data(), shared.size()); SecureZeroMemory(key.data(), key.size()); return plain;
+    } catch (...) { if (secret) BCryptDestroySecret(secret); if (peer_key) BCryptDestroyKey(peer_key); if (local) BCryptDestroyKey(local); if (alg) BCryptCloseAlgorithmProvider(alg, 0); throw; }
+}
+
+int run_pairing(const Options& options) {
+    if (options.pairing_label.empty() || options.pairing_url.empty() || options.pinned_certificate_fingerprint.size() != 64) throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
+    const auto base = options.pairing_url; const auto setup = pairing_http(base + L"/api/v1/setup", L"GET", {}, options.pinned_certificate_fingerprint);
+    if (setup.status != 200) throw std::runtime_error("pairing setup endpoint failed");
+    const auto device = json_field(setup.body, "device_id"); const auto fp = lower_ascii(json_field(setup.body, "certificate_fingerprint")); if (fp != options.pinned_certificate_fingerprint) throw std::runtime_error("setup fingerprint does not match pinned fingerprint");
+    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_KEY_HANDLE key = nullptr; const wchar_t curve[] = L"Curve25519"; if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0 || BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME, (PUCHAR)curve, sizeof(curve), 0) < 0 || BCryptGenerateKeyPair(alg, &key, 255, 0) < 0 || BCryptFinalizeKeyPair(key, 0) < 0) throw std::runtime_error("CNG Curve25519 generation failed");
+    ULONG private_size = 0; if (BCryptExportKey(key, nullptr, BCRYPT_ECCPRIVATE_BLOB, nullptr, 0, &private_size, 0) < 0) throw std::runtime_error("CNG private-key export failed"); std::vector<std::uint8_t> private_blob(private_size); if (BCryptExportKey(key, nullptr, BCRYPT_ECCPRIVATE_BLOB, private_blob.data(), private_size, &private_size, 0) < 0) throw std::runtime_error("CNG private-key export failed");
+    const auto pub = export_curve25519_wire_public(key); BCryptDestroyKey(key); BCryptCloseAlgorithmProvider(alg, 0); const auto pubhex = hex_text(pub);
+    const std::string request_body = "{\"label\":\"" + json_escape(options.pairing_label) + "\",\"companion_public_key\":\"" + pubhex + "\"}";
+    const auto requested = pairing_http(base + L"/api/v1/pairing/request", L"POST", request_body, options.pinned_certificate_fingerprint); if (requested.status != 200 && requested.status != 201) throw std::runtime_error("pairing request rejected");
+    const auto tx = json_field(requested.body, "transaction_id"); const auto nonce = json_field(requested.body, "nonce"); std::cout << "Pairing verification code: " << cng_pairing_verification_code(device, fp, tx, nonce, pubhex) << '\n';
+    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
+    throw std::runtime_error("pairing approval timed out");
 }
 
 fs::path default_output_directory() {
@@ -680,6 +797,12 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (raw == L"--certificate-fingerprint") {
             options.pinned_certificate_fingerprint = lower_ascii(
                 wide_to_utf8(option_value(i, argc, argv, L"--certificate-fingerprint")));
+        } else if (raw == L"--pair" || raw == L"--pairing-url") {
+            options.pairing = true; options.pairing_url = option_value(i, argc, argv, L"--pairing-url");
+        } else if (raw == L"--pairing-label") {
+            options.pairing_label = wide_to_utf8(option_value(i, argc, argv, L"--pairing-label"));
+        } else if (raw == L"--pairing-credential-file") {
+            options.pairing_credential_file = option_value(i, argc, argv, L"--pairing-credential-file");
         } else if (raw == L"--help" || raw == L"-?" || raw == L"/?") {
             std::puts("raPId native telemetry daemon\n"
                       "  --pi-host HOST            Pi hostname/address (default: rapid)\n"
@@ -697,6 +820,9 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --headless --self-test\n"
                       "  --verify-setup-url URL       Verify an HTTPS setup certificate fingerprint and exit\n"
                       "  --certificate-fingerprint HEX64  Expected SHA-256 setup certificate fingerprint\n"
+                      "  --pairing-url URL          Pair this companion with the Pi and store its credential\n"
+                      "  --pairing-label LABEL      Friendly name shown during pairing\n"
+                      "  --pairing-credential-file PATH  DPAPI credential destination\n"
                       "Key precedence: command line, RAPID_TELEMETRY_KEY, config file.");
             std::exit(0);
         } else {
@@ -706,8 +832,18 @@ Options parse_options(int argc, wchar_t** argv) {
     if (options.pi_host.empty()) throw std::runtime_error("Pi host cannot be empty");
     if (!options.verify_setup_url.empty() && options.pinned_certificate_fingerprint.empty())
         throw std::runtime_error("--verify-setup-url requires --certificate-fingerprint");
+    if (options.pairing) {
+        if (options.pairing_url.empty() || options.pairing_label.empty() || options.pinned_certificate_fingerprint.size() != 64)
+            throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
+        if (options.pairing_credential_file.empty()) {
+            PWSTR known = nullptr;
+            if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &known))) {
+                options.pairing_credential_file = fs::path(known) / L"raPId" / L"pairing.key.dpapi"; CoTaskMemFree(known);
+            } else options.pairing_credential_file = fs::current_path() / L"pairing.key.dpapi";
+        }
+    }
     if (options.protocol == Protocol::v4 && !options.no_forward && options.auth_key.empty() &&
-        !options.self_test && options.verify_setup_url.empty()) {
+        !options.self_test && options.verify_setup_url.empty() && !options.pairing) {
         throw std::runtime_error(
             "Protocol v4 requires a 256-bit HMAC key. Set --auth-key, --auth-key-file, "
             "RAPID_TELEMETRY_KEY, or auth_key in the daemon config.");
@@ -2601,7 +2737,7 @@ int wmain(int argc, wchar_t** argv) {
         const Options options = parse_options(argc, argv);
         g_show_error_dialog = !options.headless && !options.self_test &&
                               options.verify_setup_url.empty() &&
-                              options.store_auth_key_dpapi_file.empty();
+                              options.store_auth_key_dpapi_file.empty() && !options.pairing;
         if (!options.verify_setup_url.empty())
             return verify_setup_certificate(options.verify_setup_url,
                                             options.pinned_certificate_fingerprint);
@@ -2613,6 +2749,7 @@ int wmain(int argc, wchar_t** argv) {
             write_dpapi_credential(options.store_auth_key_dpapi_file, options.auth_key);
             return 0;
         }
+        if (options.pairing) return run_pairing(options);
         if (options.self_test) return run_self_test(options.output_directory, options.sample_rate) ? 0 : 1;
         if (!options.headless && GetConsoleWindow()) ShowWindow(GetConsoleWindow(), SW_HIDE);
         std::error_code directory_error;
