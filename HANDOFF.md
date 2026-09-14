@@ -120,7 +120,7 @@ Physical panel rendering and touch approval, the Windows pairing
 request/envelope/DPAPI client flow and pinned reconnect remain pending;
 the Pi ARM64 rebuild and hardware flow are still required.
 
-Latest local checkpoint: source `2f49bdc` and wiki `a6242d4`. On 2026-09-14
+Latest local checkpoint: source `29d22f4` and wiki `10b48b3`. On 2026-09-14
 the pinned Zig Windows build and native self-test passed, including CNG
 Curve25519 agreement, HKDF-SHA-256, AES-256-GCM decrypt, and tamper rejection,
 alongside the AC1/Content Manager adapter fixture checks. The self-test was
