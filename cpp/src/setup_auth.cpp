@@ -216,7 +216,7 @@ Response SetupAuth::handle(const Request &request) {
   const auto session = sessions_.find(hash_text(token));
   if (token.empty() || session == sessions_.end())
     return reply(401, {{"detail", "sign in required"}});
-  if (pairing_ && path == "/api/v1/pairing/window" && request.method == "POST") {
+  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/window" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});
     const auto body = Json::parse(request.body, nullptr, false);
@@ -225,7 +225,7 @@ Response SetupAuth::handle(const Request &request) {
     if (body["open"]) pairing_->open(time); else pairing_->cancel();
     return reply(200, {{"active", pairing_->active(time)}});
   }
-  if (pairing_ && path == "/api/v1/pairing/pending" && request.method == "GET") {
+  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/pending" && request.method == "GET") {
     const auto pending = pairing_->pending(time);
     if (!pending) return reply(404, {{"detail", "no pairing request pending"}});
     return reply(200, {{"transaction_id", pending->transaction_id},
@@ -233,11 +233,11 @@ Response SetupAuth::handle(const Request &request) {
                        {"companion_public_key", pending->companion_public_key},
                        {"code", pending->code}, {"expires_at", pending->expires_at}});
   }
-  if (pairing_ && path == "/api/v1/pairing/state" && request.method == "GET") {
+  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/state" && request.method == "GET") {
     const auto pending = pairing_->pending(time);
     return reply(200, {{"active", pairing_->active(time)}, {"pending", pending.has_value()}});
   }
-  if (pairing_ && path == "/api/v1/pairing/approve" && request.method == "POST") {
+  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/approve" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});
     const auto body = Json::parse(request.body, nullptr, false);
