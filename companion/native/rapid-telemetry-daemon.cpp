@@ -130,9 +130,18 @@ std::vector<std::uint8_t> read_dpapi_credential(const fs::path& path) {
         throw std::runtime_error("invalid DPAPI pairing credential");
     std::vector<std::uint8_t> blob(size);
     input.read(reinterpret_cast<char *>(blob.data()), static_cast<std::streamsize>(blob.size()));
-    if (!input || input.peek() != std::char_traits<char>::eof())
+    if (!input || input.peek() != std::char_traits<char>::eof()) {
+        if (!blob.empty()) SecureZeroMemory(blob.data(), blob.size());
         throw std::runtime_error("invalid DPAPI pairing credential");
-    return dpapi_unprotect(blob);
+    }
+    try {
+        auto result = dpapi_unprotect(blob);
+        if (!blob.empty()) SecureZeroMemory(blob.data(), blob.size());
+        return result;
+    } catch (...) {
+        if (!blob.empty()) SecureZeroMemory(blob.data(), blob.size());
+        throw;
+    }
 }
 
 std::vector<std::uint8_t> cng_hmac_sha256(std::span<const std::uint8_t> key,
