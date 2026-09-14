@@ -50,7 +50,11 @@ int main() {
     const auto panel_file = store_path / "pairing.json";
     const auto approval_file = store_path / "pairing-approval.json";
     SetupStore store(store_path);
+    atomic_file(panel_file, "stale panel");
+    atomic_file(approval_file, "stale approval");
     PairingCoordinator coordinator(store, device, certificate, panel_file, approval_file);
+    require(!fs::exists(panel_file) && !fs::exists(approval_file),
+            "pairing restart clears stale panel handoffs");
     coordinator.open(0);
     const auto coordinated = coordinator.request("Driver PC", derive_public_key(private_key), 1);
     require(fs::exists(panel_file), "pairing panel state is published");

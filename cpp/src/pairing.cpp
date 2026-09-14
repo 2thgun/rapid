@@ -316,7 +316,12 @@ PairingCoordinator::PairingCoordinator(SetupStore &store, std::string device_id,
                                        fs::path panel_approval_file)
     : store_(store), device_id_(std::move(device_id)),
       window_(device_id_, std::move(certificate_fingerprint)), panel_file_(std::move(panel_file)),
-      panel_approval_file_(std::move(panel_approval_file)) {}
+      panel_approval_file_(std::move(panel_approval_file)) {
+  std::error_code error;
+  if (!panel_file_.empty()) fs::remove(panel_file_, error);
+  error.clear();
+  if (!panel_approval_file_.empty()) fs::remove(panel_approval_file_, error);
+}
 
 void PairingCoordinator::publish_panel(double now) {
   if (panel_file_.empty()) return;
