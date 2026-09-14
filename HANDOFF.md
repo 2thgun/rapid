@@ -13,6 +13,12 @@ Windows HTTPS pairing request/result client, DPAPI handoff integration and
 pinned reconnect; ARM64, clean-device, reboot, display, Wi-Fi and simulator
 acceptance still require hardware.
 
+The constrained settings applicator now invokes `rapid-display-recovery` with a
+preview and confirmation when the packaged service applies a saved rotation;
+the recovery state remains protected by boot-time rollback. The focused setup
+regression verifies this path and reports only Wi-Fi and calibration as
+pending. Real framebuffer/touch behavior remains unverified.
+
 
 Published source through `a694da8` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
