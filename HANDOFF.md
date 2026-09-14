@@ -116,9 +116,9 @@ transaction, label, code and expiry metadata to `/run/rapid/pairing.json` with
 private permissions, clearing it on expiry, cancellation or consumption.
 Its state transitions are serialized across panel, browser and companion
 polling.
-Physical panel rendering and touch approval, the Windows pairing
-request/envelope/DPAPI client flow and pinned reconnect remain pending;
-the Pi ARM64 rebuild and hardware flow are still required.
+Physical panel rendering and touch approval are implemented in the Qt display;
+the Windows pairing request/envelope/DPAPI client flow and pinned reconnect
+remain pending, while the Pi ARM64 rebuild and hardware flow are still required.
 
 Latest local checkpoint: source `29d22f4` and wiki `b35cae5`. On 2026-09-14
 the pinned Zig Windows build and native self-test passed, including CNG
@@ -127,9 +127,8 @@ alongside the AC1/Content Manager adapter fixture checks. The self-test was
 run with an explicit temporary output directory; the default repository-root
 fixture location is not writable under the local sandbox.
 
-Next: render the local pairing metadata on the physical panel and connect its
-approval input, then complete the Windows pairing request/envelope client and
-pinned reconnect. Complete the fresh-card
+Next: complete the Windows pairing request/envelope client and pinned
+reconnect. Complete the fresh-card
 and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
 
