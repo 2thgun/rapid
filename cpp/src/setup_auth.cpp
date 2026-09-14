@@ -190,6 +190,8 @@ Response SetupAuth::handle(const Request &request) {
       return reply(400, {{"detail", "transaction_id required"}});
     const auto start = query + 15;
     const auto end = request.target.find('&', start);
+    if (end != std::string::npos)
+      return reply(400, {{"detail", "invalid transaction_id"}});
     const auto transaction = request.target.substr(start, end == std::string::npos ?
                                                     std::string::npos : end - start);
     if (!valid_transaction(transaction))

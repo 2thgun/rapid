@@ -313,6 +313,9 @@ int main() {
     auto malformed_result = secure("/api/v1/pairing/result?transaction_id=bad&extra=1");
     require(pairing_auth.handle(malformed_result).status == 400,
             "malformed pairing transaction is rejected explicitly");
+    auto extra_result = secure("/api/v1/pairing/result?transaction_id=" + transaction + "&extra=1");
+    require(pairing_auth.handle(extra_result).status == 400,
+            "pairing result rejects extra query parameters");
     auto cancel = secure("/api/v1/pairing/window", "POST", {{"open", false}});
     cancel.headers["cookie"] = pairing_cookie;
     cancel.headers["x-csrf-token"] = pairing_csrf;
