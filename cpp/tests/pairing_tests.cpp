@@ -67,6 +67,11 @@ int main() {
                 panel["label"] == "Driver PC" && panel["code"] == coordinated.code &&
                 !panel.contains("companion_public_key") && !panel.contains("telemetry_key"),
             "pairing panel state contains display metadata without secrets");
+    { std::ofstream malformed(approval_file);
+      malformed << "{\"transaction_id\":\"not-a-transaction\",\"code\":\"bad\"}"; }
+    require(coordinator.pending(2) && !coordinator.pending(2)->approved &&
+                !fs::exists(approval_file),
+            "malformed panel approval is discarded without changing request");
     { std::ofstream approval(approval_file);
       approval << Json{{"transaction_id", coordinated.transaction_id},
                        {"code", coordinated.code}}.dump(); }
