@@ -49,6 +49,29 @@ void set_hostname(const fs::path &program, const std::string &hostname) {
   if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
     throw std::runtime_error("hostname command failed");
 }
+
+void apply_rotation(const fs::path &program, const fs::path &state_file,
+                    const std::string &output, int rotation) {
+  const auto run = [&](const std::vector<std::string> &arguments) {
+    const auto child = fork();
+    if (child < 0) throw std::runtime_error("cannot start display recovery command");
+    if (child == 0) {
+      std::vector<char *> argv;
+      argv.reserve(arguments.size() + 2);
+      argv.push_back(const_cast<char *>(program.c_str()));
+      for (const auto &argument : arguments) argv.push_back(const_cast<char *>(argument.c_str()));
+      argv.push_back(nullptr);
+      execv(program.c_str(), argv.data());
+      _exit(127);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+      throw std::runtime_error("display rotation application failed");
+  };
+  run({"--state-file", state_file.string(), "--output", output,
+       "--rotation", std::to_string(rotation), "--preview"});
+  run({"--state-file", state_file.string(), "--output", output, "--confirm"});
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -56,15 +79,21 @@ int main(int argc, char **argv) {
   std::optional<std::int64_t> revision;
   try {
     fs::path hostnamectl = "/usr/bin/hostnamectl";
+    fs::path display_recovery, display_state;
+    std::string display_output = "default";
     for (int i = 1; i < argc; ++i) {
       const std::string option = argv[i];
       if (option == "--help") {
-        std::cout << "rapid-apply --request-file PATH --result-file PATH [--hostnamectl PATH]\n"
-                     "Applies the hostname in one validated setup profile request.\n";
+        std::cout << "rapid-apply --request-file PATH --result-file PATH [--hostnamectl PATH] "
+                     "[--display-recovery PATH --display-state-file PATH --display-output NAME]\n"
+                     "Applies validated setup settings through constrained services.\n";
         return 0;
       } else if (option == "--request-file" && i + 1 < argc) request_file = argv[++i];
       else if (option == "--result-file" && i + 1 < argc) result_file = argv[++i];
       else if (option == "--hostnamectl" && i + 1 < argc) hostnamectl = argv[++i];
+      else if (option == "--display-recovery" && i + 1 < argc) display_recovery = argv[++i];
+      else if (option == "--display-state-file" && i + 1 < argc) display_state = argv[++i];
+      else if (option == "--display-output" && i + 1 < argc) display_output = argv[++i];
       else throw std::invalid_argument("unknown or incomplete argument; use --help");
     }
     require(!request_file.empty() && !result_file.empty(), "request and result files are required");
@@ -78,11 +107,22 @@ int main(int argc, char **argv) {
     require(fs::is_regular_file(hostnamectl) && ::access(hostnamectl.c_str(), X_OK) == 0,
             "hostnamectl is unavailable");
     set_hostname(hostnamectl, request["settings"]["hostname"].get<std::string>());
+    Json pending = Json::array({"wifi", "calibration"});
+    if (!display_recovery.empty() || !display_state.empty()) {
+      require(!display_recovery.empty() && !display_state.empty(),
+              "display recovery and state file must be supplied together");
+      require(fs::is_regular_file(display_recovery) && ::access(display_recovery.c_str(), X_OK) == 0,
+              "display recovery command is unavailable");
+      apply_rotation(display_recovery, display_state, display_output,
+                     request["settings"]["rotation"].get<int>());
+    } else {
+      pending.push_back("rotation");
+    }
     atomic_file(result_file, Json{{"revision", *revision},
                                   {"hostname_applied", true},
-                                  {"pending", Json::array({"rotation", "wifi", "calibration"})}}.dump() + "\n");
+                                  {"pending", pending}}.dump() + "\n");
     fs::remove(request_file);
-    log("INFO apply: hostname applied; display and Wi-Fi settings remain pending");
+    log("INFO apply: hostname and configured display settings applied; Wi-Fi and calibration remain pending");
     return 0;
   } catch (const std::exception &error) {
     // A path unit observes the request's existence. Consume failures too, so a

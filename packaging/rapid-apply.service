@@ -4,10 +4,12 @@ Description=raPId constrained setup settings application
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/lib/rapid/rapid-apply --request-file /run/rapid-apply/request.json --result-file /run/rapid-apply/result.json
+Environment=DISPLAY=:0
+ExecStart=/usr/lib/rapid/rapid-apply --request-file /run/rapid-apply/request.json --result-file /run/rapid-apply/result.json --display-recovery /usr/lib/rapid/rapid-display-recovery --display-state-file /var/lib/rapid/display-recovery.json --display-output default
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
+ReadWritePaths=/var/lib/rapid /run/rapid-apply

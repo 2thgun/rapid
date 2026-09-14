@@ -111,6 +111,8 @@ int main(int argc, char **argv) {
     const auto apply_result = root.path / "apply-result.json";
     const auto fake_hostnamectl = root.path / "hostnamectl";
     const auto hostname_log = root.path / "hostnamectl.log";
+    const auto fake_display = root.path / "display-recovery";
+    const auto display_log = root.path / "display-recovery.log";
     atomic_file(apply_request, Json{{"revision", 2}, {"settings",
         {{"hostname", "rapid-applied"}, {"rotation", 0},
          {"boot_network", "home_then_ap"}}}}.dump());
@@ -122,11 +124,21 @@ int main(int argc, char **argv) {
     }
     fs::permissions(fake_hostnamectl, fs::perms::owner_all);
     setenv("RAPID_TEST_HOSTNAME_LOG", hostname_log.c_str(), 1);
+    {
+      std::ofstream script(fake_display);
+      script << "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_DISPLAY_LOG\"\n"
+                "exit 0\n";
+    }
+    fs::permissions(fake_display, fs::perms::owner_all);
+    setenv("RAPID_TEST_DISPLAY_LOG", display_log.c_str(), 1);
     const auto apply = fork();
     require(apply >= 0, "fork settings applicator");
     if (apply == 0) {
       execl(argv[3], argv[3], "--request-file", apply_request.c_str(), "--result-file",
-            apply_result.c_str(), "--hostnamectl", fake_hostnamectl.c_str(), nullptr);
+            apply_result.c_str(), "--hostnamectl", fake_hostnamectl.c_str(),
+            "--display-recovery", fake_display.c_str(), "--display-state-file",
+            (root.path / "display-state.json").c_str(), "--display-output", "default", nullptr);
       _exit(127);
     }
     int apply_status = 0;
@@ -136,7 +148,11 @@ int main(int argc, char **argv) {
     unsetenv("RAPID_TEST_HOSTNAME_LOG");
     require(read_file(hostname_log) == "set-hostname rapid-applied\n",
             "settings applicator invokes only fixed hostnamectl arguments");
-    require(Json::parse(read_file(apply_result))["hostname_applied"] == true,
+    const auto applied = Json::parse(read_file(apply_result));
+    require(applied["hostname_applied"] == true &&
+                applied["pending"] == Json::array({"wifi", "calibration"}) &&
+                read_file(display_log).find("--preview") != std::string::npos &&
+                read_file(display_log).find("--confirm") != std::string::npos,
             "settings applicator records a secret-free completion result");
     const auto wifi_request = root.path / "wifi-request.json";
     const auto wifi_result = root.path / "wifi-result.json";
