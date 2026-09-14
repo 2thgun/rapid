@@ -2,7 +2,8 @@
 
 This is the implementation contract for GitHub issue #10. It describes the
 customer pairing flow that will replace copying a shared `telemetry.key`.
-Nothing in the current companion or Pi package implements this protocol yet.
+The Pi transport and envelope primitives are implemented; the companion client
+and panel approval UI remain to be completed against this contract.
 
 ## Goal and boundary
 
