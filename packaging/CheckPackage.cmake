@@ -38,7 +38,7 @@ foreach(path IN ITEMS
     message(FATAL_ERROR "Package is missing ${path}")
   endif()
 endforeach()
-if(contents MATCHES "[.]key\n|[.]db\n|runtime[.]env\n|/home/rapid/|/usr/etc/")
+if(contents MATCHES "[.]key\n|[.]dpapi\n|[.]pem\n|[.]crt\n|[.]p12\n|[.]db\n|runtime[.]env\n|pairing[.]json\n|pairing-approval[.]json\n|/home/rapid/|/usr/etc/")
   message(FATAL_ERROR "Package contains private state or invalid installation paths")
 endif()
 set(data_tar "${PACKAGE}.data.tar")
