@@ -119,7 +119,7 @@ Physical panel rendering and touch approval, the Windows pairing
 request/envelope/DPAPI client flow and pinned reconnect remain pending;
 the Pi ARM64 rebuild and hardware flow are still required.
 
-Latest local checkpoint: source `05be490` plus the subsequent clean handoff
+Latest local checkpoint: source `b3db90c` plus the subsequent clean handoff
 documentation commits. On 2026-09-14 the WSL Release build reported no work,
 all eleven CTest targets passed in 25.27 seconds, and the browser graph
 regression passed. The Windows companion was rebuilt with the pinned Zig
