@@ -21,6 +21,7 @@ class DashboardModel final : public QObject {
   Q_PROPERTY(QString pairingLabel READ pairingLabel NOTIFY changed)
   Q_PROPERTY(QString pairingCode READ pairingCode NOTIFY changed)
   Q_PROPERTY(QString pairingTransaction READ pairingTransaction NOTIFY changed)
+  Q_PROPERTY(bool pairingApprovalSent READ pairingApprovalSent NOTIFY changed)
   Q_PROPERTY(QVariantList graphSamples READ graphSamples NOTIFY changed)
 
 public:
@@ -35,6 +36,7 @@ public:
   QString pairingLabel() const { return pairing_label_; }
   QString pairingCode() const { return pairing_code_; }
   QString pairingTransaction() const { return pairing_transaction_; }
+  bool pairingApprovalSent() const { return pairing_approval_sent_; }
   QVariantList graphSamples() const { return graph_samples_; }
 
   Q_INVOKABLE QVariant value(const QString &key) const;
@@ -70,6 +72,7 @@ private:
   QString pairing_label_;
   QString pairing_code_;
   QString pairing_transaction_;
+  bool pairing_approval_sent_ = false;
   bool network_available_ = false;
   bool live_request_pending_ = false;
   qint64 last_log_sequence_ = -1;

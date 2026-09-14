@@ -88,6 +88,7 @@ int main(int argc, char **argv) {
               model.pairingCode() == "12345678" && model.approvePairing(),
           "Pairing panel metadata and approval action are exposed");
   require(QFile::exists(pairing_approval), "Pairing panel approval handoff is written");
+  require(!model.approvePairing(), "Pairing panel approval is one-shot");
   const auto approval_permissions = QFileInfo(pairing_approval).permissions();
   require(!(approval_permissions & QFileDevice::ReadOther) &&
               !(approval_permissions & QFileDevice::WriteOther),

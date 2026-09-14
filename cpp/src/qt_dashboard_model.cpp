@@ -116,17 +116,19 @@ void DashboardModel::pollPairingPanel() {
   }
   if (pairing_pending_ != pending || pairing_label_ != label || pairing_code_ != code ||
       pairing_transaction_ != transaction) {
+    if (pairing_transaction_ != transaction) pairing_approval_sent_ = false;
     pairing_pending_ = pending;
     pairing_label_ = std::move(label);
     pairing_code_ = std::move(code);
     pairing_transaction_ = std::move(transaction);
+    if (!pairing_pending_) pairing_approval_sent_ = false;
     bump();
   }
   QTimer::singleShot(500, this, &DashboardModel::pollPairingPanel);
 }
 
 bool DashboardModel::approvePairing() {
-  if (!pairing_pending_) return false;
+  if (!pairing_pending_ || pairing_approval_sent_) return false;
   const QString path = qEnvironmentVariable("RAPID_PAIRING_APPROVAL",
                                             "/run/rapid/pairing-approval.json");
   const QFileInfo info(path);
@@ -145,7 +147,10 @@ bool DashboardModel::approvePairing() {
     return false;
   }
   QFile::remove(path);
-  return QFile::rename(temporary, path);
+  if (!QFile::rename(temporary, path)) return false;
+  pairing_approval_sent_ = true;
+  bump();
+  return true;
 }
 
 void DashboardModel::consumeLive(QNetworkReply *reply) {
