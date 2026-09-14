@@ -6,6 +6,7 @@
 #include <mstcpip.h>
 #include <bcrypt.h>
 #include <wincrypt.h>
+#include <winhttp.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <tlhelp32.h>
@@ -238,6 +239,8 @@ struct Options {
     bool no_forward = false;
     bool headless = false;
     bool self_test = false;
+    std::wstring verify_setup_url;
+    std::string pinned_certificate_fingerprint;
 };
 
 std::string wide_to_utf8(std::wstring_view input) {
@@ -263,6 +266,53 @@ std::string lower_ascii(std::string input) {
         return static_cast<char>(std::tolower(c));
     });
     return input;
+}
+
+std::string certificate_fingerprint(PCCERT_CONTEXT certificate) {
+    std::array<BYTE, 32> digest{}; DWORD length = static_cast<DWORD>(digest.size());
+    if (!CryptHashCertificate(0, CALG_SHA_256, 0, certificate->pbCertEncoded,
+                              certificate->cbCertEncoded, digest.data(), &length) ||
+        length != digest.size())
+        throw std::runtime_error("could not hash setup certificate");
+    std::ostringstream output;
+    for (const auto byte : digest)
+        output << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+    return output.str();
+}
+
+int verify_setup_certificate(const std::wstring& url, const std::string& expected) {
+    if (expected.size() != 64 || expected.find_first_not_of("0123456789abcdef") != std::string::npos)
+        throw std::runtime_error("certificate fingerprint must be 64 lowercase hexadecimal characters");
+    URL_COMPONENTS parts{}; parts.dwStructSize = sizeof(parts);
+    wchar_t host[256]{}; wchar_t path[2048]{};
+    parts.lpszHostName = host; parts.dwHostNameLength = static_cast<DWORD>(std::size(host));
+    parts.lpszUrlPath = path; parts.dwUrlPathLength = static_cast<DWORD>(std::size(path));
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
+        throw std::runtime_error("setup verification requires an https URL");
+    HINTERNET session = WinHttpOpen(L"raPId pairing", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) throw std::runtime_error("cannot open Windows HTTPS session");
+    HINTERNET connection = WinHttpConnect(session, host, parts.nPort, 0);
+    HINTERNET request = connection ? WinHttpOpenRequest(connection, L"GET", path, nullptr,
+                                                          WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr;
+    if (!request) { if (connection) WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("cannot create setup HTTPS request"); }
+    DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID;
+    WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
+    if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request, nullptr)) {
+        WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session);
+        throw std::runtime_error("setup HTTPS request failed");
+    }
+    PCCERT_CONTEXT certificate = nullptr; DWORD size = sizeof(certificate);
+    const bool got_certificate = WinHttpQueryOption(request, WINHTTP_OPTION_SERVER_CERT_CONTEXT,
+                                                     &certificate, &size) != FALSE;
+    if (!got_certificate) { WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("setup server did not provide a certificate"); }
+    const auto actual = certificate_fingerprint(certificate);
+    CertFreeCertificateContext(certificate);
+    WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session);
+    if (actual != expected) throw std::runtime_error("setup certificate fingerprint mismatch");
+    std::cout << "Setup certificate fingerprint verified: " << actual << '\n';
+    return 0;
 }
 
 fs::path default_output_directory() {
@@ -471,6 +521,11 @@ Options parse_options(int argc, wchar_t** argv) {
             options.headless = true;
         } else if (raw == L"--self-test" || raw == L"-selftest") {
             options.self_test = true;
+        } else if (raw == L"--verify-setup-url") {
+            options.verify_setup_url = option_value(i, argc, argv, L"--verify-setup-url");
+        } else if (raw == L"--certificate-fingerprint") {
+            options.pinned_certificate_fingerprint = lower_ascii(
+                wide_to_utf8(option_value(i, argc, argv, L"--certificate-fingerprint")));
         } else if (raw == L"--help" || raw == L"-?" || raw == L"/?") {
             std::puts("raPId native telemetry daemon\n"
                       "  --pi-host HOST            Pi hostname/address (default: rapid)\n"
@@ -486,6 +541,8 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --output-directory PATH   Local fallback/log directory\n"
                       "  --no-forward              Disable Pi forwarding\n"
                       "  --headless --self-test\n"
+                      "  --verify-setup-url URL       Verify an HTTPS setup certificate fingerprint and exit\n"
+                      "  --certificate-fingerprint HEX64  Expected SHA-256 setup certificate fingerprint\n"
                       "Key precedence: command line, RAPID_TELEMETRY_KEY, config file.");
             std::exit(0);
         } else {
@@ -493,6 +550,8 @@ Options parse_options(int argc, wchar_t** argv) {
         }
     }
     if (options.pi_host.empty()) throw std::runtime_error("Pi host cannot be empty");
+    if (!options.verify_setup_url.empty() && options.pinned_certificate_fingerprint.empty())
+        throw std::runtime_error("--verify-setup-url requires --certificate-fingerprint");
     if (options.protocol == Protocol::v4 && !options.no_forward && options.auth_key.empty() && !options.self_test) {
         throw std::runtime_error(
             "Protocol v4 requires a 256-bit HMAC key. Set --auth-key, --auth-key-file, "
@@ -2210,6 +2269,9 @@ int wmain(int argc, wchar_t** argv) {
     using namespace rapid;
     try {
         const Options options = parse_options(argc, argv);
+        if (!options.verify_setup_url.empty())
+            return verify_setup_certificate(options.verify_setup_url,
+                                            options.pinned_certificate_fingerprint);
         if (!options.store_auth_key_dpapi_file.empty()) {
             if (options.auth_key.size() != 32)
                 throw std::runtime_error("--store-auth-key-dpapi requires a 256-bit key");

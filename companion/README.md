@@ -20,6 +20,18 @@ paired 256-bit key can be imported into the current user's DPAPI scope with
 neither operation writes a plaintext key. The Pi now exposes the HTTPS pairing
 state API, while the companion HTTPS request/approval UI remains pending.
 
+The companion can verify a Pi setup certificate before a pairing client uses it:
+
+```powershell
+./rapid-telemetry-daemon.exe --verify-setup-url https://192.168.1.64:8002/setup `
+  --certificate-fingerprint <64 lowercase hex characters>
+```
+
+This explicitly pinned probe is the only path that accepts the Pi's self-signed
+certificate. It fails on a non-HTTPS URL or fingerprint mismatch and does not
+write credentials. The full request, code comparison, envelope decryption and
+DPAPI handoff are still pending.
+
 The planned replacement for private pre-paired bundles is specified in
 [the companion pairing contract](PAIRING-CONTRACT.md). It is a development
 contract; transport and approval remain an unimplemented customer flow.
