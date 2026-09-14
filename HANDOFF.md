@@ -120,12 +120,12 @@ Physical panel rendering and touch approval, the Windows pairing
 request/envelope/DPAPI client flow and pinned reconnect remain pending;
 the Pi ARM64 rebuild and hardware flow are still required.
 
-Latest local checkpoint: source `51d0369` plus the subsequent clean handoff
-documentation commits. On 2026-09-14 the WSL Release build reported no work,
-all eleven CTest targets passed in 25.27 seconds, and the browser graph
-regression passed. The Windows companion was rebuilt with the pinned Zig
-toolchain and its adapter self-test passed; the negative HTTPS probe exits
-non-modally with a clear error.
+Latest local checkpoint: source `9d546e7` and wiki `d0ed9ac`. On 2026-09-14
+the pinned Zig Windows build and native self-test passed, including the CNG
+Curve25519 wire-key export/shared-secret check and the AC1/Content Manager
+adapter fixture checks. The self-test was run with an explicit temporary
+output directory; the default repository-root fixture location is not
+writable under the local sandbox.
 
 Next: render the local pairing metadata on the physical panel and connect its
 approval input, then complete the Windows pairing request/envelope client and
