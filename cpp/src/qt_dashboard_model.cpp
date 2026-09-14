@@ -139,8 +139,11 @@ bool DashboardModel::approvePairing() {
     file.close(); QFile::remove(temporary); return false;
   }
   file.close();
-  file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
-                      QFileDevice::ReadGroup);
+  if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                           QFileDevice::ReadGroup)) {
+    QFile::remove(temporary);
+    return false;
+  }
   QFile::remove(path);
   return QFile::rename(temporary, path);
 }

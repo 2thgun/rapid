@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
+#include <QFileInfo>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryFile>
@@ -87,6 +88,10 @@ int main(int argc, char **argv) {
               model.pairingCode() == "12345678" && model.approvePairing(),
           "Pairing panel metadata and approval action are exposed");
   require(QFile::exists(pairing_approval), "Pairing panel approval handoff is written");
+  const auto approval_permissions = QFileInfo(pairing_approval).permissions();
+  require(!(approval_permissions & QFileDevice::ReadOther) &&
+              !(approval_permissions & QFileDevice::WriteOther),
+          "Pairing panel approval handoff is not world-readable");
   require(model.graphSamples().size() == 1, "Repeated polling duplicated a source sample");
   require(model.graphSamples().first().toMap()["throttle"].toDouble() == 75, "Pedal scale");
   state["samples_received"] = 2;
