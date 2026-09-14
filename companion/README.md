@@ -14,6 +14,9 @@ Before building a paired demo bundle, run
 `git submodule update --init --recursive` from the repository root. The packager
 exports the pinned wiki guides beside the executable. Pairing keys remain private.
 
+The native `--self-test` also exercises Windows CNG Curve25519 key agreement,
+which is the shared-secret primitive required by the pairing envelope.
+
 The pairing credential storage primitive is available in the native daemon. A
 paired 256-bit key can be imported into the current user's DPAPI scope with
 `--store-auth-key-dpapi PATH` and loaded with `--auth-key-dpapi-file PATH`;

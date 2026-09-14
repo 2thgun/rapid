@@ -42,6 +42,13 @@
 #include <utility>
 #include <vector>
 
+#ifndef BCRYPT_ECDH_ALGORITHM
+#define BCRYPT_ECDH_ALGORITHM L"ECDH"
+#endif
+#ifndef BCRYPT_ECC_CURVE_NAME
+#define BCRYPT_ECC_CURVE_NAME L"ECCCurveName"
+#endif
+
 #ifndef SIO_UDP_CONNRESET
 #define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
 #endif
@@ -2161,7 +2168,50 @@ void iracing() {
 }
 } // namespace additional_adapter_self_test
 
+void pairing_crypto_self_test() {
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_KEY_HANDLE first = nullptr, second = nullptr;
+    BCRYPT_SECRET_HANDLE first_secret = nullptr, second_secret = nullptr;
+    auto close = [&] {
+        if (first_secret) BCryptDestroySecret(first_secret);
+        if (second_secret) BCryptDestroySecret(second_secret);
+        if (first) BCryptDestroyKey(first);
+        if (second) BCryptDestroyKey(second);
+        if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    };
+    try {
+        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0)
+            throw std::runtime_error("BCrypt ECDH provider unavailable");
+        const wchar_t curve[] = L"Curve25519";
+        if (BCryptSetProperty(algorithm, BCRYPT_ECC_CURVE_NAME,
+                              reinterpret_cast<PUCHAR>(const_cast<wchar_t *>(curve)),
+                              sizeof(curve), 0) < 0 ||
+            BCryptGenerateKeyPair(algorithm, &first, 255, 0) < 0 ||
+            BCryptGenerateKeyPair(algorithm, &second, 255, 0) < 0 ||
+            BCryptFinalizeKeyPair(first, 0) < 0 || BCryptFinalizeKeyPair(second, 0) < 0 ||
+            BCryptSecretAgreement(first, second, &first_secret, 0) < 0 ||
+            BCryptSecretAgreement(second, first, &second_secret, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 setup failed");
+        std::array<std::uint8_t, 32> left{}, right{};
+        ULONG left_size = 0, right_size = 0;
+        if (BCryptDeriveKey(first_secret, BCRYPT_KDF_RAW_SECRET, nullptr,
+                            left.data(), static_cast<ULONG>(left.size()), &left_size, 0) < 0 ||
+            BCryptDeriveKey(second_secret, BCRYPT_KDF_RAW_SECRET, nullptr,
+                            right.data(), static_cast<ULONG>(right.size()), &right_size, 0) < 0 ||
+            left_size != left.size() || right_size != right.size() || left != right)
+            throw std::runtime_error("CNG Curve25519 shared-secret mismatch");
+        SecureZeroMemory(left.data(), left.size());
+        SecureZeroMemory(right.data(), right.size());
+        close();
+        std::cout << "Windows CNG Curve25519 shared-secret self-test passed\n";
+    } catch (...) {
+        close();
+        throw;
+    }
+}
+
 bool run_self_test(const fs::path& directory, int sample_rate) {
+    pairing_crypto_self_test();
     const auto [ac_frame, ac_metadata] = assetto_self_test::run();
     additional_adapter_self_test::ace();
     additional_adapter_self_test::iracing();
