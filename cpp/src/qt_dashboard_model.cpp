@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QUrlQuery>
 #include <QtMath>
+#include <utility>
 
 namespace {
 QString format_time(const QVariant &value) {
@@ -53,6 +54,7 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   QTimer::singleShot(0, this, &DashboardModel::pollNetworkMode);
   QTimer::singleShot(0, this, &DashboardModel::pollLogStatus);
   QTimer::singleShot(0, this, &DashboardModel::pollSetupStatus);
+  QTimer::singleShot(0, this, &DashboardModel::pollPairingPanel);
 }
 
 QVariant DashboardModel::value(const QString &key) const { return state_.value(key); }
@@ -88,6 +90,30 @@ void DashboardModel::pollSetupStatus() {
     bump();
   }
   QTimer::singleShot(1000, this, &DashboardModel::pollSetupStatus);
+}
+
+void DashboardModel::pollPairingPanel() {
+  QFile file(qEnvironmentVariable("RAPID_PAIRING_PANEL", "/run/rapid/pairing.json"));
+  bool pending = false;
+  QString label, code;
+  if (file.open(QIODevice::ReadOnly)) {
+    const auto document = QJsonDocument::fromJson(file.readAll());
+    if (document.isObject()) {
+      const auto object = document.object();
+      label = object.value("label").toString();
+      code = object.value("code").toString();
+      bool numeric = false;
+      code.toLongLong(&numeric);
+      pending = !label.isEmpty() && code.size() == 8 && numeric;
+    }
+  }
+  if (pairing_pending_ != pending || pairing_label_ != label || pairing_code_ != code) {
+    pairing_pending_ = pending;
+    pairing_label_ = std::move(label);
+    pairing_code_ = std::move(code);
+    bump();
+  }
+  QTimer::singleShot(500, this, &DashboardModel::pollPairingPanel);
 }
 
 void DashboardModel::consumeLive(QNetworkReply *reply) {

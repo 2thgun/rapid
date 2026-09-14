@@ -79,6 +79,16 @@ Window {
             MouseArea { id: wifiTouch; anchors.fill: parent; onClicked: root.wifiMenu = !root.wifiMenu }
         }
     }
+
+    Card {
+        visible: dashboard.pairingPending
+        x: 6; y: 44; width: 468; height: 48
+        border.color: root.accent
+        Label { x: 10; y: 7; width: 250; text: "PAIRING REQUEST  " + dashboard.pairingLabel; color: root.accent }
+        Text { x: 280; y: 8; width: 178; text: dashboard.pairingCode; horizontalAlignment: Text.AlignRight
+            color: "#f4f7f9"; font.pixelSize: 24; font.bold: true; font.letterSpacing: 2 }
+        Label { x: 10; y: 27; width: 440; text: "Compare this code with the companion before approving" }
+    }
     Item {
         id: body
         x: 6; y: 46; width: 468; height: 214
