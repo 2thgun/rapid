@@ -40,6 +40,7 @@ Credential writes are committed through a flushed temporary file and atomic
 replace so an interrupted settings recovery cannot leave a truncated blob.
 The reader clears the protected blob after unprotecting it, including when
 validation or DPAPI unprotect fails.
+The writer rejects anything other than the contract's 32-byte telemetry key.
 
 The companion can verify a Pi setup certificate before a pairing client uses it:
 

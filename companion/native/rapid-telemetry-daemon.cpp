@@ -91,6 +91,8 @@ std::vector<std::uint8_t> dpapi_unprotect(std::span<const std::uint8_t> blob) {
 
 void write_dpapi_credential(const fs::path& path, std::span<const std::uint8_t> plain) {
     constexpr std::array<char, 8> magic{'R','P','D','P','A','P','I','1'};
+    if (plain.size() != 32)
+        throw std::invalid_argument("DPAPI pairing credential must be a 256-bit key");
     const auto protected_blob = dpapi_protect(plain);
     std::error_code directory_error;
     if (!path.parent_path().empty()) fs::create_directories(path.parent_path(), directory_error);
