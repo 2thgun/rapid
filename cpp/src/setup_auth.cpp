@@ -96,8 +96,11 @@ Response SetupAuth::handle(const Request &request) {
     return reply(413, {{"detail", "request too large"}});
   if (request.method != "GET" && request.method != "POST")
     return {405, "{\"detail\":\"method not allowed\"}", "application/json", {{"Allow", "GET, POST"}}};
+  const bool companion_pairing_request = pairing_transport_ &&
+      path == "/api/v1/pairing/request" && request.method == "POST";
   if (request.method == "POST" &&
-      (origin != origin_ || header(request, "content-type") != "application/json"))
+      ((!companion_pairing_request && origin != origin_) ||
+       header(request, "content-type") != "application/json"))
     return reply(403, {{"detail", "same-origin JSON required"}});
 
   std::lock_guard lock(mutex_);

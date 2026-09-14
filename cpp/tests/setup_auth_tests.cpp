@@ -262,6 +262,7 @@ int main() {
     require(pairing_auth.handle(window).status == 200, "owner opens pairing window");
     auto pairing_request = secure("/api/v1/pairing/request", "POST",
         {{"label", "Test PC"}, {"companion_public_key", std::string(64, 'a')}});
+    pairing_request.headers.erase("origin");
     const auto requested = pairing_auth.handle(pairing_request);
     require(requested.status == 201, "HTTPS companion pairing request accepted");
     const auto transaction = Json::parse(requested.body)["transaction_id"].get<std::string>();
