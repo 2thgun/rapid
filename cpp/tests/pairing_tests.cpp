@@ -90,6 +90,30 @@ int main() {
             "approved pairing stores one private peer and returns its envelope");
     require(!fs::exists(panel_file), "pairing panel state clears after consumption");
     require(!coordinator.consume(2), "coordinator consumes an approved request once");
+    coordinator.open(5);
+    PairingTransport transport(coordinator, [] { return 6.0; });
+    Request malformed_transport{"POST", "/api/v1/pairing/request", "{}", {}};
+    require(transport.handle(malformed_transport).status == 415,
+            "core pairing transport requires JSON without setup auth ownership");
+    Request transport_request{"POST", "/api/v1/pairing/request",
+                              Json{{"label", "Main Program PC"},
+                                   {"companion_public_key", derive_public_key(private_key)}}.dump(),
+                              {{"content-type", "application/json"}}};
+    const auto transport_created = transport.handle(transport_request);
+    const auto transport_json = Json::parse(transport_created.body);
+    require(transport_created.status == 201 &&
+                transport_json["transaction_id"].is_string() &&
+                !transport_json.contains("telemetry_key"),
+            "core pairing transport creates a key-free companion request");
+    require(coordinator.approve(transport_json["transaction_id"],
+                                coordinator.pending(6)->code, 6),
+            "main program coordinator accepts local approval for transport request");
+    Request transport_result{"GET", "/api/v1/pairing/result?transaction_id=" +
+                                  transport_json["transaction_id"].get<std::string>(), "", {}};
+    const auto transport_completed = transport.handle(transport_result);
+    require(transport_completed.status == 200 &&
+                !Json::parse(transport_completed.body).contains("telemetry_key"),
+            "core pairing transport delivers only an encrypted envelope");
     coordinator.open(10);
     (void)coordinator.request("Expiring PC", derive_public_key(private_key), 11);
     { std::ofstream approval(approval_file);
