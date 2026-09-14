@@ -41,6 +41,8 @@ replace so an interrupted settings recovery cannot leave a truncated blob.
 The reader clears the protected blob after unprotecting it, including when
 validation or DPAPI unprotect fails.
 The writer rejects anything other than the contract's 32-byte telemetry key.
+The native self-test also checks that invalid key widths are rejected before
+DPAPI is called.
 
 The companion can verify a Pi setup certificate before a pairing client uses it:
 

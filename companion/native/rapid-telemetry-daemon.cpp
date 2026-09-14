@@ -89,10 +89,14 @@ std::vector<std::uint8_t> dpapi_unprotect(std::span<const std::uint8_t> blob) {
     return result;
 }
 
-void write_dpapi_credential(const fs::path& path, std::span<const std::uint8_t> plain) {
-    constexpr std::array<char, 8> magic{'R','P','D','P','A','P','I','1'};
+void validate_pairing_key(std::span<const std::uint8_t> plain) {
     if (plain.size() != 32)
         throw std::invalid_argument("DPAPI pairing credential must be a 256-bit key");
+}
+
+void write_dpapi_credential(const fs::path& path, std::span<const std::uint8_t> plain) {
+    constexpr std::array<char, 8> magic{'R','P','D','P','A','P','I','1'};
+    validate_pairing_key(plain);
     const auto protected_blob = dpapi_protect(plain);
     std::error_code directory_error;
     if (!path.parent_path().empty()) fs::create_directories(path.parent_path(), directory_error);
@@ -2355,6 +2359,12 @@ void pairing_crypto_self_test() {
                 "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
                 "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef") != "60200298")
             throw std::runtime_error("CNG pairing verification-code vector mismatch");
+        const std::array<std::uint8_t, 31> invalid_pairing_key{};
+        bool invalid_key_rejected = false;
+        try { validate_pairing_key(invalid_pairing_key); }
+        catch (const std::invalid_argument&) { invalid_key_rejected = true; }
+        if (!invalid_key_rejected)
+            throw std::runtime_error("DPAPI pairing key width guard failed");
         const auto hkdf_vector = cng_hkdf_sha256(
             hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"),
             hex("000102030405060708090a0b0c"), hex("f0f1f2f3f4f5f6f7f8f9"));
