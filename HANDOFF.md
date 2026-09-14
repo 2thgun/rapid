@@ -114,6 +114,13 @@ does not expose those pairing routes. Physical panel presentation, the Windows
 pairing request/envelope/DPAPI client flow and pinned reconnect remain pending;
 the Pi ARM64 rebuild and hardware flow are still required.
 
+Latest local checkpoint: source `758afaf` plus the subsequent clean handoff
+documentation commits. On 2026-09-14 the WSL Release build reported no work,
+all eleven CTest targets passed in 25.27 seconds, and the browser graph
+regression passed. The Windows companion was rebuilt with the pinned Zig
+toolchain and its adapter self-test passed; the negative HTTPS probe exits
+non-modally with a clear error.
+
 Next: connect the pairing API to panel presentation and the Windows pairing
 request/envelope client, then complete pinned reconnect. Complete the fresh-card
 and real AC1/ACC/MoTeC checks
