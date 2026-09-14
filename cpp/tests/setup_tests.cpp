@@ -332,6 +332,31 @@ int main(int argc, char **argv) {
     fs::remove(broken_key);
     require(run_broken_firstboot() != 0 && !fs::exists(broken_key),
             "missing private certificate half fails closed without regeneration");
+    const auto missing_certificate = root.path / "missing-certificate";
+    const auto missing_certificate_status = root.path / "missing-certificate.json";
+    fs::create_directory(missing_certificate);
+    fs::permissions(missing_certificate, fs::perms::owner_all,
+                    fs::perm_options::replace);
+    auto run_missing_certificate = [&] {
+      const auto process = fork();
+      require(process >= 0, "fork missing certificate first boot");
+      if (process == 0) {
+        execl(argv[1], argv[1], "--state-directory", missing_certificate.c_str(),
+              "--status-file", missing_certificate_status.c_str(), "--setup-address",
+              "192.168.50.1", nullptr);
+        _exit(127);
+      }
+      int result = 0;
+      require(waitpid(process, &result, 0) == process && WIFEXITED(result),
+              "missing certificate first boot exits");
+      return WEXITSTATUS(result);
+    };
+    require(run_missing_certificate() == 0,
+            "baseline identity for missing certificate test created");
+    fs::remove(missing_certificate / "device.crt");
+    require(run_missing_certificate() != 0 &&
+                !fs::exists(missing_certificate / "device.crt"),
+            "missing certificate half fails closed without regeneration");
     std::cout << "setup persistence, validation, isolation and recovery tests passed\n";
     return 0;
   } catch (const std::exception &error) {
