@@ -54,6 +54,10 @@ int main() {
     coordinator.open(0);
     const auto coordinated = coordinator.request("Driver PC", derive_public_key(private_key), 1);
     require(fs::exists(panel_file), "pairing panel state is published");
+    const auto panel_permissions = fs::status(panel_file).permissions();
+    require((panel_permissions & fs::perms::others_read) == fs::perms::none &&
+                (panel_permissions & fs::perms::others_write) == fs::perms::none,
+            "pairing panel state is not world-readable");
     const auto panel = Json::parse(read_file(panel_file));
     require(panel["transaction_id"] == coordinated.transaction_id &&
                 panel["label"] == "Driver PC" && panel["code"] == coordinated.code &&
