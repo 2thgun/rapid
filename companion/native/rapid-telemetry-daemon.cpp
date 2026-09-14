@@ -2205,8 +2205,16 @@ void pairing_crypto_self_test() {
             return blob;
         };
         auto first_public = public_blob(first), second_public = public_blob(second);
-        if (first_public.size() < 32 || second_public.size() < 32)
-            throw std::runtime_error("CNG Curve25519 public-key blob is too short");
+        auto wire_public = [](const std::vector<std::uint8_t>& blob) {
+            if (blob.size() != 72) throw std::runtime_error("unexpected CNG Curve25519 public-key blob size");
+            std::uint32_t key_size = 0;
+            std::memcpy(&key_size, blob.data() + sizeof(std::uint32_t), sizeof(key_size));
+            if (key_size != 32) throw std::runtime_error("unexpected CNG Curve25519 public-key width");
+            return std::vector<std::uint8_t>(blob.begin() + 8, blob.begin() + 40);
+        };
+        auto first_wire = wire_public(first_public), second_wire = wire_public(second_public);
+        if (first_wire == second_wire)
+            throw std::runtime_error("CNG Curve25519 generated duplicate wire public keys");
         if (first_public == second_public)
             throw std::runtime_error("CNG Curve25519 generated duplicate public keys");
         std::array<std::uint8_t, 32> left{}, right{};
@@ -2221,6 +2229,8 @@ void pairing_crypto_self_test() {
         SecureZeroMemory(right.data(), right.size());
         SecureZeroMemory(first_public.data(), first_public.size());
         SecureZeroMemory(second_public.data(), second_public.size());
+        SecureZeroMemory(first_wire.data(), first_wire.size());
+        SecureZeroMemory(second_wire.data(), second_wire.size());
         close();
         std::cout << "Windows CNG Curve25519 shared-secret self-test passed (public blob "
                   << first_public.size() << " bytes)\n";

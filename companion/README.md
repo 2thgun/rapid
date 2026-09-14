@@ -17,7 +17,8 @@ exports the pinned wiki guides beside the executable. Pairing keys remain privat
 The native `--self-test` also exercises Windows CNG Curve25519 key agreement
 and public-key export, covering the cryptographic material required by the
 pairing envelope. On the pinned toolchain the exported public blob is validated
-as the expected 72-byte CNG representation before future wire conversion.
+as the expected 72-byte CNG representation and its 32-byte wire segment is
+checked before future HTTPS transport.
 
 The pairing credential storage primitive is available in the native daemon. A
 paired 256-bit key can be imported into the current user's DPAPI scope with
