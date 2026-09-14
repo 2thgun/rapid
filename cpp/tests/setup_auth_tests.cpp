@@ -1,6 +1,7 @@
 #include "rapid/setup_auth.hpp"
 #include <cmath>
 #include <iostream>
+#include <fstream>
 
 using namespace rapid::native;
 namespace {
@@ -239,7 +240,10 @@ int main() {
     require(auth.handle(oversized).status == 413, "oversized auth request rejected");
     require(store.snapshot()["setup_complete"] == false, "owner enrollment does not pretend setup is complete");
     SetupStore pairing_store(root.path / "pairing");
-    PairingCoordinator pairing(pairing_store, std::string(32, '1'), std::string(64, '2'));
+    const auto pairing_panel = root.path / "pairing-panel.json";
+    const auto pairing_approval = root.path / "pairing-approval.json";
+    PairingCoordinator pairing(pairing_store, std::string(32, '1'), std::string(64, '2'),
+                               pairing_panel, pairing_approval);
     SetupAuth pairing_auth(pairing_store, 8443, [&] { return time; }, {}, "127.0.0.1",
                            {}, {}, {}, {}, {}, &pairing, true, std::string(64, '2'));
     require(pairing_auth.enroll(password), "pairing owner enrollment");
@@ -316,6 +320,24 @@ int main() {
     const auto closed_state = Json::parse(pairing_auth.handle(state_request).body);
     require(closed_state["active"] == false && closed_state["pending"] == false,
             "closing pairing window clears its pending state");
+    window = secure("/api/v1/pairing/window", "POST", {{"open", true}});
+    window.headers["cookie"] = pairing_cookie;
+    window.headers["x-csrf-token"] = pairing_csrf;
+    require(pairing_auth.handle(window).status == 200, "owner reopens pairing window");
+    auto panel_request = secure("/api/v1/pairing/request", "POST",
+        {{"label", "Panel PC"}, {"companion_public_key", std::string(64, 'b')}});
+    panel_request.headers.erase("origin");
+    const auto panel_created = pairing_auth.handle(panel_request);
+    require(panel_created.status == 201 && fs::exists(pairing_panel),
+            "panel approval flow publishes its local handoff");
+    const auto panel_details = Json::parse(read_file(pairing_panel));
+    { std::ofstream approval(pairing_approval);
+      approval << Json{{"transaction_id", panel_details["transaction_id"]},
+                       {"code", panel_details["code"]}}.dump(); }
+    auto panel_result = secure("/api/v1/pairing/result?transaction_id=" +
+                               panel_details["transaction_id"].get<std::string>());
+    require(pairing_auth.handle(panel_result).status == 200 && pairing_store.peers().size() == 2,
+            "physical panel approval completes HTTPS pairing");
     std::cout << "setup migration, owner authentication, session and CSRF tests passed\n";
     return 0;
   } catch (const std::exception &error) {
