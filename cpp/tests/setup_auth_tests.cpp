@@ -316,6 +316,9 @@ int main() {
     auto extra_result = secure("/api/v1/pairing/result?transaction_id=" + transaction + "&extra=1");
     require(pairing_auth.handle(extra_result).status == 400,
             "pairing result rejects extra query parameters");
+    auto prefixed_result = secure("/api/v1/pairing/result?extra=1&transaction_id=" + transaction);
+    require(pairing_auth.handle(prefixed_result).status == 400,
+            "pairing result rejects smuggled transaction parameters");
     auto cancel = secure("/api/v1/pairing/window", "POST", {{"open", false}});
     cancel.headers["cookie"] = pairing_cookie;
     cancel.headers["x-csrf-token"] = pairing_csrf;

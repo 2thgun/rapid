@@ -185,15 +185,10 @@ Response SetupAuth::handle(const Request &request) {
   }
   if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/result" &&
       request.method == "GET") {
-    const auto query = request.target.find("transaction_id=");
-    if (query == std::string::npos)
+    constexpr std::string_view prefix = "/api/v1/pairing/result?transaction_id=";
+    if (!request.target.starts_with(prefix))
       return reply(400, {{"detail", "transaction_id required"}});
-    const auto start = query + 15;
-    const auto end = request.target.find('&', start);
-    if (end != std::string::npos)
-      return reply(400, {{"detail", "invalid transaction_id"}});
-    const auto transaction = request.target.substr(start, end == std::string::npos ?
-                                                    std::string::npos : end - start);
+    const auto transaction = request.target.substr(prefix.size());
     if (!valid_transaction(transaction))
       return reply(400, {{"detail", "invalid transaction_id"}});
     const auto completed = pairing_->consume(time, transaction);
