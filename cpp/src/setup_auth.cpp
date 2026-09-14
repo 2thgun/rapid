@@ -53,7 +53,7 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
       wifi_request_file_(std::move(wifi_request_file)),
       wifi_result_file_(std::move(wifi_result_file)),
       firstboot_status_file_(std::move(firstboot_status_file)), pairing_(pairing),
-      pairing_transport_(secure_transport && pairing != nullptr) {
+      pairing_transport_(secure_transport && pairing != nullptr), secure_transport_(secure_transport) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
       enrollment_token_.find_first_not_of("0123456789abcdef") != std::string::npos))
     throw std::invalid_argument("enrollment token must contain 64 lowercase hexadecimal characters");
@@ -209,7 +209,7 @@ Response SetupAuth::handle(const Request &request) {
     sessions_.emplace(hash_text(token), Session{clock_() + 1800, csrf});
     auto response = reply(200, {{"authenticated", true}, {"csrf_token", csrf}, {"expires_in", 1800}});
     response.headers.emplace_back("Set-Cookie", "rapid_setup=" + token +
-        "; Path=/; HttpOnly; SameSite=Strict; Max-Age=1800");
+        "; Path=/; HttpOnly; SameSite=Strict; Max-Age=1800" + (secure_transport_ ? "; Secure" : ""));
     return response;
   }
   const auto token = cookie_token(request);

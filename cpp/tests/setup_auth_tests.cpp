@@ -254,6 +254,8 @@ int main() {
     const auto pairing_login = pairing_auth.handle(pairing_login_request);
     require(pairing_login.headers.size() > 0 && pairing_login.status == 200,
             "pairing owner login");
+    require(pairing_login.headers[0].second.find("Secure") != std::string::npos,
+            "HTTPS pairing session cookie is Secure");
     const auto pairing_cookie = cookie(pairing_login);
     const auto pairing_csrf = Json::parse(pairing_login.body)["csrf_token"].get<std::string>();
     auto window = secure("/api/v1/pairing/window", "POST", {{"open", true}});

@@ -20,6 +20,7 @@ class SetupAuth {
   fs::path firstboot_status_file_;
   PairingCoordinator *pairing_ = nullptr;
   bool pairing_transport_ = false;
+  bool secure_transport_ = false;
   void expire(double time);
 
 public:
