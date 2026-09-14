@@ -155,6 +155,25 @@ int main() {
             "approved transaction is consumed exactly once");
     window.cancel();
     require(!window.pending(201) && !window.active(201), "cancel clears pairing state");
+    const auto ipc_root = fs::temp_directory_path() / ("rapid-pairing-ipc-" + unique_id());
+    const auto ipc_panel = ipc_root / "panel.json";
+    const auto ipc_approval = ipc_root / "approval.json";
+    const auto ipc_state = ipc_root / "state.json";
+    const auto ipc_control = ipc_root / "control.json";
+    SetupStore ipc_store(ipc_root);
+    PairingCoordinator ipc_coordinator(ipc_store, device, certificate, ipc_panel,
+                                       ipc_approval, ipc_state, ipc_control);
+    atomic_file(ipc_control, Json{{"action", "open"}}.dump());
+    const auto ipc_request = ipc_coordinator.request("IPC PC", public_key, 1);
+    require(Json::parse(read_file(ipc_state))["active"] == true &&
+                Json::parse(read_file(ipc_state))["pending"] == true &&
+                ipc_request.code.size() == 8,
+            "main-program coordinator consumes private setup control handoff");
+    atomic_file(ipc_control, Json{{"action", "cancel"}}.dump());
+    require(!ipc_coordinator.pending(2) &&
+                Json::parse(read_file(ipc_state))["active"] == false,
+            "main-program coordinator consumes setup cancellation handoff");
+    fs::remove_all(ipc_root, cleanup_error);
     std::cout << "Pairing window: code, expiry, cancellation and failure limits passed\n";
     return 0;
   } catch (const std::exception &error) {

@@ -313,26 +313,53 @@ std::optional<PendingPairing> PairingWindow::pending(double now) {
 
 PairingCoordinator::PairingCoordinator(SetupStore &store, std::string device_id,
                                        std::string certificate_fingerprint, fs::path panel_file,
-                                       fs::path panel_approval_file)
+                                       fs::path panel_approval_file,
+                                       fs::path state_file, fs::path control_file)
     : store_(store), device_id_(std::move(device_id)),
       window_(device_id_, std::move(certificate_fingerprint)), panel_file_(std::move(panel_file)),
+      state_file_(std::move(state_file)), control_file_(std::move(control_file)),
       panel_approval_file_(std::move(panel_approval_file)) {
   std::error_code error;
   if (!panel_file_.empty()) fs::remove(panel_file_, error);
   error.clear();
   if (!panel_approval_file_.empty()) fs::remove(panel_approval_file_, error);
+  error.clear();
+  if (!state_file_.empty()) fs::remove(state_file_, error);
 }
 
 void PairingCoordinator::publish_panel(double now) {
-  if (panel_file_.empty()) return;
   const auto pending = window_.pending(now);
   std::error_code error;
-  if (!pending) { fs::remove(panel_file_, error); return; }
-  atomic_file(panel_file_, Json{{"transaction_id", pending->transaction_id},
-                               {"label", pending->label}, {"code", pending->code},
-                               {"expires_at", pending->expires_at}}.dump() + "\n");
-  if (::chmod(panel_file_.c_str(), 0640) != 0)
-    throw std::runtime_error("cannot secure pairing panel state");
+  if (!panel_file_.empty()) {
+    if (!pending) fs::remove(panel_file_, error);
+    else {
+      atomic_file(panel_file_, Json{{"transaction_id", pending->transaction_id},
+                                   {"nonce", pending->nonce}, {"label", pending->label},
+                                   {"code", pending->code}, {"expires_at", pending->expires_at}}.dump() + "\n");
+      if (::chmod(panel_file_.c_str(), 0640) != 0)
+        throw std::runtime_error("cannot secure pairing panel state");
+    }
+  }
+  if (!state_file_.empty()) {
+    atomic_file(state_file_, Json{{"active", window_.active(now)},
+                                 {"pending", pending.has_value()}}.dump() + "\n");
+    ::chmod(state_file_.c_str(), 0640);
+  }
+}
+
+void PairingCoordinator::apply_control(double now) {
+  if (control_file_.empty() || !fs::exists(control_file_)) return;
+  try {
+    const auto body = Json::parse(read_file(control_file_));
+    if (body.is_object() && body.size() == 1 && body["action"].is_string()) {
+      const auto action = body["action"].get<std::string>();
+      if (action == "open") window_.open(now);
+      else if (action == "cancel") window_.cancel();
+    }
+  } catch (...) {}
+  std::error_code error;
+  fs::remove(control_file_, error);
+  publish_panel(now);
 }
 
 void PairingCoordinator::apply_panel_approval(double now) {
@@ -359,10 +386,12 @@ void PairingCoordinator::open(double now) {
     std::error_code error;
     fs::remove(panel_approval_file_, error);
   }
+  if (!control_file_.empty()) { std::error_code error; fs::remove(control_file_, error); }
   window_.open(now); publish_panel(now);
 }
 void PairingCoordinator::cancel() {
   std::lock_guard lock(mutex_);
+  if (!control_file_.empty()) { std::error_code error; fs::remove(control_file_, error); }
   if (!panel_approval_file_.empty()) {
     std::error_code error;
     fs::remove(panel_approval_file_, error);
@@ -374,6 +403,7 @@ PendingPairing PairingCoordinator::request(const std::string &label,
                                            const std::string &companion_public_key,
                                            double now) {
   std::lock_guard lock(mutex_);
+  apply_control(now);
   const auto result = window_.request(label, companion_public_key, now);
   publish_panel(now); return result;
 }
@@ -381,18 +411,21 @@ PendingPairing PairingCoordinator::request(const std::string &label,
 bool PairingCoordinator::approve(const std::string &transaction_id,
                                  const std::string &code, double now) {
   std::lock_guard lock(mutex_);
+  apply_control(now);
   const auto result = window_.approve(transaction_id, code, now);
   publish_panel(now); return result;
 }
 
 std::optional<CompletedPairing> PairingCoordinator::consume(double now) {
   std::lock_guard lock(mutex_);
+  apply_control(now);
   return consume_impl(now, {});
 }
 
 std::optional<CompletedPairing> PairingCoordinator::consume(
     double now, const std::string &expected_transaction) {
   std::lock_guard lock(mutex_);
+  apply_control(now);
   return consume_impl(now, expected_transaction);
 }
 
@@ -419,6 +452,7 @@ std::optional<CompletedPairing> PairingCoordinator::consume_impl(
 
 std::optional<PendingPairing> PairingCoordinator::pending(double now) {
   std::lock_guard lock(mutex_);
+  apply_control(now);
   apply_panel_approval(now);
   const auto result = window_.pending(now);
   publish_panel(now);
