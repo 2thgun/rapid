@@ -333,7 +333,9 @@ int main() {
     auto result_request = secure("/api/v1/pairing/result?transaction_id=" + transaction);
     const auto result = pairing_auth.handle(result_request);
     require(result.status == 200 && Json::parse(result.body)["approved"] == true &&
-                pairing_store.peers().size() == 1, "HTTPS pairing returns one-use envelope");
+                pairing_store.peers().size() == 1 &&
+                result.body.find("telemetry_key") == std::string::npos,
+            "HTTPS pairing returns one-use envelope without telemetry key material");
     const auto result_json = Json::parse(result.body);
     PairingEnvelope envelope{result_json["ephemeral_public_key"].get<std::string>(),
                              result_json["nonce"].get<std::string>(),
@@ -393,7 +395,8 @@ int main() {
     auto panel_result = secure("/api/v1/pairing/result?transaction_id=" +
                                panel_details["transaction_id"].get<std::string>());
     const auto panel_response = pairing_auth.handle(panel_result);
-    require(panel_response.status == 200 && pairing_store.peers().size() == 2,
+    require(panel_response.status == 200 && pairing_store.peers().size() == 2 &&
+                panel_response.body.find("telemetry_key") == std::string::npos,
             "physical panel approval completes HTTPS pairing");
     const auto panel_json = Json::parse(panel_response.body);
     PairingEnvelope panel_envelope{panel_json["ephemeral_public_key"].get<std::string>(),

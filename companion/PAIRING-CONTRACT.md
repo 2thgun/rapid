@@ -96,3 +96,8 @@ and confirm that only the other can resume telemetry. Repeat with a network
 intermediary test fixture to prove the envelope never reveals the key. Verify
 MSI and portable onboarding without a terminal, plaintext key, SMB dependency
 or administrator prompt.
+
+The local HTTPS integration test covers the Pi-side portion with two generated
+X25519 keys, envelope decryption, revocation isolation and explicit checks that
+pairing responses never serialize telemetry-key material. It does not replace
+the clean Windows and hardware acceptance run above.
