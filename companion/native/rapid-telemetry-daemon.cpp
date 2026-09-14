@@ -2168,6 +2168,23 @@ void iracing() {
 }
 } // namespace additional_adapter_self_test
 
+std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key) {
+    ULONG size = 0;
+    if (BCryptExportKey(key, nullptr, BCRYPT_ECCPUBLIC_BLOB, nullptr, 0,
+                        &size, 0) < 0 || size != 72)
+        throw std::runtime_error("unexpected CNG Curve25519 public-key blob size");
+    std::vector<std::uint8_t> blob(size);
+    if (BCryptExportKey(key, nullptr, BCRYPT_ECCPUBLIC_BLOB, blob.data(), size,
+                        &size, 0) < 0 || size != blob.size())
+        throw std::runtime_error("CNG Curve25519 public-key export failed");
+    std::uint32_t key_size = 0;
+    std::memcpy(&key_size, blob.data() + sizeof(std::uint32_t), sizeof(key_size));
+    if (key_size != 32) throw std::runtime_error("unexpected CNG Curve25519 public-key width");
+    std::vector<std::uint8_t> wire(blob.begin() + 8, blob.begin() + 40);
+    SecureZeroMemory(blob.data(), blob.size());
+    return wire;
+}
+
 void pairing_crypto_self_test() {
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_KEY_HANDLE first = nullptr, second = nullptr;
@@ -2192,31 +2209,10 @@ void pairing_crypto_self_test() {
             BCryptSecretAgreement(first, second, &first_secret, 0) < 0 ||
             BCryptSecretAgreement(second, first, &second_secret, 0) < 0)
             throw std::runtime_error("CNG Curve25519 setup failed");
-        auto public_blob = [](BCRYPT_KEY_HANDLE key) {
-            ULONG size = 0;
-            if (BCryptExportKey(key, nullptr, BCRYPT_ECCPUBLIC_BLOB, nullptr, 0,
-                                &size, 0) < 0 || size == 0 || size > 4096)
-                throw std::runtime_error("CNG Curve25519 public-key export failed");
-            std::vector<std::uint8_t> blob(size);
-            if (BCryptExportKey(key, nullptr, BCRYPT_ECCPUBLIC_BLOB, blob.data(), size,
-                                &size, 0) < 0 || size == 0)
-                throw std::runtime_error("CNG Curve25519 public-key export failed");
-            blob.resize(size);
-            return blob;
-        };
-        auto first_public = public_blob(first), second_public = public_blob(second);
-        auto wire_public = [](const std::vector<std::uint8_t>& blob) {
-            if (blob.size() != 72) throw std::runtime_error("unexpected CNG Curve25519 public-key blob size");
-            std::uint32_t key_size = 0;
-            std::memcpy(&key_size, blob.data() + sizeof(std::uint32_t), sizeof(key_size));
-            if (key_size != 32) throw std::runtime_error("unexpected CNG Curve25519 public-key width");
-            return std::vector<std::uint8_t>(blob.begin() + 8, blob.begin() + 40);
-        };
-        auto first_wire = wire_public(first_public), second_wire = wire_public(second_public);
+        auto first_wire = export_curve25519_wire_public(first);
+        auto second_wire = export_curve25519_wire_public(second);
         if (first_wire == second_wire)
             throw std::runtime_error("CNG Curve25519 generated duplicate wire public keys");
-        if (first_public == second_public)
-            throw std::runtime_error("CNG Curve25519 generated duplicate public keys");
         std::array<std::uint8_t, 32> left{}, right{};
         ULONG left_size = 0, right_size = 0;
         if (BCryptDeriveKey(first_secret, BCRYPT_KDF_RAW_SECRET, nullptr,
@@ -2227,13 +2223,11 @@ void pairing_crypto_self_test() {
             throw std::runtime_error("CNG Curve25519 shared-secret mismatch");
         SecureZeroMemory(left.data(), left.size());
         SecureZeroMemory(right.data(), right.size());
-        SecureZeroMemory(first_public.data(), first_public.size());
-        SecureZeroMemory(second_public.data(), second_public.size());
         SecureZeroMemory(first_wire.data(), first_wire.size());
         SecureZeroMemory(second_wire.data(), second_wire.size());
         close();
         std::cout << "Windows CNG Curve25519 shared-secret self-test passed (public blob "
-                  << first_public.size() << " bytes)\n";
+                  << 72 << " bytes)\n";
     } catch (...) {
         close();
         throw;
