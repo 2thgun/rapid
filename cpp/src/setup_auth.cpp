@@ -16,6 +16,10 @@ bool queued(const fs::path &path) {
 bool equal(const std::string &left, const std::string &right) {
   return left.size() == right.size() && CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
 }
+bool valid_transaction(const std::string &value) {
+  return value.size() == 32 &&
+      value.find_first_not_of("0123456789abcdef") == std::string::npos;
+}
 std::string cookie_token(const Request &request) {
   auto cookie = header(request, "cookie");
   std::string token;
@@ -184,7 +188,12 @@ Response SetupAuth::handle(const Request &request) {
     const auto query = request.target.find("transaction_id=");
     if (query == std::string::npos)
       return reply(400, {{"detail", "transaction_id required"}});
-    const auto transaction = request.target.substr(query + 15);
+    const auto start = query + 15;
+    const auto end = request.target.find('&', start);
+    const auto transaction = request.target.substr(start, end == std::string::npos ?
+                                                    std::string::npos : end - start);
+    if (!valid_transaction(transaction))
+      return reply(400, {{"detail", "invalid transaction_id"}});
     const auto completed = pairing_->consume(time, transaction);
     if (!completed) return reply(202, {{"approved", false}});
     return reply(200, {{"approved", true}, {"peer_id", completed->peer_id},

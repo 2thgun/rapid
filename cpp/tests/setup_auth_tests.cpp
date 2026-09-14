@@ -310,6 +310,9 @@ int main() {
                 pairing_store.peers().size() == 1, "HTTPS pairing returns one-use envelope");
     require(pairing_auth.handle(result_request).status == 202,
             "pairing envelope cannot be replayed");
+    auto malformed_result = secure("/api/v1/pairing/result?transaction_id=bad&extra=1");
+    require(pairing_auth.handle(malformed_result).status == 400,
+            "malformed pairing transaction is rejected explicitly");
     auto cancel = secure("/api/v1/pairing/window", "POST", {{"open", false}});
     cancel.headers["cookie"] = pairing_cookie;
     cancel.headers["x-csrf-token"] = pairing_csrf;
