@@ -385,15 +385,19 @@ int main(int argc, char **argv) {
     bool tls_ready = false;
     int tls_status = 0;
     std::string tls_cache_control;
+    std::string tls_fingerprint;
     std::string tls_error;
     for (int i = 0; i < 100; ++i) {
       try {
         const auto response = tls_request(port + 3, http::verb::get, "/api/v1/setup");
         tls_status = response.result_int();
         tls_cache_control = std::string(response[http::field::cache_control]);
+        const auto status = Json::parse(response.body(), nullptr, false);
+        tls_fingerprint = status.is_object() ? status.value("certificate_fingerprint", "") : "";
         tls_ready = tls_status == 200 &&
                     tls_cache_control.find("no-store") !=
-                        std::string::npos;
+                        std::string::npos && tls_fingerprint.size() == 64 &&
+                    tls_fingerprint.find_first_not_of("0123456789abcdef") == std::string::npos;
         if (tls_ready) break;
       } catch (const std::exception &error) {
         tls_error = error.what();
