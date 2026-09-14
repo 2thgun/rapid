@@ -343,7 +343,7 @@ void PairingCoordinator::apply_panel_approval(double now) {
     const auto body = Json::parse(read_file(panel_approval_file_));
     const auto transaction = body.value("transaction_id", std::string{});
     const auto code = body.value("code", std::string{});
-    if (lower_hex(transaction, 32) && code.size() == 8 &&
+    if (body.is_object() && body.size() == 2 && lower_hex(transaction, 32) && code.size() == 8 &&
         code.find_first_not_of("0123456789") == std::string::npos)
       window_.approve(transaction, code, now);
   } catch (...) {

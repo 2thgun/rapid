@@ -72,6 +72,12 @@ int main() {
     require(coordinator.pending(2) && !coordinator.pending(2)->approved &&
                 !fs::exists(approval_file),
             "malformed panel approval is discarded without changing request");
+    { std::ofstream extra(approval_file);
+      extra << Json{{"transaction_id", coordinated.transaction_id},
+                    {"code", coordinated.code}, {"extra", true}}.dump(); }
+    require(coordinator.pending(2) && !coordinator.pending(2)->approved &&
+                !fs::exists(approval_file),
+            "extra panel approval fields are discarded without changing request");
     { std::ofstream approval(approval_file);
       approval << Json{{"transaction_id", coordinated.transaction_id},
                        {"code", coordinated.code}}.dump(); }
