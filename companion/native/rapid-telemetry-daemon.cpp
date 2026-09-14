@@ -513,6 +513,18 @@ std::string json_field(std::string_view json, std::string_view name) {
 
 std::string json_escape(std::string_view value) { std::string out; for (char c : value) { if (c == '"' || c == '\\') out += '\\'; out += c; } return out; }
 
+void write_pairing_identity(const fs::path& credential, std::string_view device, std::string_view fingerprint) {
+    const auto identity = credential.parent_path() / L"pairing.identity";
+    const auto temporary = identity.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
+    std::ofstream output(fs::path(temporary), std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("cannot create pairing identity");
+    output << "device_id=" << device << "\ncertificate_fingerprint=" << fingerprint << "\n";
+    output.flush(); output.close();
+    if (!MoveFileExW(temporary.c_str(), identity.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str()); throw std::runtime_error("cannot commit pairing identity");
+    }
+}
+
 int verify_setup_certificate(const std::wstring& url, const std::string& expected) {
     if (expected.size() != 64 || expected.find_first_not_of("0123456789abcdef") != std::string::npos)
         throw std::runtime_error("certificate fingerprint must be 64 lowercase hexadecimal characters");
@@ -582,7 +594,7 @@ int run_pairing(const Options& options) {
     const std::string request_body = "{\"label\":\"" + json_escape(options.pairing_label) + "\",\"companion_public_key\":\"" + pubhex + "\"}";
     const auto requested = pairing_http(base + L"/api/v1/pairing/request", L"POST", request_body, options.pinned_certificate_fingerprint); if (requested.status != 200 && requested.status != 201) throw std::runtime_error("pairing request rejected");
     const auto tx = json_field(requested.body, "transaction_id"); const auto nonce = json_field(requested.body, "nonce"); std::cout << "Pairing verification code: " << cng_pairing_verification_code(device, fp, tx, nonce, pubhex) << '\n';
-    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); if (json_field(result.body, "nonce") != nonce) throw std::runtime_error("pairing result nonce mismatch"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
+    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); if (json_field(result.body, "nonce") != nonce) throw std::runtime_error("pairing result nonce mismatch"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
     throw std::runtime_error("pairing approval timed out");
 }
 
