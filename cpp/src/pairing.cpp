@@ -350,10 +350,18 @@ void PairingCoordinator::apply_panel_approval(double now) {
 
 void PairingCoordinator::open(double now) {
   std::lock_guard lock(mutex_);
+  if (!panel_approval_file_.empty()) {
+    std::error_code error;
+    fs::remove(panel_approval_file_, error);
+  }
   window_.open(now); publish_panel(now);
 }
 void PairingCoordinator::cancel() {
   std::lock_guard lock(mutex_);
+  if (!panel_approval_file_.empty()) {
+    std::error_code error;
+    fs::remove(panel_approval_file_, error);
+  }
   window_.cancel(); publish_panel(monotonic());
 }
 

@@ -77,7 +77,15 @@ int main() {
     require(!coordinator.consume(2), "coordinator consumes an approved request once");
     coordinator.open(10);
     (void)coordinator.request("Expiring PC", derive_public_key(private_key), 11);
-    require(!coordinator.pending(132) && !fs::exists(panel_file),
+    { std::ofstream approval(approval_file);
+      approval << Json{{"transaction_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                       {"code", "00000000"}}.dump(); }
+    coordinator.cancel();
+    require(!fs::exists(panel_file) && !fs::exists(approval_file),
+            "cancelling pairing clears queued panel approval");
+    coordinator.open(20);
+    (void)coordinator.request("Expiring PC", derive_public_key(private_key), 21);
+    require(!coordinator.pending(142) && !fs::exists(panel_file),
             "expired pairing clears the panel state");
     std::error_code cleanup_error;
     fs::remove_all(store_path, cleanup_error);
