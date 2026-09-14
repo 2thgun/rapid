@@ -4,9 +4,14 @@
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>
+#include <boost/asio/ssl.hpp>
 #include <csignal>
 #include <fcntl.h>
 #include <iostream>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <openssl/x509.h>
+#include <set>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -54,6 +59,58 @@ http::response<http::string_body> request(int port, http::verb method,
   http::response<http::string_body> reply;
   http::read(socket, buffer, reply);
   return reply;
+}
+http::response<http::string_body> tls_request(int port, http::verb method,
+                                              const std::string &path) {
+  asio::io_context io;
+  asio::ssl::context context(asio::ssl::context::tls_client);
+  context.set_verify_mode(asio::ssl::verify_none);
+  asio::ssl::stream<tcp::socket> stream(io, context);
+  stream.next_layer().connect(
+      {asio::ip::make_address("127.0.0.1"), static_cast<unsigned short>(port)});
+  stream.handshake(asio::ssl::stream_base::client);
+  http::request<http::string_body> req{method, path, 11};
+  req.set(http::field::host, "127.0.0.1:" + std::to_string(port));
+  req.prepare_payload();
+  http::write(stream, req);
+  beast::flat_buffer buffer;
+  http::response<http::string_body> reply;
+  http::read(stream, buffer, reply);
+  return reply;
+}
+void test_tls_material(const fs::path &certificate, const fs::path &private_key) {
+  EVP_PKEY_CTX *key_context = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+  EVP_PKEY *key = nullptr;
+  require(key_context && EVP_PKEY_keygen_init(key_context) > 0 &&
+              EVP_PKEY_CTX_set_rsa_keygen_bits(key_context, 2048) > 0 &&
+              EVP_PKEY_keygen(key_context, &key) > 0,
+          "generate test TLS key");
+  EVP_PKEY_CTX_free(key_context);
+  X509 *cert = X509_new();
+  require(cert && X509_set_version(cert, 2) == 1 &&
+              ASN1_INTEGER_set(X509_get_serialNumber(cert), 1) == 1 &&
+              X509_gmtime_adj(X509_get_notBefore(cert), 0) &&
+              X509_gmtime_adj(X509_get_notAfter(cert), 3600) &&
+              X509_set_pubkey(cert, key) == 1,
+          "create test TLS certificate");
+  X509_NAME *name = X509_get_subject_name(cert);
+  require(name &&
+              X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                  reinterpret_cast<const unsigned char *>("localhost"), -1, -1, 0) == 1 &&
+              X509_set_issuer_name(cert, name) == 1 &&
+              X509_sign(cert, key, EVP_sha256()) > 0,
+          "sign test TLS certificate");
+  FILE *cert_file = std::fopen(certificate.c_str(), "wb");
+  FILE *key_file = std::fopen(private_key.c_str(), "wb");
+  require(cert_file && key_file && PEM_write_X509(cert_file, cert) == 1 &&
+              PEM_write_PrivateKey(key_file, key, nullptr, nullptr, 0, nullptr, nullptr) == 1,
+          "write test TLS material");
+  std::fclose(cert_file);
+  std::fclose(key_file);
+  X509_free(cert);
+  EVP_PKEY_free(key);
+  fs::permissions(certificate, fs::perms::owner_read | fs::perms::owner_write);
+  fs::permissions(private_key, fs::perms::owner_read | fs::perms::owner_write);
 }
 int main(int argc, char **argv) {
   try {
@@ -313,8 +370,42 @@ int main(int argc, char **argv) {
          {"X-CSRF-Token", csrf}});
     require(saved.result_int() == 200 && Json::parse(saved.body())["applied"] == false,
             "HTTP owner can save desired settings without applying them");
+    const auto tls_certificate = root / "test-certificate.pem";
+    const auto tls_private_key = root / "test-private-key.pem";
+    test_tls_material(tls_certificate, tls_private_key);
+    Process tls_management{fork()};
+    if (tls_management.pid == 0) {
+      execl(argv[4], argv[4], "--state-directory", (root / "owner-tls").c_str(),
+            "--assets", argv[2], "--port", std::to_string(port + 3).c_str(),
+            "--enrollment-token-file", token_file.c_str(),
+            "--tls-certificate", tls_certificate.c_str(),
+            "--tls-private-key", tls_private_key.c_str(), nullptr);
+      _exit(127);
+    }
+    bool tls_ready = false;
+    int tls_status = 0;
+    std::string tls_cache_control;
+    std::string tls_error;
+    for (int i = 0; i < 100; ++i) {
+      try {
+        const auto response = tls_request(port + 3, http::verb::get, "/api/v1/setup");
+        tls_status = response.result_int();
+        tls_cache_control = std::string(response[http::field::cache_control]);
+        tls_ready = tls_status == 200 &&
+                    tls_cache_control.find("no-store") !=
+                        std::string::npos;
+        if (tls_ready) break;
+      } catch (const std::exception &error) {
+        tls_error = error.what();
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (!tls_ready)
+      std::cerr << "HTTPS response status=" << tls_status << " cache="
+                << tls_cache_control << " error=" << tls_error << "\n";
+    require(tls_ready, "setup transport serves a real HTTPS request");
     std::cout << "Native network: HTTP, UDP, WebSocket history, disconnect "
-                 "finalization and authenticated recorder-to-archive upload "
+                 "finalization, HTTPS setup and authenticated recorder-to-archive upload "
                  "passed\nEvidence: "
               << root << "\n";
     return 0;

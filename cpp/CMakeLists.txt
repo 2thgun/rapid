@@ -28,11 +28,14 @@ find_package(Threads REQUIRED)
 add_library(rapid_native STATIC src/native_common.cpp src/native_v4.cpp src/pairing.cpp src/native_recorder.cpp
   src/native_runtime.cpp src/native_http.cpp src/native_acc.cpp src/native_upload.cpp src/native_setup.cpp)
 target_include_directories(rapid_native PUBLIC include)
-target_link_libraries(rapid_native PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto
+target_link_libraries(rapid_native PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto OpenSSL::SSL
   SQLite::SQLite3 CURL::libcurl Boost::system tomlplusplus::tomlplusplus Threads::Threads)
 target_compile_options(rapid_native PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(rapid-pi src/pi_main.cpp)
 target_link_libraries(rapid-pi PRIVATE rapid_native)
+add_executable(rapid-display-recovery src/display_recovery_main.cpp)
+target_link_libraries(rapid-display-recovery PRIVATE rapid_native)
+target_compile_options(rapid-display-recovery PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 # Optional for server-only installations.
 # The Qt target consumes the local HTTP API; it does not link to or alter the
@@ -113,6 +116,11 @@ if(BUILD_TESTING)
   add_executable(rapid-native-tests tests/native_runtime_tests.cpp)
   target_link_libraries(rapid-native-tests PRIVATE rapid_native)
   add_test(NAME rapid-native-tests COMMAND rapid-native-tests ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+  add_executable(rapid-display-recovery-tests tests/display_recovery_tests.cpp)
+  target_link_libraries(rapid-display-recovery-tests PRIVATE rapid_native)
+  target_compile_options(rapid-display-recovery-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME rapid-display-recovery-tests COMMAND rapid-display-recovery-tests
+           $<TARGET_FILE:rapid-display-recovery>)
   add_executable(rapid-log-status-tests tests/log_status_tests.cpp)
   target_include_directories(rapid-log-status-tests PRIVATE include)
   target_compile_options(rapid-log-status-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)

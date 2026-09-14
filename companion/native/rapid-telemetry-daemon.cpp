@@ -5,6 +5,7 @@
 #include <ws2tcpip.h>
 #include <mstcpip.h>
 #include <bcrypt.h>
+#include <wincrypt.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <tlhelp32.h>
@@ -48,6 +49,67 @@ namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
 namespace rapid {
+
+// Pairing credentials are deliberately protected before they leave the
+// current Windows user's profile.  DPAPI binds the blob to that user's
+// profile and Windows entropy, so the portable build has the same at-rest
+// protection as the installed build without requiring administrator access.
+std::vector<std::uint8_t> dpapi_protect(std::span<const std::uint8_t> plain) {
+    DATA_BLOB input{static_cast<DWORD>(plain.size()),
+                    const_cast<BYTE *>(reinterpret_cast<const BYTE *>(plain.data()))};
+    DATA_BLOB output{};
+    if (!CryptProtectData(&input, L"raPId pairing credential", nullptr, nullptr,
+                          nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+        throw std::runtime_error("Windows DPAPI could not protect pairing credential");
+    }
+    std::vector<std::uint8_t> result(output.pbData, output.pbData + output.cbData);
+    LocalFree(output.pbData);
+    return result;
+}
+
+std::vector<std::uint8_t> dpapi_unprotect(std::span<const std::uint8_t> blob) {
+    DATA_BLOB input{static_cast<DWORD>(blob.size()),
+                    const_cast<BYTE *>(reinterpret_cast<const BYTE *>(blob.data()))};
+    DATA_BLOB output{};
+    if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
+                            CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+        throw std::runtime_error("Windows DPAPI could not unprotect pairing credential");
+    }
+    std::vector<std::uint8_t> result(output.pbData, output.pbData + output.cbData);
+    SecureZeroMemory(output.pbData, output.cbData);
+    LocalFree(output.pbData);
+    return result;
+}
+
+void write_dpapi_credential(const fs::path& path, std::span<const std::uint8_t> plain) {
+    constexpr std::array<char, 8> magic{'R','P','D','P','A','P','I','1'};
+    const auto protected_blob = dpapi_protect(plain);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("cannot create DPAPI pairing credential");
+    output.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+    const std::uint32_t size = static_cast<std::uint32_t>(protected_blob.size());
+    output.write(reinterpret_cast<const char *>(&size), sizeof(size));
+    output.write(reinterpret_cast<const char *>(protected_blob.data()),
+                 static_cast<std::streamsize>(protected_blob.size()));
+    if (!output) throw std::runtime_error("cannot write DPAPI pairing credential");
+}
+
+std::vector<std::uint8_t> read_dpapi_credential(const fs::path& path) {
+    constexpr std::array<char, 8> magic{'R','P','D','P','A','P','I','1'};
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot open DPAPI pairing credential");
+    std::array<char, 8> found{};
+    std::uint32_t size = 0;
+    input.read(found.data(), static_cast<std::streamsize>(found.size()));
+    input.read(reinterpret_cast<char *>(&size), sizeof(size));
+    if (found != magic || size == 0 || size > 4096)
+        throw std::runtime_error("invalid DPAPI pairing credential");
+    std::vector<std::uint8_t> blob(size);
+    input.read(reinterpret_cast<char *>(blob.data()), static_cast<std::streamsize>(blob.size()));
+    if (!input || input.peek() != std::char_traits<char>::eof())
+        throw std::runtime_error("invalid DPAPI pairing credential");
+    return dpapi_unprotect(blob);
+}
 
 constexpr wchar_t kMutexName[] = L"Local\\raPIdTelemetryDaemon";
 constexpr wchar_t kWindowClass[] = L"raPIdTelemetryDaemonWindow";
@@ -169,6 +231,8 @@ struct Options {
     fs::path output_directory;
     fs::path config_path;
     std::vector<std::uint8_t> auth_key;
+    fs::path auth_key_dpapi_file;
+    fs::path store_auth_key_dpapi_file;
     Protocol protocol = Protocol::v4;
     bool local_recording = false;
     bool no_forward = false;
@@ -308,6 +372,10 @@ void apply_config_file(Options& options, const fs::path& path, bool required) {
             fs::path key_path = utf8_to_wide(value);
             if (key_path.is_relative()) key_path = path.parent_path() / key_path;
             options.auth_key = decode_auth_key(read_small_text_file(key_path, "auth key file"), "auth key file");
+        } else if (name == "auth_key_dpapi_file") {
+            options.auth_key_dpapi_file = utf8_to_wide(value);
+            if (options.auth_key_dpapi_file.is_relative())
+                options.auth_key_dpapi_file = path.parent_path() / options.auth_key_dpapi_file;
         } else if (name == "local_recording") {
             options.local_recording = parse_bool(value, "local_recording");
         } else if (name == "output_directory") {
@@ -343,6 +411,12 @@ Options parse_options(int argc, wchar_t** argv) {
         }
     }
     apply_config_file(options, options.config_path, explicit_config);
+    if (!options.auth_key_dpapi_file.empty()) {
+        const auto protected_key = read_dpapi_credential(options.auth_key_dpapi_file);
+        if (protected_key.size() != 32)
+            throw std::runtime_error("DPAPI pairing credential is not a 256-bit key");
+        options.auth_key = protected_key;
+    }
 
     std::array<wchar_t, 256> environment_key{};
     const DWORD environment_length = GetEnvironmentVariableW(
@@ -379,6 +453,14 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (raw == L"--auth-key-file") {
             const fs::path path = option_value(i, argc, argv, L"--auth-key-file");
             options.auth_key = decode_auth_key(read_small_text_file(path, "auth key file"), "auth key file");
+        } else if (raw == L"--auth-key-dpapi-file") {
+            options.auth_key_dpapi_file = option_value(i, argc, argv, L"--auth-key-dpapi-file");
+            const auto protected_key = read_dpapi_credential(options.auth_key_dpapi_file);
+            if (protected_key.size() != 32)
+                throw std::runtime_error("DPAPI pairing credential is not a 256-bit key");
+            options.auth_key = protected_key;
+        } else if (raw == L"--store-auth-key-dpapi") {
+            options.store_auth_key_dpapi_file = option_value(i, argc, argv, L"--store-auth-key-dpapi");
         } else if (raw == L"--local-recording") {
             options.local_recording = true;
         } else if (raw == L"--no-local-recording") {
@@ -397,6 +479,8 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --protocol v4|v3          Authenticated binary v4 (default) or legacy JSON v3\n"
                       "  --auth-key HEX            64-hex-character v4 HMAC key\n"
                       "  --auth-key-file PATH      Read the v4 HMAC key from a file\n"
+                      "  --auth-key-dpapi-file PATH  Read a per-user DPAPI-protected pairing key\n"
+                      "  --store-auth-key-dpapi PATH Protect the selected key for this user and exit\n"
                       "  --config PATH             key=value config (default: %LOCALAPPDATA%\\raPId\\daemon.conf)\n"
                       "  --local-recording         Opt in to the PC-side emergency .ld fallback\n"
                       "  --output-directory PATH   Local fallback/log directory\n"
@@ -2126,6 +2210,14 @@ int wmain(int argc, wchar_t** argv) {
     using namespace rapid;
     try {
         const Options options = parse_options(argc, argv);
+        if (!options.store_auth_key_dpapi_file.empty()) {
+            if (options.auth_key.size() != 32)
+                throw std::runtime_error("--store-auth-key-dpapi requires a 256-bit key");
+            if (!options.store_auth_key_dpapi_file.parent_path().empty())
+                fs::create_directories(options.store_auth_key_dpapi_file.parent_path());
+            write_dpapi_credential(options.store_auth_key_dpapi_file, options.auth_key);
+            return 0;
+        }
         if (options.self_test) return run_self_test(options.output_directory, options.sample_rate) ? 0 : 1;
         if (!options.headless && GetConsoleWindow()) ShowWindow(GetConsoleWindow(), SW_HIDE);
         std::error_code directory_error;

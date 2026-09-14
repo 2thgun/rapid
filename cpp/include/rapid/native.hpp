@@ -146,4 +146,6 @@ struct Request {
 using Handler = std::function<Response(const Request &)>;
 void serve(const std::string &host, int port, Handler handler,
            Runtime *runtime = nullptr);
+void serve_tls(const std::string &host, int port, Handler handler,
+               const fs::path &certificate, const fs::path &private_key);
 } // namespace rapid::native

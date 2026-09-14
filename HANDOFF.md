@@ -96,9 +96,21 @@ consumes an approved request, stores its generated telemetry key privately and
 returns the envelope once; this core integration is covered by the 16.80-second
 ARM64 gate. See wiki evidence `dc2524e`.
 
-Next: wire the pairing coordinator to authenticated HTTPS, panel approval and
-the Windows DPAPI handshake, then implement display rotation/calibration
-recovery. Complete the fresh-card and real AC1/ACC/MoTeC checks
+The Windows daemon now has a per-user DPAPI credential container and explicit
+load/store options; this removes plaintext key files but is not the graphical
+HTTPS pairing handshake. The Pi package now includes `rapid-display-recovery`
+with preview/confirm/rollback and stale calibration reset; its output and
+evdev paths still need hardware confirmation.
+
+Ubuntu 24.04 under WSL2 is now the local Linux build path; `developer/WSL-BUILD.md`
+records the reproducible setup. The local x86-64 Release build and all eleven
+CTest targets passed, along with the browser graph regression. The setup server
+also has an optional TLS listener, and the network regression completed a real
+HTTPS request with generated certificate material. This verifies local transport
+behavior only; the Pi ARM64 rebuild and customer pairing flow remain pending.
+
+Next: wire the pairing coordinator to authenticated HTTPS and panel approval,
+then connect the Windows DPAPI store to that flow. Complete the fresh-card and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
 
 Initialize pinned documentation with `git submodule update --init --recursive`,
