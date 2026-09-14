@@ -2326,6 +2326,20 @@ void pairing_crypto_self_test() {
             envelope_cipher, &envelope_tag);
         if (std::string(reinterpret_cast<const char*>(envelope_round_trip.data()), envelope_round_trip.size()) != envelope_plain)
             throw std::runtime_error("CNG HKDF/AES-GCM envelope round trip failed");
+        auto tampered_tag = envelope_tag;
+        tampered_tag[0] ^= 0x01;
+        bool tamper_rejected = false;
+        try {
+            (void)cng_aes256_gcm(false, envelope_key, envelope_nonce,
+                std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(aad_text.data()), aad_text.size()),
+                envelope_cipher, &tampered_tag);
+        } catch (const std::exception&) {
+            tamper_rejected = true;
+        }
+        if (!tamper_rejected)
+            throw std::runtime_error("CNG AES-GCM accepted a tampered envelope");
+        SecureZeroMemory(envelope_key.data(), envelope_key.size());
+        SecureZeroMemory(tampered_tag.data(), tampered_tag.size());
         SecureZeroMemory(left.data(), left.size());
         SecureZeroMemory(right.data(), right.size());
         SecureZeroMemory(first_wire.data(), first_wire.size());
