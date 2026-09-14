@@ -142,6 +142,39 @@ std::vector<std::uint8_t> cng_hmac_sha256(std::span<const std::uint8_t> key,
     return digest;
 }
 
+std::array<std::uint8_t, 32> cng_sha256(std::span<const std::uint8_t> data) {
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+        throw std::runtime_error("CNG SHA-256 provider unavailable");
+    std::array<std::uint8_t, 32> digest{};
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    bool ok = BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0 &&
+              BCryptHashData(hash, const_cast<PUCHAR>(data.data()), static_cast<ULONG>(data.size()), 0) >= 0 &&
+              BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0;
+    if (hash) BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (!ok) throw std::runtime_error("CNG SHA-256 failed");
+    return digest;
+}
+
+std::string cng_pairing_verification_code(std::string_view device_id,
+                                          std::string_view certificate_fingerprint,
+                                          std::string_view transaction_id,
+                                          std::string_view nonce,
+                                          std::string_view companion_public_key) {
+    const std::string input = "rapid-pairing-v1|" + std::string(device_id) + "|" +
+                              std::string(certificate_fingerprint) + "|" +
+                              std::string(transaction_id) + "|" + std::string(nonce) + "|" +
+                              std::string(companion_public_key);
+    const auto digest = cng_sha256(std::span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(input.data()), input.size()));
+    std::uint64_t prefix = 0;
+    for (std::size_t i = 0; i < 8; ++i) prefix = (prefix << 8) | digest[i];
+    std::ostringstream code;
+    code << std::setw(8) << std::setfill('0') << (prefix % 100000000ULL);
+    return code.str();
+}
+
 std::vector<std::uint8_t> cng_hkdf_sha256(std::span<const std::uint8_t> secret,
                                           std::span<const std::uint8_t> salt,
                                           std::span<const std::uint8_t> info) {
@@ -2288,6 +2321,13 @@ void pairing_crypto_self_test() {
                 value[i] = static_cast<std::uint8_t>(std::stoi(std::string(text.substr(i * 2, 2)), nullptr, 16));
             return value;
         };
+        if (cng_pairing_verification_code(
+                "01010101010101010101010101010101",
+                "abababababababababababababababababababababababababababababababab",
+                "02020202020202020202020202020202",
+                "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef") != "60200298")
+            throw std::runtime_error("CNG pairing verification-code vector mismatch");
         const auto hkdf_vector = cng_hkdf_sha256(
             hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"),
             hex("000102030405060708090a0b0c"), hex("f0f1f2f3f4f5f6f7f8f9"));

@@ -26,6 +26,8 @@ verification and a decrypt round trip. This validates the platform crypto
 layer before the HTTPS request client is connected.
 The self-test also checks independent RFC 5869 HKDF and NIST AES-256-GCM
 known-answer vectors.
+The code derivation used for the two-screen comparison is also checked against
+a fixed Pi-compatible vector, including its field delimiters and byte order.
 
 The pairing credential storage primitive is available in the native daemon. A
 paired 256-bit key can be imported into the current user's DPAPI scope with
