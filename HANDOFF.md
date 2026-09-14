@@ -3,14 +3,13 @@
 ## Current state ? 2026-09-14
 
 The local v1.0 candidate now has persistent first-boot TLS identity, protected
-pairing-window state, Qt physical-panel code display/touch approval, verified
-Windows CNG Curve25519/HKDF/AES-GCM primitives, DPAPI-first launchers with
-atomic recovery writes, and package checks that exclude private artifacts. The
-full local candidate gate is green: eleven WSL CTests, browser graph checks,
-launcher recovery checks, the pinned Zig companion self-test and the amd64
-package verifier all pass. The remaining unimplemented customer flow is the
-Windows HTTPS pairing request/result client, DPAPI handoff integration and
-pinned reconnect; ARM64, clean-device, reboot, display, Wi-Fi and simulator
+pairing-window state, Qt physical-panel code display/touch approval, Windows
+HTTPS request/result handling, CNG X25519/HKDF/AES-GCM envelope decryption,
+and DPAPI-first credential storage. The pairing listener now exposes its
+pinned setup identity on the same TLS port and the companion uses the
+envelope's AES-GCM nonce rather than the transaction nonce. The remaining
+software work is persistent reconnect identity enforcement and real input
+calibration; ARM64, clean-device, reboot, display, Wi-Fi and simulator
 acceptance still require hardware.
 
 Architecture direction: first-time setup remains a separate component. The
