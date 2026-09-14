@@ -25,7 +25,7 @@ find_package(CURL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(tomlplusplus REQUIRED)
 find_package(Threads REQUIRED)
-add_library(rapid_native STATIC src/native_common.cpp src/native_v4.cpp src/pairing.cpp src/native_recorder.cpp
+add_library(rapid_native STATIC src/native_common.cpp src/native_v4.cpp src/pairing.cpp src/pairing_transport.cpp src/native_recorder.cpp
   src/native_runtime.cpp src/native_http.cpp src/native_acc.cpp src/native_upload.cpp src/native_setup.cpp)
 target_include_directories(rapid_native PUBLIC include)
 target_link_libraries(rapid_native PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto OpenSSL::SSL

@@ -97,4 +97,18 @@ public:
   std::optional<PendingPairing> pending(double now);
   bool active(double now) const;
 };
+
+// HTTPS is supplied by the hosting main program. This transport owns only the
+// companion request/result protocol, so first-time onboarding never needs to
+// issue a telemetry credential itself.
+class PairingTransport {
+  PairingCoordinator &pairing_;
+  std::function<double()> clock_;
+
+public:
+  PairingTransport(PairingCoordinator &pairing,
+                   std::function<double()> clock = monotonic);
+  static bool handles(const Request &request);
+  Response handle(const Request &request);
+};
 } // namespace rapid::native

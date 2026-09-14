@@ -1,6 +1,7 @@
 #pragma once
 #include "rapid/setup.hpp"
 #include "rapid/pairing.hpp"
+#include <memory>
 
 namespace rapid::native {
 class SetupAuth {
@@ -19,7 +20,7 @@ class SetupAuth {
   fs::path wifi_result_file_;
   fs::path firstboot_status_file_;
   PairingCoordinator *pairing_ = nullptr;
-  bool pairing_transport_ = false;
+  std::unique_ptr<PairingTransport> pairing_transport_;
   bool secure_transport_ = false;
   std::string certificate_fingerprint_;
   void expire(double time);

@@ -16,10 +16,6 @@ bool queued(const fs::path &path) {
 bool equal(const std::string &left, const std::string &right) {
   return left.size() == right.size() && CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
 }
-bool valid_transaction(const std::string &value) {
-  return value.size() == 32 &&
-      value.find_first_not_of("0123456789abcdef") == std::string::npos;
-}
 std::string cookie_token(const Request &request) {
   auto cookie = header(request, "cookie");
   std::string token;
@@ -57,11 +53,13 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
       wifi_request_file_(std::move(wifi_request_file)),
       wifi_result_file_(std::move(wifi_result_file)),
       firstboot_status_file_(std::move(firstboot_status_file)), pairing_(pairing),
-      pairing_transport_(secure_transport && pairing != nullptr), secure_transport_(secure_transport),
+      secure_transport_(secure_transport),
       certificate_fingerprint_(std::move(certificate_fingerprint)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
       enrollment_token_.find_first_not_of("0123456789abcdef") != std::string::npos))
     throw std::invalid_argument("enrollment token must contain 64 lowercase hexadecimal characters");
+  if (secure_transport_ && pairing_)
+    pairing_transport_ = std::make_unique<PairingTransport>(*pairing_, clock_);
 }
 
 bool SetupAuth::enroll(const std::string &password) {
@@ -102,7 +100,7 @@ Response SetupAuth::handle(const Request &request) {
   if (request.method != "GET" && request.method != "POST")
     return {405, "{\"detail\":\"method not allowed\"}", "application/json", {{"Allow", "GET, POST"}}};
   const bool companion_pairing_request = pairing_transport_ &&
-      path == "/api/v1/pairing/request" && request.method == "POST";
+      PairingTransport::handles(request) && request.method == "POST";
   if (request.method == "POST" &&
       ((!companion_pairing_request && origin != origin_) ||
        header(request, "content-type") != "application/json"))
@@ -119,7 +117,7 @@ Response SetupAuth::handle(const Request &request) {
     status["capabilities"]["settings_write"] = true;
     status["capabilities"]["browser_owner_enrollment"] =
         !enrollment_token_.empty() && store_.owner_hash().empty();
-    status["capabilities"]["pairing"] = pairing_transport_ && pairing_ != nullptr;
+    status["capabilities"]["pairing"] = pairing_transport_ != nullptr;
     if (secure_transport_ && !certificate_fingerprint_.empty())
       status["certificate_fingerprint"] = certificate_fingerprint_;
     return reply(200, status);
@@ -166,40 +164,8 @@ Response SetupAuth::handle(const Request &request) {
     }
     return reply(201, {{"owner_configured", true}, {"setup_complete", false}});
   }
-  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/request" &&
-      request.method == "POST") {
-    const auto body = Json::parse(request.body, nullptr, false);
-    if (!body.is_object() || body.size() != 2 || !body["label"].is_string() ||
-        !body["companion_public_key"].is_string())
-      return reply(400, {{"detail", "label and companion public key required"}});
-    try {
-      const auto pending = pairing_->request(body["label"].get<std::string>(),
-                                             body["companion_public_key"].get<std::string>(), time);
-      return reply(201, {{"transaction_id", pending.transaction_id},
-                         {"nonce", pending.nonce}, {"expires_at", pending.expires_at}});
-    } catch (const std::invalid_argument &error) {
-      return reply(400, {{"detail", error.what()}});
-    } catch (const std::exception &error) {
-      return reply(409, {{"detail", error.what()}});
-    }
-  }
-  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/result" &&
-      request.method == "GET") {
-    constexpr std::string_view prefix = "/api/v1/pairing/result?transaction_id=";
-    if (!request.target.starts_with(prefix))
-      return reply(400, {{"detail", "transaction_id required"}});
-    const auto transaction = request.target.substr(prefix.size());
-    if (!valid_transaction(transaction))
-      return reply(400, {{"detail", "invalid transaction_id"}});
-    const auto completed = pairing_->consume(time, transaction);
-    if (!completed) return reply(202, {{"approved", false}});
-    return reply(200, {{"approved", true}, {"peer_id", completed->peer_id},
-                       {"label", completed->label},
-                       {"ephemeral_public_key", completed->envelope.ephemeral_public_key},
-                       {"nonce", completed->envelope.nonce},
-                       {"ciphertext", completed->envelope.ciphertext},
-                       {"tag", completed->envelope.tag}});
-  }
+  if (pairing_transport_ && PairingTransport::handles(request))
+    return pairing_transport_->handle(request);
   if (path == "/api/v1/auth/login" && request.method == "POST") {
     if (attempts_.size() >= 5)
       return {429, "{\"detail\":\"try again shortly\"}", "application/json", {{"Retry-After", "60"}}};
