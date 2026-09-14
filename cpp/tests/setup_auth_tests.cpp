@@ -269,6 +269,18 @@ int main() {
     require(Json::parse(pairing_auth.handle(secure("/api/v1/setup")).body)
                 ["capabilities"]["pairing"] == true,
             "HTTPS setup advertises configured pairing capability");
+    SetupStore insecure_store(root.path / "insecure-pairing");
+    PairingCoordinator insecure_pairing(insecure_store, std::string(32, '3'), std::string(64, '4'));
+    SetupAuth insecure_auth(insecure_store, 8002, [&] { return time; }, {}, "127.0.0.1",
+                            {}, {}, {}, {}, {}, &insecure_pairing, false);
+    require(insecure_auth.enroll(password), "insecure pairing test owner enrollment");
+    auto insecure_login = request("/api/v1/auth/login", "POST", {{"password", password}});
+    const auto insecure_login_response = insecure_auth.handle(insecure_login);
+    auto insecure_window = request("/api/v1/pairing/window", "POST", {{"open", true}});
+    insecure_window.headers["cookie"] = cookie(insecure_login_response);
+    insecure_window.headers["x-csrf-token"] = Json::parse(insecure_login_response.body)["csrf_token"].get<std::string>();
+    require(insecure_auth.handle(insecure_window).status == 404,
+            "HTTP setup cannot expose pairing routes even with a coordinator");
     auto pairing_request = secure("/api/v1/pairing/request", "POST",
         {{"label", "Test PC"}, {"companion_public_key", std::string(64, 'a')}});
     pairing_request.headers.erase("origin");
