@@ -260,6 +260,9 @@ int main() {
     window.headers["cookie"] = pairing_cookie;
     window.headers["x-csrf-token"] = pairing_csrf;
     require(pairing_auth.handle(window).status == 200, "owner opens pairing window");
+    require(Json::parse(pairing_auth.handle(secure("/api/v1/setup")).body)
+                ["capabilities"]["pairing"] == true,
+            "HTTPS setup advertises configured pairing capability");
     auto pairing_request = secure("/api/v1/pairing/request", "POST",
         {{"label", "Test PC"}, {"companion_public_key", std::string(64, 'a')}});
     pairing_request.headers.erase("origin");

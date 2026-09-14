@@ -114,6 +114,7 @@ Response SetupAuth::handle(const Request &request) {
     status["capabilities"]["settings_write"] = true;
     status["capabilities"]["browser_owner_enrollment"] =
         !enrollment_token_.empty() && store_.owner_hash().empty();
+    status["capabilities"]["pairing"] = pairing_transport_ && pairing_ != nullptr;
     return reply(200, status);
   }
   if (path == "/api/v1/auth/enroll" && request.method == "POST") {
