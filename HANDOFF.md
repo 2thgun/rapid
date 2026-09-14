@@ -22,6 +22,11 @@ Latest local source checkpoint: `23aee14`; latest wiki evidence: `25d5ec2`.
 The rebuilt amd64 package and full candidate gate passed after this checkpoint
 in 26.62 seconds.
 
+The current source extends that checkpoint through `0b0a03b` and the package
+configuration enables the `rapid-pi` pairing listener on port 8003. The latest
+full gate passed in 27.61 seconds; setup-server now retains only authenticated
+control/panel routes for pairing.
+
 The constrained settings applicator now invokes `rapid-display-recovery` with a
 preview and confirmation when the packaged service applies a saved rotation;
 the recovery state remains protected by boot-time rollback. The focused setup
