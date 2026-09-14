@@ -36,6 +36,9 @@ neither operation writes a plaintext key. The Pi now exposes the HTTPS pairing
 state API, and the physical panel can approve a displayed request through its
 private local handoff. The companion HTTPS request, envelope decryption and
 reconnect client remain pending.
+The Pi-side HTTPS integration test now exercises a real X25519 request and
+decrypts the one-use envelope end to end; only the Windows transport/client
+orchestration remains to be connected.
 Credential writes are committed through a flushed temporary file and atomic
 replace so an interrupted settings recovery cannot leave a truncated blob.
 The reader clears the protected blob after unprotecting it, including when

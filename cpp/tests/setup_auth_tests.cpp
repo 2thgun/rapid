@@ -2,6 +2,9 @@
 #include <cmath>
 #include <iostream>
 #include <fstream>
+#include <iomanip>
+#include <openssl/evp.h>
+#include <sstream>
 
 using namespace rapid::native;
 namespace {
@@ -21,6 +24,27 @@ std::string cookie(const Response &response) {
   for (const auto &[name, value] : response.headers)
     if (name == "Set-Cookie") return value.substr(0, value.find(';'));
   throw std::runtime_error("missing session cookie");
+}
+std::string derive_public_key(const std::string &private_hex) {
+  std::string bytes(32, '\0');
+  for (std::size_t i = 0; i < 32; ++i)
+    bytes[i] = static_cast<char>(std::stoi(private_hex.substr(i * 2, 2), nullptr, 16));
+  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr,
+      reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size());
+  std::string result(32, '\0'); std::size_t size = result.size();
+  require(key && EVP_PKEY_get_raw_public_key(key, reinterpret_cast<unsigned char *>(result.data()), &size) > 0,
+          "derive HTTPS pairing test public key");
+  EVP_PKEY_free(key);
+  std::ostringstream out;
+  for (unsigned char byte : result)
+    out << std::hex << std::setw(2) << std::setfill('0') << int(byte);
+  return out.str();
+}
+std::string hex_text(const std::string &bytes) {
+  std::ostringstream out;
+  for (unsigned char byte : bytes)
+    out << std::hex << std::setw(2) << std::setfill('0') << int(byte);
+  return out.str();
 }
 } // namespace
 
@@ -288,8 +312,10 @@ int main() {
     insecure_window.headers["x-csrf-token"] = Json::parse(insecure_login_response.body)["csrf_token"].get<std::string>();
     require(insecure_auth.handle(insecure_window).status == 404,
             "HTTP setup cannot expose pairing routes even with a coordinator");
+    const std::string companion_private(64, '1');
+    const auto companion_public = derive_public_key(companion_private);
     auto pairing_request = secure("/api/v1/pairing/request", "POST",
-        {{"label", "Test PC"}, {"companion_public_key", std::string(64, 'a')}});
+        {{"label", "Test PC"}, {"companion_public_key", companion_public}});
     pairing_request.headers.erase("origin");
     const auto requested = pairing_auth.handle(pairing_request);
     require(requested.status == 201, "HTTPS companion pairing request accepted");
@@ -308,6 +334,15 @@ int main() {
     const auto result = pairing_auth.handle(result_request);
     require(result.status == 200 && Json::parse(result.body)["approved"] == true &&
                 pairing_store.peers().size() == 1, "HTTPS pairing returns one-use envelope");
+    const auto result_json = Json::parse(result.body);
+    PairingEnvelope envelope{result_json["ephemeral_public_key"].get<std::string>(),
+                             result_json["nonce"].get<std::string>(),
+                             result_json["ciphertext"].get<std::string>(),
+                             result_json["tag"].get<std::string>()};
+    require(open_pairing_key(std::string(32, '1'), transaction,
+                             Json::parse(requested.body)["nonce"], companion_private, envelope) ==
+                hex_text(pairing_store.peer_keys().at(0)),
+            "HTTPS pairing envelope decrypts to the private stored telemetry key");
     require(pairing_auth.handle(result_request).status == 202,
             "pairing envelope cannot be replayed");
     auto malformed_result = secure("/api/v1/pairing/result?transaction_id=bad&extra=1");
