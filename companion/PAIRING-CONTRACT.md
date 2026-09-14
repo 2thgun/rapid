@@ -15,6 +15,18 @@ information to list, revoke and authenticate that PC. The companion stores its
 configuration and private key under its user's application-data directory,
 protected with Windows DPAPI.
 
+Fresh-device onboarding is a separate component. `rapid-firstboot`,
+`rapid-provision`, `rapid-setup-server`, `rapid-apply`, and `rapid-wifi` own
+bootstrap identity, AP, owner enrollment, Home Wi-Fi, and settings recovery.
+The actual pairing state machine, credential issuance, v4 authorization, and
+reconnect belong to the two main telemetry programs: `rapid-pi` and the native
+Windows companion. Setup surfaces may open a pairing window or display its
+state, but they must not become the credential-issuing pairing service.
+
+The current Pi implementation still hosts the pairing coordinator in
+`rapid-setup-server`; moving that orchestration into `rapid-pi` is required
+before this contract can be considered implemented.
+
 The pairing service is available only while the Pi has a physical pairing
 window open. The panel must show the requesting PC name and the verification
 code, and require a local approval. An authenticated owner setup page may open

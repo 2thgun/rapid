@@ -13,6 +13,11 @@ Windows HTTPS pairing request/result client, DPAPI handoff integration and
 pinned reconnect; ARM64, clean-device, reboot, display, Wi-Fi and simulator
 acceptance still require hardware.
 
+Architecture direction: first-time setup remains a separate component. The
+current pairing coordinator is still hosted by `rapid-setup-server`; rehome it
+to `rapid-pi` before completing the Windows client. Setup services may expose
+owner/panel controls but must not issue pairing credentials.
+
 Latest local source checkpoint: `23aee14`; latest wiki evidence: `25d5ec2`.
 The rebuilt amd64 package and full candidate gate passed after this checkpoint
 in 26.62 seconds.
