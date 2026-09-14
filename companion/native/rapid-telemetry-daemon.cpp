@@ -513,12 +513,20 @@ std::string json_field(std::string_view json, std::string_view name) {
 
 std::string json_escape(std::string_view value) { std::string out; for (char c : value) { if (c == '"' || c == '\\') out += '\\'; out += c; } return out; }
 
-void write_pairing_identity(const fs::path& credential, std::string_view device, std::string_view fingerprint) {
+std::wstring pairing_base_url(std::wstring value) {
+    while (!value.empty() && value.back() == L'/') value.pop_back();
+    if (value.empty()) throw std::runtime_error("pairing URL is empty");
+    return value;
+}
+
+void write_pairing_identity(const fs::path& credential, std::string_view device,
+                            std::string_view fingerprint, std::string_view pairing_url) {
     const auto identity = credential.parent_path() / L"pairing.identity";
     const auto temporary = identity.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
     std::ofstream output(fs::path(temporary), std::ios::binary | std::ios::trunc);
     if (!output) throw std::runtime_error("cannot create pairing identity");
-    output << "device_id=" << device << "\ncertificate_fingerprint=" << fingerprint << "\n";
+    output << "device_id=" << device << "\ncertificate_fingerprint=" << fingerprint
+           << "\npairing_url=" << pairing_url << "\n";
     output.flush(); output.close();
     if (!MoveFileExW(temporary.c_str(), identity.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         DeleteFileW(temporary.c_str()); throw std::runtime_error("cannot commit pairing identity");
@@ -588,7 +596,7 @@ std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std:
 
 int run_pairing(const Options& options) {
     if (options.pairing_label.empty() || options.pairing_url.empty() || options.pinned_certificate_fingerprint.size() != 64) throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
-    const auto base = options.pairing_url; const auto setup = pairing_http(base + L"/api/v1/setup", L"GET", {}, options.pinned_certificate_fingerprint);
+    const auto base = pairing_base_url(options.pairing_url); const auto setup = pairing_http(base + L"/api/v1/setup", L"GET", {}, options.pinned_certificate_fingerprint);
     if (setup.status != 200) throw std::runtime_error("pairing setup endpoint failed");
     const auto device = json_field(setup.body, "device_id"); const auto fp = lower_ascii(json_field(setup.body, "certificate_fingerprint")); if (fp != options.pinned_certificate_fingerprint) throw std::runtime_error("setup fingerprint does not match pinned fingerprint");
     BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_KEY_HANDLE key = nullptr; const wchar_t curve[] = L"Curve25519"; if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0 || BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME, (PUCHAR)curve, sizeof(curve), 0) < 0 || BCryptGenerateKeyPair(alg, &key, 255, 0) < 0 || BCryptFinalizeKeyPair(key, 0) < 0) throw std::runtime_error("CNG Curve25519 generation failed");
@@ -597,7 +605,7 @@ int run_pairing(const Options& options) {
     const std::string request_body = "{\"label\":\"" + json_escape(options.pairing_label) + "\",\"companion_public_key\":\"" + pubhex + "\"}";
     const auto requested = pairing_http(base + L"/api/v1/pairing/request", L"POST", request_body, options.pinned_certificate_fingerprint); if (requested.status != 200 && requested.status != 201) throw std::runtime_error("pairing request rejected");
     const auto tx = json_field(requested.body, "transaction_id"); const auto nonce = json_field(requested.body, "nonce"); std::cout << "Pairing verification code: " << cng_pairing_verification_code(device, fp, tx, nonce, pubhex) << '\n';
-    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "nonce"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
+    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "nonce"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp, wide_to_utf8(base)); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
     throw std::runtime_error("pairing approval timed out");
 }
 
@@ -657,6 +665,38 @@ std::string read_small_text_file(const fs::path& path, std::string_view descript
     std::string value((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     if (value.size() > 64 * 1024) throw std::runtime_error(std::string(description) + " is unexpectedly large");
     return value;
+}
+
+struct PairedIdentity { std::string device_id, fingerprint, url; };
+
+std::optional<PairedIdentity> read_paired_identity(const fs::path& credential) {
+    const auto path = credential.parent_path() / L"pairing.identity";
+    if (!fs::exists(path)) return std::nullopt;
+    std::istringstream input(read_small_text_file(path, "paired device identity"));
+    PairedIdentity identity; std::string line;
+    while (std::getline(input, line)) {
+        const auto split = line.find('=');
+        if (split == std::string::npos) throw std::runtime_error("invalid paired device identity");
+        const auto name = line.substr(0, split), value = line.substr(split + 1);
+        if (name == "device_id" && identity.device_id.empty()) identity.device_id = value;
+        else if (name == "certificate_fingerprint" && identity.fingerprint.empty()) identity.fingerprint = value;
+        else if (name == "pairing_url" && identity.url.empty()) identity.url = value;
+        else throw std::runtime_error("invalid paired device identity");
+    }
+    if (identity.device_id.size() != 32 || identity.device_id.find_first_not_of("0123456789abcdef") != std::string::npos ||
+        identity.fingerprint.size() != 64 || identity.fingerprint.find_first_not_of("0123456789abcdef") != std::string::npos ||
+        identity.url.empty() || identity.url.find_first_of("\r\n") != std::string::npos)
+        throw std::runtime_error("invalid paired device identity");
+    return identity;
+}
+
+void verify_paired_identity(const fs::path& credential) {
+    const auto identity = read_paired_identity(credential);
+    if (!identity) return; // Imported legacy DPAPI credentials have no pinned device record.
+    const auto response = pairing_http(pairing_base_url(utf8_to_wide(identity->url)) + L"/api/v1/setup", L"GET", {}, identity->fingerprint);
+    if (response.status != 200 || json_field(response.body, "device_id") != identity->device_id ||
+        lower_ascii(json_field(response.body, "certificate_fingerprint")) != identity->fingerprint)
+        throw std::runtime_error("paired Pi identity changed; pair this Windows account again");
 }
 
 bool parse_bool(std::string value, std::string_view name) {
@@ -2765,6 +2805,8 @@ int wmain(int argc, wchar_t** argv) {
             return 0;
         }
         if (options.pairing) return run_pairing(options);
+        if (!options.auth_key_dpapi_file.empty())
+            verify_paired_identity(options.auth_key_dpapi_file);
         if (options.self_test) return run_self_test(options.output_directory, options.sample_rate) ? 0 : 1;
         if (!options.headless && GetConsoleWindow()) ShowWindow(GetConsoleWindow(), SW_HIDE);
         std::error_code directory_error;
