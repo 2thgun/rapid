@@ -241,7 +241,7 @@ int main() {
     SetupStore pairing_store(root.path / "pairing");
     PairingCoordinator pairing(pairing_store, std::string(32, '1'), std::string(64, '2'));
     SetupAuth pairing_auth(pairing_store, 8443, [&] { return time; }, {}, "127.0.0.1",
-                           {}, {}, {}, {}, {}, &pairing, true);
+                           {}, {}, {}, {}, {}, &pairing, true, std::string(64, '2'));
     require(pairing_auth.enroll(password), "pairing owner enrollment");
     auto secure = [](const std::string &path, const std::string &method = "GET",
                      const Json &body = Json::object()) {
@@ -269,6 +269,9 @@ int main() {
     require(Json::parse(pairing_auth.handle(secure("/api/v1/setup")).body)
                 ["capabilities"]["pairing"] == true,
             "HTTPS setup advertises configured pairing capability");
+    require(Json::parse(pairing_auth.handle(secure("/api/v1/setup")).body)
+                ["certificate_fingerprint"] == std::string(64, '2'),
+            "HTTPS setup publishes the certificate fingerprint");
     SetupStore insecure_store(root.path / "insecure-pairing");
     PairingCoordinator insecure_pairing(insecure_store, std::string(32, '3'), std::string(64, '4'));
     SetupAuth insecure_auth(insecure_store, 8002, [&] { return time; }, {}, "127.0.0.1",

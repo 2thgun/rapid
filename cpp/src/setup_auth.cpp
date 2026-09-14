@@ -43,7 +43,7 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      fs::path apply_request_file, fs::path apply_result_file,
                      fs::path firstboot_status_file, fs::path wifi_request_file,
                      fs::path wifi_result_file, PairingCoordinator *pairing,
-                     bool secure_transport)
+                     bool secure_transport, std::string certificate_fingerprint)
     : store_(store), clock_(std::move(clock)),
       origin_((secure_transport ? "https://" : "http://") + host + ":" + std::to_string(port)),
       authority_(std::move(host) + ":" + std::to_string(port)),
@@ -53,7 +53,8 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
       wifi_request_file_(std::move(wifi_request_file)),
       wifi_result_file_(std::move(wifi_result_file)),
       firstboot_status_file_(std::move(firstboot_status_file)), pairing_(pairing),
-      pairing_transport_(secure_transport && pairing != nullptr), secure_transport_(secure_transport) {
+      pairing_transport_(secure_transport && pairing != nullptr), secure_transport_(secure_transport),
+      certificate_fingerprint_(std::move(certificate_fingerprint)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
       enrollment_token_.find_first_not_of("0123456789abcdef") != std::string::npos))
     throw std::invalid_argument("enrollment token must contain 64 lowercase hexadecimal characters");
@@ -115,6 +116,8 @@ Response SetupAuth::handle(const Request &request) {
     status["capabilities"]["browser_owner_enrollment"] =
         !enrollment_token_.empty() && store_.owner_hash().empty();
     status["capabilities"]["pairing"] = pairing_transport_ && pairing_ != nullptr;
+    if (secure_transport_ && !certificate_fingerprint_.empty())
+      status["certificate_fingerprint"] = certificate_fingerprint_;
     return reply(200, status);
   }
   if (path == "/api/v1/auth/enroll" && request.method == "POST") {
