@@ -134,7 +134,7 @@ Physical panel rendering and touch approval are implemented in the Qt display;
 the Windows pairing request/envelope/DPAPI client flow and pinned reconnect
 remain pending, while the Pi ARM64 rebuild and hardware flow are still required.
 
-Latest local checkpoint: source `9e7829c` and wiki `117b3a8`. On 2026-09-14
+Latest local checkpoint: source `3209b95` and wiki `7dc6ff6`. On 2026-09-14
 the pinned Zig Windows build and native self-test passed, including CNG
 Curve25519 agreement, HKDF-SHA-256, AES-256-GCM decrypt, and tamper rejection,
 alongside the AC1/Content Manager adapter fixture checks. The self-test was
