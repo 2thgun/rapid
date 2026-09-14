@@ -46,8 +46,14 @@ int main(int argc, char **argv) {
     run_firstboot();
     const auto bootstrap = Json::parse(read_file(firstboot_status));
     require(bootstrap["bootstrap"]["setup_address"] == "192.168.50.1" &&
-                bootstrap["bootstrap"]["setup_url"] == "http://192.168.50.1:8002/setup",
+                bootstrap["bootstrap"]["setup_url"] == "https://192.168.50.1:8002/setup",
             "first boot publishes the configured local AP address");
+    const auto certificate_file = firstboot_directory / "device.crt";
+    const auto private_key_file = firstboot_directory / "device.key";
+    require(fs::file_size(certificate_file) > 0 && fs::file_size(private_key_file) > 0 &&
+                (fs::status(private_key_file).permissions() & fs::perms::group_all) == fs::perms::none &&
+                (fs::status(private_key_file).permissions() & fs::perms::others_all) == fs::perms::none,
+            "first boot creates a persistent private TLS identity");
     const auto activation = bootstrap["bootstrap"]["activation_token"].get<std::string>();
     require(activation.size() == 64 &&
                 activation.find_first_not_of("0123456789abcdef") == std::string::npos,

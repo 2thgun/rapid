@@ -6,9 +6,29 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <memory>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <iomanip>
+#include <sstream>
 
 using namespace rapid::native;
 namespace {
+std::string certificate_fingerprint(const fs::path &path) {
+  FILE *file = ::fopen(path.c_str(), "rb");
+  if (!file) throw std::runtime_error("cannot open TLS certificate");
+  X509 *certificate = PEM_read_X509(file, nullptr, nullptr, nullptr);
+  ::fclose(file);
+  if (!certificate) throw std::runtime_error("cannot parse TLS certificate");
+  unsigned char digest[EVP_MAX_MD_SIZE]; unsigned int length = 0;
+  const bool valid = X509_digest(certificate, EVP_sha256(), digest, &length) == 1;
+  X509_free(certificate);
+  if (!valid || length != 32) throw std::runtime_error("cannot fingerprint TLS certificate");
+  std::ostringstream result;
+  for (unsigned int i = 0; i < length; ++i)
+    result << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(digest[i]);
+  return result.str();
+}
+
 std::string enrollment_token(const fs::path &path) {
   if (path.empty()) return {};
   const int descriptor = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
@@ -83,6 +103,10 @@ int main(int argc, char **argv) {
       throw std::invalid_argument("pairing requires both device ID and certificate fingerprint");
     if (!pairing_device_id.empty() && tls_certificate.empty())
       throw std::invalid_argument("pairing requires HTTPS certificate and private key");
+    if (!tls_certificate.empty() && pairing_device_id.empty()) {
+      pairing_device_id = store.snapshot().at("device_id").get<std::string>();
+      pairing_certificate_fingerprint = certificate_fingerprint(tls_certificate);
+    }
     std::unique_ptr<PairingCoordinator> pairing;
     if (!pairing_device_id.empty())
       pairing = std::make_unique<PairingCoordinator>(store, pairing_device_id,
