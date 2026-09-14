@@ -46,9 +46,9 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <button id="retry-settings" type="button" hidden>Retry failed hostname application</button>
 </form>
 <dl><dt>Startup preference</dt><dd>Saved Wi-Fi, then access point</dd></dl>
-<p>Saving applies the device name shortly after submission. Orientation is saved
-only until its preview and rollback flow is available. Home Wi-Fi joining may
-return to the setup access point if it fails.</p>
+<p>Saving applies the device name shortly after submission. Home Wi-Fi joining
+may return to the setup access point if it fails.</p>
+<button id="reset-calibration" type="button">Reset touchscreen calibration</button>
 <form id="wifi-form"><label for="wifi-ssid">Home Wi-Fi name</label><input id="wifi-ssid" required maxlength="32" autocomplete="off"><label for="wifi-password">Home Wi-Fi password</label><input id="wifi-password" type="password" required minlength="8" maxlength="64" autocomplete="new-password"><button id="join-wifi" type="submit">Join Home Wi-Fi</button></form>
 <h3>Remembered PCs</h3><div id="peers">No paired PCs.</div>
 <h3>Pair a PC</h3>
@@ -291,6 +291,12 @@ document.getElementById('wifi-form').addEventListener('submit', async event => {
     await waitForWifiApplication(revision);
   } catch (error) { message.textContent = error.message; }
   finally { password.value = ''; button.disabled = false; }
+});
+document.getElementById('reset-calibration').addEventListener('click', async event => {
+  const button = event.currentTarget; button.disabled = true; message.textContent = '';
+  try { await api('/api/v1/calibration/reset', 'POST', {}); message.textContent = 'Touchscreen calibration reset. Recalibrate on the Pi display.'; }
+  catch (error) { message.textContent = error.message; }
+  finally { button.disabled = false; }
 });
 document.getElementById('sign-out').addEventListener('click', async () => {
   try {

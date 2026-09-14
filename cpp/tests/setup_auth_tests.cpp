@@ -133,8 +133,11 @@ int main() {
     const auto apply_directory = root.path / "apply";
     fs::create_directory(apply_directory);
     const auto apply_result = apply_directory / "result.json";
+    const auto calibration = apply_directory / "touch-calibration.conf";
+    atomic_file(calibration, "stale calibration\n");
     SetupAuth auth(store, 8002, [&] { return time; }, {}, "127.0.0.1",
-                   apply_directory / "request.json", apply_result);
+                   apply_directory / "request.json", apply_result, {}, {}, {}, nullptr,
+                   false, {}, true, calibration);
     const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
     require(public_setup["owner_configured"] == false &&
                 public_setup["capabilities"]["settings_write"] == true,
@@ -167,6 +170,11 @@ int main() {
     require(login.status == 200, "owner can log in");
     const auto credentials = Json::parse(login.body);
     const auto session_cookie = cookie(login);
+    auto reset = request("/api/v1/calibration/reset", "POST", Json::object());
+    reset.headers["cookie"] = session_cookie;
+    reset.headers["x-csrf-token"] = credentials["csrf_token"];
+    require(auth.handle(reset).status == 200 && !fs::exists(calibration),
+            "owner can reset stale touchscreen calibration");
     require(login.headers[0].second.find("HttpOnly; SameSite=Strict") != std::string::npos,
             "session cookie has browser protections");
     auto settings = request("/api/v1/settings");

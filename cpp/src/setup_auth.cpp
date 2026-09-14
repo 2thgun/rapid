@@ -44,7 +44,7 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      fs::path firstboot_status_file, fs::path wifi_request_file,
                      fs::path wifi_result_file, PairingCoordinator *pairing,
                      bool secure_transport, std::string certificate_fingerprint,
-                     bool pairing_transport_enabled)
+                     bool pairing_transport_enabled, fs::path calibration_file)
     : store_(store), clock_(std::move(clock)),
       origin_((secure_transport ? "https://" : "http://") + host + ":" + std::to_string(port)),
       authority_(std::move(host) + ":" + std::to_string(port)),
@@ -53,7 +53,7 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
       apply_result_file_(std::move(apply_result_file)),
       wifi_request_file_(std::move(wifi_request_file)),
       wifi_result_file_(std::move(wifi_result_file)),
-      firstboot_status_file_(std::move(firstboot_status_file)), pairing_(pairing),
+      firstboot_status_file_(std::move(firstboot_status_file)), calibration_file_(std::move(calibration_file)), pairing_(pairing),
       secure_transport_(secure_transport),
       certificate_fingerprint_(std::move(certificate_fingerprint)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
@@ -226,6 +226,19 @@ Response SetupAuth::handle(const Request &request) {
   }
   if (path == "/api/v1/auth/session" && request.method == "GET")
     return reply(200, {{"authenticated", true}, {"csrf_token", session->second.csrf}});
+  if (path == "/api/v1/calibration/reset" && request.method == "POST") {
+    if (!equal(header(request, "x-csrf-token"), session->second.csrf))
+      return reply(403, {{"detail", "invalid CSRF token"}});
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || !body.empty())
+      return reply(400, {{"detail", "empty JSON object required"}});
+    if (calibration_file_.empty())
+      return reply(503, {{"detail", "calibration recovery is unavailable"}});
+    std::error_code error;
+    fs::remove(calibration_file_, error);
+    if (error) return reply(503, {{"detail", "calibration reset failed"}});
+    return reply(200, {{"reset", true}});
+  }
   if (path == "/api/v1/settings" && request.method == "GET") {
     const auto state = store_.snapshot();
     Json response{{"revision", state.at("revision")}, {"settings", state.at("settings")},
