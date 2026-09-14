@@ -76,6 +76,22 @@ void provision_certificate(const fs::path &key_path, const fs::path &certificate
     throw std::runtime_error("cannot secure TLS certificate files");
 }
 
+std::string certificate_fingerprint(const fs::path &path) {
+  FILE *file = ::fopen(path.c_str(), "rb");
+  if (!file) throw std::runtime_error("cannot open TLS certificate for fingerprinting");
+  X509 *certificate = PEM_read_X509(file, nullptr, nullptr, nullptr);
+  ::fclose(file);
+  if (!certificate) throw std::runtime_error("cannot parse TLS certificate for fingerprinting");
+  unsigned char digest[EVP_MAX_MD_SIZE]; unsigned int length = 0;
+  const bool valid = X509_digest(certificate, EVP_sha256(), digest, &length) == 1;
+  X509_free(certificate);
+  if (!valid || length != 32) throw std::runtime_error("cannot fingerprint TLS certificate");
+  std::ostringstream result;
+  for (unsigned int i = 0; i < length; ++i)
+    result << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(digest[i]);
+  return result.str();
+}
+
 std::string private_hex_secret(const fs::path &path, std::size_t size,
                                const std::string &description) {
   const int descriptor = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
@@ -167,6 +183,7 @@ int main(int argc, char **argv) {
       const auto id = store.snapshot().at("device_id").get<std::string>();
       status["bootstrap"] = {{"setup_address", address}, {"setup_port", port},
                              {"setup_url", "https://" + address + ":" + std::to_string(port) + "/setup"},
+                             {"certificate_fingerprint", certificate_fingerprint(tls_certificate)},
                              {"ssid", "rapid-" + id.substr(0, 6)},
                              {"access_point_password", private_hex_secret(directory / "ap-password", 16, "access-point password")},
                              {"activation_token", private_hex_secret(token_file, 64, "activation token")}};

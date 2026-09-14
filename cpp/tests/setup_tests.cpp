@@ -59,6 +59,9 @@ int main(int argc, char **argv) {
                 activation.find_first_not_of("0123456789abcdef") == std::string::npos,
             "first boot creates a 256-bit activation token");
     const auto ap_password = bootstrap["bootstrap"]["access_point_password"].get<std::string>();
+    require(bootstrap["bootstrap"]["certificate_fingerprint"].get<std::string>().size() == 64 &&
+                bootstrap["bootstrap"]["certificate_fingerprint"].get<std::string>().find_first_not_of("0123456789abcdef") == std::string::npos,
+            "first boot publishes the TLS certificate fingerprint");
     require(bootstrap["bootstrap"]["ssid"].get<std::string>().starts_with("rapid-") &&
                 ap_password.size() == 16 &&
                 ap_password.find_first_not_of("0123456789abcdef") == std::string::npos,

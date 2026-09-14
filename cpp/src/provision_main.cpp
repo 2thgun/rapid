@@ -76,12 +76,14 @@ int main(int argc, char **argv) {
     }
     require(status["bootstrap"].is_object(), "first-boot setup credentials are invalid");
     const auto &bootstrap = status["bootstrap"];
-    require(bootstrap.size() == 6 && bootstrap.contains("setup_address") &&
+    require(bootstrap.size() == 7 && bootstrap.contains("setup_address") &&
                 bootstrap.contains("ssid") && bootstrap.contains("access_point_password"),
-            "invalid first-boot setup credentials");
+                "invalid first-boot setup credentials");
     const auto address = bootstrap.at("setup_address").get<std::string>();
     const auto ssid = bootstrap.at("ssid").get<std::string>();
     const auto password = bootstrap.at("access_point_password").get<std::string>();
+    require(hex(bootstrap.at("certificate_fingerprint").get<std::string>(), 64),
+            "invalid setup certificate fingerprint");
     ipv4(address);
     require(ssid.size() == 12 && ssid.starts_with("rapid-") && hex(ssid.substr(6), 6),
             "invalid setup SSID");
