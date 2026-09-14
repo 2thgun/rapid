@@ -2192,6 +2192,21 @@ void pairing_crypto_self_test() {
             BCryptSecretAgreement(first, second, &first_secret, 0) < 0 ||
             BCryptSecretAgreement(second, first, &second_secret, 0) < 0)
             throw std::runtime_error("CNG Curve25519 setup failed");
+        auto public_blob = [](BCRYPT_KEY_HANDLE key) {
+            ULONG size = 0;
+            if (BCryptExportKey(key, nullptr, BCRYPT_ECCPUBLIC_BLOB, nullptr, 0,
+                                &size, 0) < 0 || size == 0 || size > 4096)
+                throw std::runtime_error("CNG Curve25519 public-key export failed");
+            std::vector<std::uint8_t> blob(size);
+            if (BCryptExportKey(key, nullptr, BCRYPT_ECCPUBLIC_BLOB, blob.data(), size,
+                                &size, 0) < 0 || size == 0)
+                throw std::runtime_error("CNG Curve25519 public-key export failed");
+            blob.resize(size);
+            return blob;
+        };
+        auto first_public = public_blob(first), second_public = public_blob(second);
+        if (first_public == second_public)
+            throw std::runtime_error("CNG Curve25519 generated duplicate public keys");
         std::array<std::uint8_t, 32> left{}, right{};
         ULONG left_size = 0, right_size = 0;
         if (BCryptDeriveKey(first_secret, BCRYPT_KDF_RAW_SECRET, nullptr,
@@ -2202,6 +2217,8 @@ void pairing_crypto_self_test() {
             throw std::runtime_error("CNG Curve25519 shared-secret mismatch");
         SecureZeroMemory(left.data(), left.size());
         SecureZeroMemory(right.data(), right.size());
+        SecureZeroMemory(first_public.data(), first_public.size());
+        SecureZeroMemory(second_public.data(), second_public.size());
         close();
         std::cout << "Windows CNG Curve25519 shared-secret self-test passed\n";
     } catch (...) {
