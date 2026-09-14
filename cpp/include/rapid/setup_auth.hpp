@@ -31,7 +31,8 @@ public:
             fs::path apply_request_file = {}, fs::path apply_result_file = {},
             fs::path firstboot_status_file = {}, fs::path wifi_request_file = {},
             fs::path wifi_result_file = {}, PairingCoordinator *pairing = nullptr,
-            bool secure_transport = false, std::string certificate_fingerprint = {});
+            bool secure_transport = false, std::string certificate_fingerprint = {},
+            bool pairing_transport_enabled = true);
   // The caller supplies an exact loopback or AP authority. It is never inferred
   // from an untrusted Host header.
   bool enroll(const std::string &password);

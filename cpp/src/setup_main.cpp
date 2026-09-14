@@ -112,12 +112,14 @@ int main(int argc, char **argv) {
       pairing = std::make_unique<PairingCoordinator>(store, pairing_device_id,
                                                       pairing_certificate_fingerprint,
                                                       "/run/rapid/pairing.json",
-                                                      "/run/rapid/pairing-approval.json");
+                                                      "/run/rapid/pairing-approval.json",
+                                                      "/run/rapid/pairing-state.json",
+                                                      "/run/rapid/pairing-control.json", true);
     const auto token = store.owner_hash().empty() ? bootstrap_token : std::string{};
     SetupAuth auth(store, port, monotonic, token, listen_host, apply_request_file,
                    apply_result_file, firstboot_status_file, wifi_request_file,
                    wifi_result_file, pairing.get(), !tls_certificate.empty(),
-                   pairing_certificate_fingerprint);
+                   pairing_certificate_fingerprint, false);
     if (enroll) {
       std::string password;
       if (!std::getline(std::cin, password) || !auth.enroll(password))

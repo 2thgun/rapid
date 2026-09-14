@@ -78,6 +78,7 @@ class PairingCoordinator {
   fs::path state_file_;
   fs::path control_file_;
   fs::path panel_approval_file_;
+  bool control_proxy_ = false;
   void publish_panel(double now);
   void apply_control(double now);
   void apply_panel_approval(double now);
@@ -88,7 +89,7 @@ public:
   PairingCoordinator(SetupStore &store, std::string device_id,
                      std::string certificate_fingerprint, fs::path panel_file = {},
                      fs::path panel_approval_file = {}, fs::path state_file = {},
-                     fs::path control_file = {});
+                     fs::path control_file = {}, bool control_proxy = false);
   void open(double now);
   void cancel();
   PendingPairing request(const std::string &label,

@@ -43,7 +43,8 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      fs::path apply_request_file, fs::path apply_result_file,
                      fs::path firstboot_status_file, fs::path wifi_request_file,
                      fs::path wifi_result_file, PairingCoordinator *pairing,
-                     bool secure_transport, std::string certificate_fingerprint)
+                     bool secure_transport, std::string certificate_fingerprint,
+                     bool pairing_transport_enabled)
     : store_(store), clock_(std::move(clock)),
       origin_((secure_transport ? "https://" : "http://") + host + ":" + std::to_string(port)),
       authority_(std::move(host) + ":" + std::to_string(port)),
@@ -58,7 +59,7 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
       enrollment_token_.find_first_not_of("0123456789abcdef") != std::string::npos))
     throw std::invalid_argument("enrollment token must contain 64 lowercase hexadecimal characters");
-  if (secure_transport_ && pairing_)
+  if (secure_transport_ && pairing_ && pairing_transport_enabled)
     pairing_transport_ = std::make_unique<PairingTransport>(*pairing_, clock_);
 }
 
@@ -117,7 +118,7 @@ Response SetupAuth::handle(const Request &request) {
     status["capabilities"]["settings_write"] = true;
     status["capabilities"]["browser_owner_enrollment"] =
         !enrollment_token_.empty() && store_.owner_hash().empty();
-    status["capabilities"]["pairing"] = pairing_transport_ != nullptr;
+    status["capabilities"]["pairing"] = pairing_ != nullptr;
     if (secure_transport_ && !certificate_fingerprint_.empty())
       status["certificate_fingerprint"] = certificate_fingerprint_;
     return reply(200, status);
@@ -191,7 +192,7 @@ Response SetupAuth::handle(const Request &request) {
   const auto session = sessions_.find(hash_text(token));
   if (token.empty() || session == sessions_.end())
     return reply(401, {{"detail", "sign in required"}});
-  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/window" && request.method == "POST") {
+  if (pairing_ && secure_transport_ && path == "/api/v1/pairing/window" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});
     const auto body = Json::parse(request.body, nullptr, false);
@@ -200,7 +201,7 @@ Response SetupAuth::handle(const Request &request) {
     if (body["open"]) pairing_->open(time); else pairing_->cancel();
     return reply(200, {{"active", pairing_->active(time)}});
   }
-  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/pending" && request.method == "GET") {
+  if (pairing_ && secure_transport_ && path == "/api/v1/pairing/pending" && request.method == "GET") {
     const auto pending = pairing_->pending(time);
     if (!pending) return reply(404, {{"detail", "no pairing request pending"}});
     return reply(200, {{"transaction_id", pending->transaction_id},
@@ -208,11 +209,11 @@ Response SetupAuth::handle(const Request &request) {
                        {"companion_public_key", pending->companion_public_key},
                        {"code", pending->code}, {"expires_at", pending->expires_at}});
   }
-  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/state" && request.method == "GET") {
+  if (pairing_ && secure_transport_ && path == "/api/v1/pairing/state" && request.method == "GET") {
     const auto pending = pairing_->pending(time);
     return reply(200, {{"active", pairing_->active(time)}, {"pending", pending.has_value()}});
   }
-  if (pairing_transport_ && pairing_ && path == "/api/v1/pairing/approve" && request.method == "POST") {
+  if (pairing_ && secure_transport_ && path == "/api/v1/pairing/approve" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});
     const auto body = Json::parse(request.body, nullptr, false);

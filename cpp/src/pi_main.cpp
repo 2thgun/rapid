@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
     if (!settings.setup_directory.empty()) {
       setup = std::make_unique<SetupStore>(settings.setup_directory);
       const auto paired_keys = setup->peer_keys();
-      if (!paired_keys.empty()) {
+      if (!paired_keys.empty() || settings.pairing_enabled) {
         settings.companion_keys = paired_keys;
         settings.paired_key_mode = true;
       }

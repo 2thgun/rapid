@@ -314,17 +314,20 @@ std::optional<PendingPairing> PairingWindow::pending(double now) {
 PairingCoordinator::PairingCoordinator(SetupStore &store, std::string device_id,
                                        std::string certificate_fingerprint, fs::path panel_file,
                                        fs::path panel_approval_file,
-                                       fs::path state_file, fs::path control_file)
+                                       fs::path state_file, fs::path control_file,
+                                       bool control_proxy)
     : store_(store), device_id_(std::move(device_id)),
       window_(device_id_, std::move(certificate_fingerprint)), panel_file_(std::move(panel_file)),
       state_file_(std::move(state_file)), control_file_(std::move(control_file)),
-      panel_approval_file_(std::move(panel_approval_file)) {
+      panel_approval_file_(std::move(panel_approval_file)), control_proxy_(control_proxy) {
   std::error_code error;
-  if (!panel_file_.empty()) fs::remove(panel_file_, error);
-  error.clear();
-  if (!panel_approval_file_.empty()) fs::remove(panel_approval_file_, error);
-  error.clear();
-  if (!state_file_.empty()) fs::remove(state_file_, error);
+  if (!control_proxy_) {
+    if (!panel_file_.empty()) fs::remove(panel_file_, error);
+    error.clear();
+    if (!panel_approval_file_.empty()) fs::remove(panel_approval_file_, error);
+    error.clear();
+    if (!state_file_.empty()) fs::remove(state_file_, error);
+  }
 }
 
 void PairingCoordinator::publish_panel(double now) {
@@ -382,6 +385,10 @@ void PairingCoordinator::apply_panel_approval(double now) {
 
 void PairingCoordinator::open(double now) {
   std::lock_guard lock(mutex_);
+  if (control_proxy_) {
+    atomic_file(control_file_, Json{{"action", "open"}}.dump() + "\n");
+    return;
+  }
   if (!panel_approval_file_.empty()) {
     std::error_code error;
     fs::remove(panel_approval_file_, error);
@@ -391,6 +398,10 @@ void PairingCoordinator::open(double now) {
 }
 void PairingCoordinator::cancel() {
   std::lock_guard lock(mutex_);
+  if (control_proxy_) {
+    atomic_file(control_file_, Json{{"action", "cancel"}}.dump() + "\n");
+    return;
+  }
   if (!control_file_.empty()) { std::error_code error; fs::remove(control_file_, error); }
   if (!panel_approval_file_.empty()) {
     std::error_code error;
@@ -411,6 +422,13 @@ PendingPairing PairingCoordinator::request(const std::string &label,
 bool PairingCoordinator::approve(const std::string &transaction_id,
                                  const std::string &code, double now) {
   std::lock_guard lock(mutex_);
+  if (control_proxy_) {
+    if (transaction_id.size() != 32 || transaction_id.find_first_not_of("0123456789abcdef") != std::string::npos ||
+        code.size() != 8 || code.find_first_not_of("0123456789") != std::string::npos)
+      return false;
+    atomic_file(panel_approval_file_, Json{{"transaction_id", transaction_id}, {"code", code}}.dump() + "\n");
+    return true;
+  }
   apply_control(now);
   const auto result = window_.approve(transaction_id, code, now);
   publish_panel(now); return result;
@@ -452,6 +470,17 @@ std::optional<CompletedPairing> PairingCoordinator::consume_impl(
 
 std::optional<PendingPairing> PairingCoordinator::pending(double now) {
   std::lock_guard lock(mutex_);
+  if (control_proxy_) {
+    if (panel_file_.empty() || !fs::exists(panel_file_)) return {};
+    try {
+      const auto body = Json::parse(read_file(panel_file_));
+      if (!body.is_object() || !body["transaction_id"].is_string() ||
+          !body["nonce"].is_string() || !body["label"].is_string() ||
+          !body["code"].is_string() || !body["expires_at"].is_number()) return {};
+      return PendingPairing{body["transaction_id"], body["nonce"], body["label"], {},
+                            body["code"], body["expires_at"], false};
+    } catch (...) { return {}; }
+  }
   apply_control(now);
   apply_panel_approval(now);
   const auto result = window_.pending(now);
@@ -461,6 +490,10 @@ std::optional<PendingPairing> PairingCoordinator::pending(double now) {
 
 bool PairingCoordinator::active(double now) const {
   std::lock_guard lock(mutex_);
+  if (control_proxy_ && !state_file_.empty() && fs::exists(state_file_)) {
+    try { return Json::parse(read_file(state_file_)).value("active", false); }
+    catch (...) { return false; }
+  }
   return window_.active(now);
 }
 } // namespace rapid::native

@@ -5,7 +5,15 @@ database_path = "/var/lib/rapid/rapid.db"
 telemetry_directory = "/var/lib/rapid/telemetry"
 assets_directory = "/usr/share/rapid"
 require_v4 = true
-# Runtime requires a separately provisioned v4 key before activation.
+
+[setup]
+state_directory = "/var/lib/rapid-setup"
+
+[pairing]
+# Pairing is served by rapid-pi over its own TLS listener. The setup service
+# remains the owner/panel control surface.
+enabled = true
+port = 8003
 
 [acc]
 enabled = false

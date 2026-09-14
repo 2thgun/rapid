@@ -214,6 +214,8 @@ Config Config::load(const fs::path &path) {
                              c.companion_port);
   c.pairing_port = integer("pairing", "port", "RAPID_PAIRING_PORT", c.pairing_port);
   c.companion_host = text("app", "companion_host", "RAPID_COMPANION_HOST", "");
+  c.setup_directory = text("setup", "state_directory", "RAPID_SETUP_STATE_DIRECTORY", "");
+  c.pairing_enabled = boolean("pairing", "enabled", "RAPID_PAIRING_ENABLED", false);
   c.companion_key = telemetry_key(text("app", "companion_key", "RAPID_COMPANION_KEY", ""));
   const auto paired_keys = text("app", "companion_keys", "RAPID_COMPANION_KEYS", "");
   std::size_t start = 0;
@@ -227,7 +229,8 @@ Config Config::load(const fs::path &path) {
   }
   if (c.companion_keys.size() > 16)
     throw std::runtime_error("at most 16 paired companion keys are supported");
-  if (boolean("app", "require_v4", "RAPID_REQUIRE_V4", false) && c.companion_key.empty() && c.companion_keys.empty())
+  if (boolean("app", "require_v4", "RAPID_REQUIRE_V4", false) && c.companion_key.empty() && c.companion_keys.empty() &&
+      !(c.pairing_enabled && !c.setup_directory.empty()))
     throw std::runtime_error("authenticated v4 key required before runtime activation");
   c.database =
       text("app", "database_path", "RAPID_DATABASE_PATH", c.database.string());
@@ -238,8 +241,6 @@ Config Config::load(const fs::path &path) {
   c.network_control = text("app", "network_control_directory",
                            "RAPID_NETWORK_CONTROL_DIRECTORY",
                            c.network_control.string());
-  c.setup_directory = text("setup", "state_directory", "RAPID_SETUP_STATE_DIRECTORY", "");
-  c.pairing_enabled = boolean("pairing", "enabled", "RAPID_PAIRING_ENABLED", false);
   c.acc_enabled = boolean("acc", "enabled", "RAPID_ACC_ENABLED", false);
   c.acc_host = text("acc", "host", "RAPID_ACC_HOST", c.acc_host);
   c.acc_port = integer("acc", "port", "RAPID_ACC_PORT", c.acc_port);
