@@ -3,10 +3,11 @@ pi_host=192.168.1.64
 pi_port=9001
 sample_rate=50
 protocol=v4
-# Existing demo bundles may put the paired 64-hex-character key in telemetry.key
-# beside this file, then add: auth_key_file=telemetry.key
-# New pairings use a per-user DPAPI blob. The launcher supplies its absolute
-# path as --auth-key-dpapi-file; environment variables are not expanded here.
+# New customer installations pair through the companion. The launcher supplies
+# the resulting per-user DPAPI blob as --auth-key-dpapi-file; environment
+# variables are not expanded here. A plaintext telemetry.key is an upgrade-only
+# compatibility fallback for existing prepared demo kits and must not be created
+# for a newly paired Windows account.
 output_directory=recordings
 local_recording=true
 no_forward=false

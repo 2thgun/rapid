@@ -21,7 +21,8 @@ goto failed
 echo daemon.conf is missing. Copy it from your paired demo package.
 goto failed
 :missing_key
-echo telemetry.key is missing. Copy the private key paired with your Pi.
+echo No paired credential is available for this Windows account.
+echo Pair this companion with the Pi; legacy telemetry.key files are supported only for migrated demo kits.
 goto failed
 :not_writable
 echo This folder is not writable. Extract the package into a folder you can write to.

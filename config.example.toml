@@ -16,12 +16,12 @@ companion_port = 9001
 # Empty means: learn the first valid private/link-local sender, lock to it while
 # packets are live, then allow a different rig 1.5 seconds after it disconnects.
 companion_host = ""
-# Required for authenticated protocol v4. Generate a random 32-byte key and
-# provide the same 64-character hex value to the Windows companion. Prefer the
-# RAPID_COMPANION_KEY environment variable instead of storing it here.
-companion_key = ""
-# Empty key accepts legacy v3 only. A configured key requires authenticated v4;
-# unauthenticated v3 packets will be rejected.
+# New customer installations pair the Pi and Windows companion. Pairing creates
+# a distinct v4 credential per Windows account and stores it in the Pi's private
+# peer store and Windows DPAPI; it is never copied as a 64-character hex value.
+# `companion_key` remains an upgrade-only compatibility input for prepared demo
+# kits until the pairing migration is complete. Do not add it to a fresh config.
+# companion_key = ""
 telemetry_directory = "data/telemetry"
 # Directory shared with rapid-network-mode.service. Leave unchanged on the Pi.
 network_control_directory = "/run/rapid-network"
