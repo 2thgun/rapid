@@ -417,6 +417,11 @@ int main() {
     revoke_request.headers["x-csrf-token"] = pairing_csrf;
     require(pairing_auth.handle(revoke_request).status == 200 && pairing_store.peers().size() == 1,
             "revoking the second paired PC preserves the first peer");
+    peers_request = secure("/api/v1/peers");
+    peers_request.headers["cookie"] = pairing_cookie;
+    const auto remaining_peers = pairing_auth.handle(peers_request);
+    require(remaining_peers.status == 200 && remaining_peers.body.find("\"key\"") == std::string::npos,
+            "peer listing remains free of telemetry keys after revocation");
     std::cout << "setup migration, owner authentication, session and CSRF tests passed\n";
     return 0;
   } catch (const std::exception &error) {
