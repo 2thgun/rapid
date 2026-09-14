@@ -78,11 +78,14 @@ public:
   PairingCoordinator(SetupStore &store, std::string device_id,
                      std::string certificate_fingerprint);
   void open(double now);
+  void cancel();
   PendingPairing request(const std::string &label,
                          const std::string &companion_public_key, double now);
   bool approve(const std::string &transaction_id, const std::string &code,
                double now);
   std::optional<CompletedPairing> consume(double now);
+  std::optional<CompletedPairing> consume(double now,
+                                          const std::string &transaction_id);
   std::optional<PendingPairing> pending(double now);
   bool active(double now) const;
 };

@@ -316,6 +316,7 @@ PairingCoordinator::PairingCoordinator(SetupStore &store, std::string device_id,
       window_(device_id_, std::move(certificate_fingerprint)) {}
 
 void PairingCoordinator::open(double now) { window_.open(now); }
+void PairingCoordinator::cancel() { window_.cancel(); }
 
 PendingPairing PairingCoordinator::request(const std::string &label,
                                            const std::string &companion_public_key,
@@ -329,6 +330,15 @@ bool PairingCoordinator::approve(const std::string &transaction_id,
 }
 
 std::optional<CompletedPairing> PairingCoordinator::consume(double now) {
+  return consume(now, {});
+}
+
+std::optional<CompletedPairing> PairingCoordinator::consume(
+    double now, const std::string &expected_transaction) {
+  const auto waiting = window_.pending(now);
+  if (!waiting || !waiting->approved ||
+      (!expected_transaction.empty() && waiting->transaction_id != expected_transaction))
+    return {};
   const auto request = window_.consume_approved(now);
   if (!request) return {};
   const auto sealed = seal_pairing_key(

@@ -106,11 +106,16 @@ Ubuntu 24.04 under WSL2 is now the local Linux build path; `developer/WSL-BUILD.
 records the reproducible setup. The local x86-64 Release build and all eleven
 CTest targets passed, along with the browser graph regression. The setup server
 also has an optional TLS listener, and the network regression completed a real
-HTTPS request with generated certificate material. This verifies local transport
-behavior only; the Pi ARM64 rebuild and customer pairing flow remain pending.
+HTTPS request with generated certificate material. SetupAuth now exposes the
+pairing state transitions over HTTPS: an owner opens/cancels the window and
+approves the displayed code; a companion submits a public key and receives a
+single-use encrypted envelope. Plain HTTP does not expose those pairing routes.
+Panel presentation, certificate provisioning/pinning and the Windows DPAPI
+client handshake remain pending; the Pi ARM64 rebuild and hardware flow are
+still required.
 
-Next: wire the pairing coordinator to authenticated HTTPS and panel approval,
-then connect the Windows DPAPI store to that flow. Complete the fresh-card and real AC1/ACC/MoTeC checks
+Next: connect the pairing API to panel presentation, certificate provisioning/
+pinning and the Windows DPAPI client. Complete the fresh-card and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
 
 Initialize pinned documentation with `git submodule update --init --recursive`,

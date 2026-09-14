@@ -238,6 +238,49 @@ int main() {
     oversized.body = std::string(1025, 'x');
     require(auth.handle(oversized).status == 413, "oversized auth request rejected");
     require(store.snapshot()["setup_complete"] == false, "owner enrollment does not pretend setup is complete");
+    SetupStore pairing_store(root.path / "pairing");
+    PairingCoordinator pairing(pairing_store, std::string(32, '1'), std::string(64, '2'));
+    SetupAuth pairing_auth(pairing_store, 8443, [&] { return time; }, {}, "127.0.0.1",
+                           {}, {}, {}, {}, {}, &pairing, true);
+    require(pairing_auth.enroll(password), "pairing owner enrollment");
+    auto secure = [](const std::string &path, const std::string &method = "GET",
+                     const Json &body = Json::object()) {
+      auto result = request(path, method, body);
+      result.headers["host"] = "127.0.0.1:8443";
+      result.headers["origin"] = "https://127.0.0.1:8443";
+      return result;
+    };
+    auto pairing_login_request = secure("/api/v1/auth/login", "POST", {{"password", password}});
+    const auto pairing_login = pairing_auth.handle(pairing_login_request);
+    require(pairing_login.headers.size() > 0 && pairing_login.status == 200,
+            "pairing owner login");
+    const auto pairing_cookie = cookie(pairing_login);
+    const auto pairing_csrf = Json::parse(pairing_login.body)["csrf_token"].get<std::string>();
+    auto window = secure("/api/v1/pairing/window", "POST", {{"open", true}});
+    window.headers["cookie"] = pairing_cookie;
+    window.headers["x-csrf-token"] = pairing_csrf;
+    require(pairing_auth.handle(window).status == 200, "owner opens pairing window");
+    auto pairing_request = secure("/api/v1/pairing/request", "POST",
+        {{"label", "Test PC"}, {"companion_public_key", std::string(64, 'a')}});
+    const auto requested = pairing_auth.handle(pairing_request);
+    require(requested.status == 201, "HTTPS companion pairing request accepted");
+    const auto transaction = Json::parse(requested.body)["transaction_id"].get<std::string>();
+    auto pending_request = secure("/api/v1/pairing/pending");
+    pending_request.headers["cookie"] = pairing_cookie;
+    const auto pending_response = pairing_auth.handle(pending_request);
+    require(pending_response.status == 200, "owner sees pending pairing code");
+    const auto pending_json = Json::parse(pending_response.body);
+    auto approve_request = secure("/api/v1/pairing/approve", "POST",
+        {{"transaction_id", transaction}, {"code", pending_json["code"]}});
+    approve_request.headers["cookie"] = pairing_cookie;
+    approve_request.headers["x-csrf-token"] = pairing_csrf;
+    require(pairing_auth.handle(approve_request).status == 200, "owner approves pairing code");
+    auto result_request = secure("/api/v1/pairing/result?transaction_id=" + transaction);
+    const auto result = pairing_auth.handle(result_request);
+    require(result.status == 200 && Json::parse(result.body)["approved"] == true &&
+                pairing_store.peers().size() == 1, "HTTPS pairing returns one-use envelope");
+    require(pairing_auth.handle(result_request).status == 202,
+            "pairing envelope cannot be replayed");
     std::cout << "setup migration, owner authentication, session and CSRF tests passed\n";
     return 0;
   } catch (const std::exception &error) {
