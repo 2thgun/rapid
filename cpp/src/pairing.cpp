@@ -392,13 +392,15 @@ std::optional<CompletedPairing> PairingCoordinator::consume_impl(
     return {};
   const auto request = window_.consume_approved(now);
   if (!request) return {};
+  // The request is one-use; remove its panel representation before any
+  // envelope or peer-store work can fail.
+  publish_panel(now);
   const auto sealed = seal_pairing_key(
       device_id_, request->transaction_id, request->nonce,
       request->companion_public_key);
   const auto peer_id = hash_text("rapid-pairing-peer-v1|" + request->companion_public_key).substr(0, 32);
   if (!store_.remember_peer(peer_id, request->label, sealed.telemetry_key, now))
     return {};
-  publish_panel(now);
   return CompletedPairing{peer_id, request->label, sealed.envelope};
 }
 
