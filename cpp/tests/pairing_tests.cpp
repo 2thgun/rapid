@@ -1,6 +1,7 @@
 #include "rapid/pairing.hpp"
 #include <iostream>
 #include <iomanip>
+#include <fstream>
 #include <openssl/evp.h>
 #include <sstream>
 
@@ -47,8 +48,9 @@ int main() {
     require(rejected, "tampered pairing envelope is rejected");
     const auto store_path = fs::temp_directory_path() / ("rapid-pairing-coordinator-" + unique_id());
     const auto panel_file = store_path / "pairing.json";
+    const auto approval_file = store_path / "pairing-approval.json";
     SetupStore store(store_path);
-    PairingCoordinator coordinator(store, device, certificate, panel_file);
+    PairingCoordinator coordinator(store, device, certificate, panel_file, approval_file);
     coordinator.open(0);
     const auto coordinated = coordinator.request("Driver PC", derive_public_key(private_key), 1);
     require(fs::exists(panel_file), "pairing panel state is published");
@@ -57,8 +59,11 @@ int main() {
                 panel["label"] == "Driver PC" && panel["code"] == coordinated.code &&
                 !panel.contains("companion_public_key") && !panel.contains("telemetry_key"),
             "pairing panel state contains display metadata without secrets");
-    require(coordinator.approve(coordinated.transaction_id, coordinated.code, 2),
-            "coordinator accepts an approved request");
+    { std::ofstream approval(approval_file);
+      approval << Json{{"transaction_id", coordinated.transaction_id},
+                       {"code", coordinated.code}}.dump(); }
+    require(coordinator.pending(2)->approved && !fs::exists(approval_file),
+            "coordinator accepts a physical panel approval");
     const auto completed = coordinator.consume(2);
     require(completed && completed->peer_id.size() == 32 && store.peers().size() == 1 &&
                 open_pairing_key(device, coordinated.transaction_id, coordinated.nonce,

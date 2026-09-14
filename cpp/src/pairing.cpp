@@ -312,9 +312,11 @@ std::optional<PendingPairing> PairingWindow::pending(double now) {
 }
 
 PairingCoordinator::PairingCoordinator(SetupStore &store, std::string device_id,
-                                       std::string certificate_fingerprint, fs::path panel_file)
+                                       std::string certificate_fingerprint, fs::path panel_file,
+                                       fs::path panel_approval_file)
     : store_(store), device_id_(std::move(device_id)),
-      window_(device_id_, std::move(certificate_fingerprint)), panel_file_(std::move(panel_file)) {}
+      window_(device_id_, std::move(certificate_fingerprint)), panel_file_(std::move(panel_file)),
+      panel_approval_file_(std::move(panel_approval_file)) {}
 
 void PairingCoordinator::publish_panel(double now) {
   if (panel_file_.empty()) return;
@@ -326,6 +328,24 @@ void PairingCoordinator::publish_panel(double now) {
                                {"expires_at", pending->expires_at}}.dump() + "\n");
   if (::chmod(panel_file_.c_str(), 0640) != 0)
     throw std::runtime_error("cannot secure pairing panel state");
+}
+
+void PairingCoordinator::apply_panel_approval(double now) {
+  if (panel_approval_file_.empty()) return;
+  std::error_code error;
+  if (!fs::exists(panel_approval_file_)) return;
+  try {
+    const auto body = Json::parse(read_file(panel_approval_file_));
+    const auto transaction = body.value("transaction_id", std::string{});
+    const auto code = body.value("code", std::string{});
+    if (lower_hex(transaction, 32) && code.size() == 8 &&
+        code.find_first_not_of("0123456789") == std::string::npos)
+      window_.approve(transaction, code, now);
+  } catch (...) {
+    // A malformed or stale local request must never block pairing.
+  }
+  fs::remove(panel_approval_file_, error);
+  publish_panel(now);
 }
 
 void PairingCoordinator::open(double now) { window_.open(now); publish_panel(now); }
@@ -350,6 +370,7 @@ std::optional<CompletedPairing> PairingCoordinator::consume(double now) {
 
 std::optional<CompletedPairing> PairingCoordinator::consume(
     double now, const std::string &expected_transaction) {
+  apply_panel_approval(now);
   const auto waiting = window_.pending(now);
   if (!waiting || !waiting->approved ||
       (!expected_transaction.empty() && waiting->transaction_id != expected_transaction))
@@ -367,6 +388,7 @@ std::optional<CompletedPairing> PairingCoordinator::consume(
 }
 
 std::optional<PendingPairing> PairingCoordinator::pending(double now) {
+  apply_panel_approval(now);
   const auto result = window_.pending(now);
   publish_panel(now);
   return result;

@@ -3,7 +3,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -96,24 +98,49 @@ void DashboardModel::pollPairingPanel() {
   QFile file(qEnvironmentVariable("RAPID_PAIRING_PANEL", "/run/rapid/pairing.json"));
   bool pending = false;
   QString label, code;
+  QString transaction;
   if (file.open(QIODevice::ReadOnly)) {
     const auto document = QJsonDocument::fromJson(file.readAll());
     if (document.isObject()) {
       const auto object = document.object();
       label = object.value("label").toString();
       code = object.value("code").toString();
+      transaction = object.value("transaction_id").toString();
       bool numeric = false;
       code.toLongLong(&numeric);
-      pending = !label.isEmpty() && code.size() == 8 && numeric;
+      pending = !label.isEmpty() && transaction.size() == 32 &&
+          code.size() == 8 && numeric;
     }
   }
-  if (pairing_pending_ != pending || pairing_label_ != label || pairing_code_ != code) {
+  if (pairing_pending_ != pending || pairing_label_ != label || pairing_code_ != code ||
+      pairing_transaction_ != transaction) {
     pairing_pending_ = pending;
     pairing_label_ = std::move(label);
     pairing_code_ = std::move(code);
+    pairing_transaction_ = std::move(transaction);
     bump();
   }
   QTimer::singleShot(500, this, &DashboardModel::pollPairingPanel);
+}
+
+bool DashboardModel::approvePairing() {
+  if (!pairing_pending_) return false;
+  const QString path = qEnvironmentVariable("RAPID_PAIRING_APPROVAL",
+                                            "/run/rapid/pairing-approval.json");
+  const QFileInfo info(path);
+  QDir().mkpath(info.absolutePath());
+  const auto temporary = path + ".tmp";
+  QFile file(temporary);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+  const QJsonObject object{{"transaction_id", pairing_transaction_}, {"code", pairing_code_}};
+  if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0 || !file.flush()) {
+    file.close(); QFile::remove(temporary); return false;
+  }
+  file.close();
+  file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                      QFileDevice::ReadGroup);
+  QFile::remove(path);
+  return QFile::rename(temporary, path);
 }
 
 void DashboardModel::consumeLive(QNetworkReply *reply) {
