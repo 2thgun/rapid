@@ -1,4 +1,4 @@
-# Current handoff
+﻿# Current handoff
 
 Published source through `a694da8` adds first-boot AP onboarding, physical
 activation-token display, browser owner enrollment, constrained hostname
@@ -97,25 +97,26 @@ returns the envelope once; this core integration is covered by the 16.80-second
 ARM64 gate. See wiki evidence `dc2524e`.
 
 The Windows daemon now has a per-user DPAPI credential container and explicit
-load/store options; this removes plaintext key files but is not the graphical
-HTTPS pairing handshake. The Pi package now includes `rapid-display-recovery`
-with preview/confirm/rollback and stale calibration reset; its output and
-evdev paths still need hardware confirmation.
+load/store options; it also has a WinHTTP HTTPS setup probe that verifies an
+explicit SHA-256 certificate pin and fails closed on mismatch. This is not yet
+the graphical pairing handshake. The Pi package now includes
+`rapid-display-recovery` with preview/confirm/rollback, boot recovery and stale
+calibration reset; its output and evdev paths still need hardware confirmation.
 
 Ubuntu 24.04 under WSL2 is now the local Linux build path; `developer/WSL-BUILD.md`
 records the reproducible setup. The local x86-64 Release build and all eleven
 CTest targets passed, along with the browser graph regression. The setup server
-also has an optional TLS listener, and the network regression completed a real
-HTTPS request with generated certificate material. SetupAuth now exposes the
-pairing state transitions over HTTPS: an owner opens/cancels the window and
-approves the displayed code; a companion submits a public key and receives a
-single-use encrypted envelope. Plain HTTP does not expose those pairing routes.
-Panel presentation, certificate provisioning/pinning and the Windows DPAPI
-client handshake remain pending; the Pi ARM64 rebuild and hardware flow are
-still required.
+uses TLS in the packaged service, and first boot provisions a persistent
+self-signed device certificate/key; the network regression covers a real
+HTTPS request. SetupAuth exposes pairing transitions over HTTPS, and the owner
+setup page can open/cancel the window and approve the displayed code. Plain HTTP
+does not expose those pairing routes. Physical panel presentation, the Windows
+pairing request/envelope/DPAPI client flow and pinned reconnect remain pending;
+the Pi ARM64 rebuild and hardware flow are still required.
 
-Next: connect the pairing API to panel presentation, certificate provisioning/
-pinning and the Windows DPAPI client. Complete the fresh-card and real AC1/ACC/MoTeC checks
+Next: connect the pairing API to panel presentation and the Windows pairing
+request/envelope client, then complete pinned reconnect. Complete the fresh-card
+and real AC1/ACC/MoTeC checks
 in `wiki/Release-Acceptance.md` before claiming v1.0.
 
 Initialize pinned documentation with `git submodule update --init --recursive`,
@@ -128,3 +129,6 @@ keys, configuration, databases and recordings with a timestamped `.old` backup.
 Temporary evidence belongs in ignored `.local/sessions/`. Development resumes
 from this repository and wiki; old developer folders are optional history,
 though installed private kits may still reference them.
+
+
+
