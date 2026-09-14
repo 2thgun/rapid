@@ -62,6 +62,7 @@ return to the setup access point if it fails.</p>
 'use strict';
 let csrf = '';
 let revision = null;
+let pairing_poll = null;
 const message = document.getElementById('message');
 async function api(path, method='GET', body) {
   const headers = {};
@@ -157,6 +158,7 @@ async function showPairing() {
   try {
     const pairing = await api('/api/v1/pairing/state');
     if (!pairing.active) {
+      if (pairing_poll !== null) { clearTimeout(pairing_poll); pairing_poll = null; }
       pending.hidden = true; document.getElementById('pairing-open').hidden = false;
       document.getElementById('pairing-cancel').hidden = true;
       state.textContent = 'Pairing window is closed.';
@@ -166,6 +168,7 @@ async function showPairing() {
       pending.hidden = true; document.getElementById('pairing-open').hidden = true;
       document.getElementById('pairing-cancel').hidden = false;
       state.textContent = 'Pairing window is open; waiting for a PC request.';
+      if (pairing_poll === null) pairing_poll = setTimeout(async () => { pairing_poll = null; await showPairing(); }, 1000);
       return null;
     }
     const data = await api('/api/v1/pairing/pending');
@@ -175,6 +178,7 @@ async function showPairing() {
     state.textContent = 'Pairing window is open.';
     document.getElementById('pairing-open').hidden = true;
     document.getElementById('pairing-cancel').hidden = false;
+    if (pairing_poll === null) pairing_poll = setTimeout(async () => { pairing_poll = null; await showPairing(); }, 1000);
     return data;
   } catch (error) {
     pending.hidden = true;
@@ -292,6 +296,7 @@ document.getElementById('sign-out').addEventListener('click', async () => {
   try {
     await api('/api/v1/auth/logout', 'POST', {});
     showLogin();
+    if (pairing_poll !== null) { clearTimeout(pairing_poll); pairing_poll = null; }
     message.textContent = 'Signed out.';
   } catch (error) {
     if (error.status === 401) showLogin();
