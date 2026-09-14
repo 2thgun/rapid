@@ -43,6 +43,8 @@ validation or DPAPI unprotect fails.
 The writer rejects anything other than the contract's 32-byte telemetry key.
 The native self-test also checks that invalid key widths are rejected before
 DPAPI is called.
+It also rejects a malformed persisted DPAPI record before attempting
+unprotect, covering interrupted or corrupted settings recovery.
 
 The companion can verify a Pi setup certificate before a pairing client uses it:
 

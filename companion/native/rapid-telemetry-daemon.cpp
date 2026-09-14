@@ -2526,6 +2526,17 @@ bool run_self_test(const fs::path& directory, int sample_rate) {
     apply_config_file(portable_options, fs::absolute(test_config), true);
     assetto_self_test::require(portable_options.output_directory == fs::absolute(directory) / "relative-output",
                               "portable output path must resolve next to the config");
+    const auto malformed_dpapi = directory / "malformed-pairing.dpapi";
+    {
+        std::ofstream output(malformed_dpapi, std::ios::binary | std::ios::trunc);
+        output << "RPDPAPI1" << static_cast<char>(0x04) << '\0' << '\0' << '\0' << "bad";
+    }
+    bool malformed_rejected = false;
+    try { (void)read_dpapi_credential(malformed_dpapi); }
+    catch (const std::exception&) { malformed_rejected = true; }
+    fs::remove(malformed_dpapi);
+    assetto_self_test::require(malformed_rejected,
+                              "malformed DPAPI pairing records must fail closed");
     Metadata metadata;
     metadata.simulator = "SELFTEST";
     metadata.driver = "Test Driver";
