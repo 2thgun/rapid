@@ -76,7 +76,8 @@ if(NOT setup_service MATCHES "User=rapid" OR
    NOT setup_service MATCHES "--listen 192[.]168[.]1[.]64" OR
    NOT setup_service MATCHES "--enrollment-token-file /var/lib/rapid-setup/enrollment[.]token" OR
    NOT setup_service MATCHES "--tls-certificate /var/lib/rapid-setup/device[.]crt" OR
-   NOT setup_service MATCHES "--tls-private-key /var/lib/rapid-setup/device[.]key")
+   NOT setup_service MATCHES "--tls-private-key /var/lib/rapid-setup/device[.]key" OR
+   NOT setup_service MATCHES "--calibration-file /var/lib/rapid-setup/touch-calibration[.]conf")
   message(FATAL_ERROR "Setup service must use generated rapid-owned AP/TLS state and fixed listener")
 endif()
 if(NOT firstboot_service MATCHES "--tls-certificate /var/lib/rapid-setup/device[.]crt" OR
