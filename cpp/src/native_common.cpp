@@ -212,6 +212,7 @@ Config Config::load(const fs::path &path) {
   c.port = integer("app", "port", "RAPID_APP_PORT", c.port);
   c.companion_port = integer("app", "companion_port", "RAPID_COMPANION_PORT",
                              c.companion_port);
+  c.pairing_port = integer("pairing", "port", "RAPID_PAIRING_PORT", c.pairing_port);
   c.companion_host = text("app", "companion_host", "RAPID_COMPANION_HOST", "");
   c.companion_key = telemetry_key(text("app", "companion_key", "RAPID_COMPANION_KEY", ""));
   const auto paired_keys = text("app", "companion_keys", "RAPID_COMPANION_KEYS", "");
@@ -238,6 +239,7 @@ Config Config::load(const fs::path &path) {
                            "RAPID_NETWORK_CONTROL_DIRECTORY",
                            c.network_control.string());
   c.setup_directory = text("setup", "state_directory", "RAPID_SETUP_STATE_DIRECTORY", "");
+  c.pairing_enabled = boolean("pairing", "enabled", "RAPID_PAIRING_ENABLED", false);
   c.acc_enabled = boolean("acc", "enabled", "RAPID_ACC_ENABLED", false);
   c.acc_host = text("acc", "host", "RAPID_ACC_HOST", c.acc_host);
   c.acc_port = integer("acc", "port", "RAPID_ACC_PORT", c.acc_port);
@@ -259,7 +261,7 @@ Config Config::load(const fs::path &path) {
   c.upload_policy = text("upload", "policy", "RAPID_UPLOAD_POLICY", "races");
   c.queue =
       text("upload", "queue_path", "RAPID_UPLOAD_QUEUE_PATH", c.queue.string());
-  for (auto port : {c.port, c.companion_port, c.acc_port, c.acc_local_port})
+  for (auto port : {c.port, c.companion_port, c.acc_port, c.acc_local_port, c.pairing_port})
     if (port < 1 || port > 65535)
       throw std::runtime_error("port out of range");
   if (c.upload_policy != "races" && c.upload_policy != "all" &&

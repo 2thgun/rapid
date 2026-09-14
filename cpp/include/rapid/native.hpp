@@ -60,8 +60,8 @@ struct Config {
   std::string display_name = "raPId", upload_url, upload_token,
               upload_policy = "races";
   int port = 8000, companion_port = 9001, acc_port = 9000,
-      acc_local_port = 9000, protocol_version = 4, interval_ms = 100;
-  bool acc_enabled = false, upload_enabled = false;
+      acc_local_port = 9000, pairing_port = 8003, protocol_version = 4, interval_ms = 100;
+  bool acc_enabled = false, upload_enabled = false, pairing_enabled = false;
   // Set only when the runtime has adopted records from private setup state.
   // In this mode an empty refreshed set means every paired PC was revoked; it
   // must not silently fall back to a legacy configured shared key.

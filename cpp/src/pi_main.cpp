@@ -1,11 +1,33 @@
 #include "rapid/native.hpp"
 #include "rapid/setup.hpp"
+#include "rapid/pairing.hpp"
 #include <csignal>
 #include <iostream>
 #include <memory>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <iomanip>
+#include <sstream>
 #include <thread>
 
 using namespace rapid::native;
+namespace {
+std::string certificate_fingerprint(const fs::path &path) {
+  FILE *file = ::fopen(path.c_str(), "rb");
+  if (!file) throw std::runtime_error("cannot open pairing TLS certificate");
+  X509 *certificate = PEM_read_X509(file, nullptr, nullptr, nullptr);
+  ::fclose(file);
+  if (!certificate) throw std::runtime_error("cannot parse pairing TLS certificate");
+  unsigned char digest[EVP_MAX_MD_SIZE]; unsigned int length = 0;
+  const bool valid = X509_digest(certificate, EVP_sha256(), digest, &length) == 1;
+  X509_free(certificate);
+  if (!valid || length != 32) throw std::runtime_error("cannot fingerprint pairing TLS certificate");
+  std::ostringstream result;
+  for (unsigned int i = 0; i < length; ++i)
+    result << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(digest[i]);
+  return result.str();
+}
+}
 int main(int argc, char **argv) {
   try {
     if (argc > 1 && std::string(argv[1]) == "--help") {
@@ -20,12 +42,24 @@ int main(int argc, char **argv) {
       throw std::runtime_error("use --config path or --help");
     auto settings = Config::load(config);
     std::unique_ptr<SetupStore> setup;
+    std::unique_ptr<PairingCoordinator> pairing;
+    std::unique_ptr<PairingTransport> pairing_transport;
     if (!settings.setup_directory.empty()) {
       setup = std::make_unique<SetupStore>(settings.setup_directory);
       const auto paired_keys = setup->peer_keys();
       if (!paired_keys.empty()) {
         settings.companion_keys = paired_keys;
         settings.paired_key_mode = true;
+      }
+      const auto certificate = settings.setup_directory / "device.crt";
+      const auto private_key = settings.setup_directory / "device.key";
+      if (settings.pairing_enabled && fs::is_regular_file(certificate) && fs::is_regular_file(private_key)) {
+        const auto device_id = setup->snapshot().at("device_id").get<std::string>();
+        pairing = std::make_unique<PairingCoordinator>(
+            *setup, device_id, certificate_fingerprint(certificate),
+            "/run/rapid/pairing.json", "/run/rapid/pairing-approval.json",
+            "/run/rapid/pairing-state.json", "/run/rapid/pairing-control.json");
+        pairing_transport = std::make_unique<PairingTransport>(*pairing);
       }
     }
     Runtime runtime(settings);
@@ -48,6 +82,17 @@ int main(int argc, char **argv) {
         }
       });
     };
+    if (pairing && pairing_transport) {
+      start([&] {
+        serve_tls(settings.host, settings.pairing_port,
+                  [&](const Request &request) -> Response {
+                    return pairing_transport->handle(request);
+                  }, settings.setup_directory / "device.crt",
+                  settings.setup_directory / "device.key");
+      });
+      log("INFO pairing: main-program TLS listener active on port " +
+          std::to_string(settings.pairing_port));
+    }
     start([&] { udp_loop(runtime, settings); });
     if (settings.acc_enabled)
       start([&] { acc_loop(runtime, settings); });

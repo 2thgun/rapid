@@ -32,6 +32,13 @@ network_control_directory = "/run/rapid-network"
 # a new leaf directory is created privately, existing leaf must be mode 0700.
 state_directory = ""
 
+[pairing]
+# Main-program HTTPS pairing listener. It activates only when the setup
+# identity files exist; setup-server remains the onboarding/control surface.
+# Keep disabled until the setup service has been migrated to private handoffs.
+enabled = false
+port = 8003
+
 [upload]
 enabled = false
 url = "https://telemetry.example.com"
