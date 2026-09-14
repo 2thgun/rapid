@@ -262,8 +262,21 @@ Response SetupAuth::handle(const Request &request) {
       }
     } catch (const std::exception &) {}
     if (!state.at("setup_complete") && settings_applied && wifi_connected &&
-        store_.mark_setup_complete(state.at("revision")))
+        store_.mark_setup_complete(state.at("revision"))) {
       state = store_.snapshot();
+      if (!firstboot_status_file_.empty()) {
+        try {
+          auto status = Json::parse(read_file(firstboot_status_file_));
+          if (status.is_object()) {
+            status["setup_complete"] = true;
+            status["state"] = "complete";
+            atomic_file(firstboot_status_file_, status.dump() + "\n");
+          }
+        } catch (const std::exception &error) {
+          log(std::string("WARN setup: cannot record setup completion status: ") + error.what());
+        }
+      }
+    }
     Json response{{"revision", state.at("revision")}, {"settings", state.at("settings")},
                   {"applied", false},
                   {"apply_queued", queued(apply_request_file_)}};

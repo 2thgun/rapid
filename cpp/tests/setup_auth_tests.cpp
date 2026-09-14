@@ -134,10 +134,14 @@ int main() {
     fs::create_directory(apply_directory);
     const auto apply_result = apply_directory / "result.json";
     const auto wifi_result = apply_directory / "wifi-result.json";
+    const auto completion_status = apply_directory / "firstboot-status.json";
     const auto calibration = apply_directory / "touch-calibration.conf";
     atomic_file(calibration, "stale calibration\n");
+    atomic_file(completion_status, Json{{"owner_configured", true},
+                                        {"setup_complete", false},
+                                        {"state", "settings_application_required"}}.dump());
     SetupAuth auth(store, 8002, [&] { return time; }, {}, "127.0.0.1",
-                   apply_directory / "request.json", apply_result, {},
+                   apply_directory / "request.json", apply_result, completion_status,
                    apply_directory / "wifi-request.json", wifi_result, nullptr,
                    false, {}, true, calibration);
     const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
@@ -213,6 +217,8 @@ int main() {
     response = Json::parse(auth.handle(settings).body);
     require(response["setup_complete"] == true && store.snapshot()["setup_complete"] == true,
             "matching settings and Home Wi-Fi completion finish onboarding persistently");
+    require(Json::parse(read_file(completion_status))["state"] == "complete",
+            "first-boot status records completed onboarding for local recovery surfaces");
     auto retry = request("/api/v1/settings/retry", "POST", {{"revision", 8}});
     retry.headers["cookie"] = session_cookie;
     require(auth.handle(retry).status == 403, "settings retry requires CSRF token");
