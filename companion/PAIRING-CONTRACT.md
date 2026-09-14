@@ -27,6 +27,7 @@ companion deliberately supports a first-use certificate only during an open
 pairing window; afterward it pins the certificate's SHA-256 fingerprint along
 with the device ID. A changed fingerprint is an error requiring a new physical
 pairing, not a silent reconnect.
+The setup service rejects a cleartext companion POST before route dispatch.
 
 1. The companion discovers a Pi or accepts a manually entered address. It shows
    the Pi's device ID and certificate fingerprint before pairing.

@@ -312,6 +312,11 @@ int main() {
     insecure_window.headers["x-csrf-token"] = Json::parse(insecure_login_response.body)["csrf_token"].get<std::string>();
     require(insecure_auth.handle(insecure_window).status == 404,
             "HTTP setup cannot expose pairing routes even with a coordinator");
+    auto insecure_pairing_request = request("/api/v1/pairing/request", "POST",
+        {{"label", "HTTP PC"}, {"companion_public_key", std::string(64, 'a')}});
+    insecure_pairing_request.headers.erase("origin");
+    require(insecure_auth.handle(insecure_pairing_request).status == 403,
+            "HTTP setup rejects companion pairing requests");
     const std::string companion_private(64, '1');
     const auto companion_public = derive_public_key(companion_private);
     auto pairing_request = secure("/api/v1/pairing/request", "POST",
