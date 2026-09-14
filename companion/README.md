@@ -39,6 +39,8 @@ reconnect client remain pending.
 The Pi-side HTTPS integration test now exercises a real X25519 request and
 decrypts the one-use envelope end to end; only the Windows transport/client
 orchestration remains to be connected.
+That integration also pairs two independent PCs and verifies revocation of one
+does not remove the other.
 Credential writes are committed through a flushed temporary file and atomic
 replace so an interrupted settings recovery cannot leave a truncated blob.
 The reader clears the protected blob after unprotecting it, including when

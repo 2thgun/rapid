@@ -377,20 +377,43 @@ int main() {
     window.headers["cookie"] = pairing_cookie;
     window.headers["x-csrf-token"] = pairing_csrf;
     require(pairing_auth.handle(window).status == 200, "owner reopens pairing window");
+    const std::string second_private(64, '2');
+    const auto second_public = derive_public_key(second_private);
     auto panel_request = secure("/api/v1/pairing/request", "POST",
-        {{"label", "Panel PC"}, {"companion_public_key", std::string(64, 'b')}});
+        {{"label", "Panel PC"}, {"companion_public_key", second_public}});
     panel_request.headers.erase("origin");
     const auto panel_created = pairing_auth.handle(panel_request);
     require(panel_created.status == 201 && fs::exists(pairing_panel),
             "panel approval flow publishes its local handoff");
+    const auto panel_created_json = Json::parse(panel_created.body);
     const auto panel_details = Json::parse(read_file(pairing_panel));
     { std::ofstream approval(pairing_approval);
       approval << Json{{"transaction_id", panel_details["transaction_id"]},
                        {"code", panel_details["code"]}}.dump(); }
     auto panel_result = secure("/api/v1/pairing/result?transaction_id=" +
                                panel_details["transaction_id"].get<std::string>());
-    require(pairing_auth.handle(panel_result).status == 200 && pairing_store.peers().size() == 2,
+    const auto panel_response = pairing_auth.handle(panel_result);
+    require(panel_response.status == 200 && pairing_store.peers().size() == 2,
             "physical panel approval completes HTTPS pairing");
+    const auto panel_json = Json::parse(panel_response.body);
+    PairingEnvelope panel_envelope{panel_json["ephemeral_public_key"].get<std::string>(),
+                                   panel_json["nonce"].get<std::string>(),
+                                   panel_json["ciphertext"].get<std::string>(),
+                                   panel_json["tag"].get<std::string>()};
+    require(open_pairing_key(std::string(32, '1'),
+                             panel_details["transaction_id"].get<std::string>(),
+                             panel_created_json["nonce"].get<std::string>(), second_private, panel_envelope) ==
+                hex_text(pairing_store.peer_keys().at(1)),
+            "second HTTPS pairing envelope decrypts to its independent telemetry key");
+    auto peers_request = secure("/api/v1/peers");
+    peers_request.headers["cookie"] = pairing_cookie;
+    const auto peers_json = Json::parse(pairing_auth.handle(peers_request).body);
+    const auto second_peer_id = peers_json["peers"].at(1)["id"].get<std::string>();
+    auto revoke_request = secure("/api/v1/peers/revoke", "POST", {{"id", second_peer_id}});
+    revoke_request.headers["cookie"] = pairing_cookie;
+    revoke_request.headers["x-csrf-token"] = pairing_csrf;
+    require(pairing_auth.handle(revoke_request).status == 200 && pairing_store.peers().size() == 1,
+            "revoking the second paired PC preserves the first peer");
     std::cout << "setup migration, owner authentication, session and CSRF tests passed\n";
     return 0;
   } catch (const std::exception &error) {
