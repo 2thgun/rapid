@@ -2304,6 +2304,30 @@ void pairing_crypto_self_test() {
                             right.data(), static_cast<ULONG>(right.size()), &right_size, 0) < 0 ||
             left_size != left.size() || right_size != right.size() || left != right)
             throw std::runtime_error("CNG Curve25519 shared-secret mismatch");
+        ULONG private_blob_size = 0;
+        if (BCryptExportKey(first, nullptr, BCRYPT_ECCPRIVATE_BLOB, nullptr, 0,
+                            &private_blob_size, 0) < 0 || private_blob_size == 0 || private_blob_size > 4096)
+            throw std::runtime_error("CNG Curve25519 private-key export failed");
+        std::vector<std::uint8_t> private_blob(private_blob_size);
+        if (BCryptExportKey(first, nullptr, BCRYPT_ECCPRIVATE_BLOB, private_blob.data(), private_blob_size,
+                            &private_blob_size, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 private-key export failed");
+        BCRYPT_KEY_HANDLE imported = nullptr;
+        if (BCryptImportKeyPair(algorithm, nullptr, BCRYPT_ECCPRIVATE_BLOB,
+                                &imported, private_blob.data(), private_blob_size, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 private-key import failed");
+        BCRYPT_SECRET_HANDLE imported_secret = nullptr;
+        if (BCryptSecretAgreement(imported, second, &imported_secret, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 imported-key agreement failed");
+        std::array<std::uint8_t, 32> imported_shared{};
+        ULONG imported_size = 0;
+        if (BCryptDeriveKey(imported_secret, BCRYPT_KDF_RAW_SECRET, nullptr,
+                            imported_shared.data(), static_cast<ULONG>(imported_shared.size()), &imported_size, 0) < 0 ||
+            imported_size != imported_shared.size() || imported_shared != left)
+            throw std::runtime_error("CNG Curve25519 imported-key secret mismatch");
+        BCryptDestroySecret(imported_secret);
+        BCryptDestroyKey(imported);
+        SecureZeroMemory(private_blob.data(), private_blob.size());
         const std::string salt_text = "rapid-pairing-salt-v1|0123456789abcdef0123456789abcdef|00112233445566778899aabbccddeeff";
         const std::string info_text = "rapid-pairing-envelope-v1";
         const std::string aad_text = "rapid-pairing-envelope-v1|device|transaction|nonce|companion|ephemeral";
