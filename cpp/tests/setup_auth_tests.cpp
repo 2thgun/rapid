@@ -343,6 +343,15 @@ int main() {
                              Json::parse(requested.body)["nonce"], companion_private, envelope) ==
                 hex_text(pairing_store.peer_keys().at(0)),
             "HTTPS pairing envelope decrypts to the private stored telemetry key");
+    bool transaction_tamper_rejected = false;
+    try {
+      auto altered_transaction = transaction;
+      altered_transaction[0] = altered_transaction[0] == '0' ? '1' : '0';
+      (void)open_pairing_key(std::string(32, '1'), altered_transaction,
+                             Json::parse(requested.body)["nonce"], companion_private, envelope);
+    } catch (const std::exception&) { transaction_tamper_rejected = true; }
+    require(transaction_tamper_rejected,
+            "HTTPS pairing envelope binds its transaction identifier");
     require(pairing_auth.handle(result_request).status == 202,
             "pairing envelope cannot be replayed");
     auto malformed_result = secure("/api/v1/pairing/result?transaction_id=bad&extra=1");
