@@ -2280,6 +2280,29 @@ void pairing_crypto_self_test() {
         if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
     };
     try {
+        const auto hex = [](std::string_view text) {
+            if (text.size() % 2 || text.find_first_not_of("0123456789abcdef") != std::string_view::npos)
+                throw std::runtime_error("invalid self-test hexadecimal vector");
+            std::vector<std::uint8_t> value(text.size() / 2);
+            for (std::size_t i = 0; i < value.size(); ++i)
+                value[i] = static_cast<std::uint8_t>(std::stoi(std::string(text.substr(i * 2, 2)), nullptr, 16));
+            return value;
+        };
+        const auto hkdf_vector = cng_hkdf_sha256(
+            hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"),
+            hex("000102030405060708090a0b0c"), hex("f0f1f2f3f4f5f6f7f8f9"));
+        if (hkdf_vector != hex("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf"))
+            throw std::runtime_error("CNG HKDF-SHA256 known-answer vector mismatch");
+        const auto nist_key = hex("0000000000000000000000000000000000000000000000000000000000000000");
+        const auto nist_nonce = hex("000000000000000000000000");
+        const auto nist_plain = hex("00000000000000000000000000000000");
+        std::array<std::uint8_t, 16> nist_tag{};
+        const std::vector<std::uint8_t> no_aad;
+        const auto nist_cipher = cng_aes256_gcm(true, nist_key, nist_nonce, no_aad, nist_plain, &nist_tag);
+        const auto expected_nist_tag = hex("d0d1c8a799996bf0265b98b5d48ab919");
+        if (nist_cipher != hex("cea7403d4d606b6e074ec5d3baf39d18") ||
+            !std::equal(nist_tag.begin(), nist_tag.end(), expected_nist_tag.begin()))
+            throw std::runtime_error("CNG AES-GCM known-answer vector mismatch");
         if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0)
             throw std::runtime_error("BCrypt ECDH provider unavailable");
         const wchar_t curve[] = L"Curve25519";
