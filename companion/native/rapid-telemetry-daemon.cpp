@@ -289,7 +289,7 @@ int verify_setup_certificate(const std::wstring& url, const std::string& expecte
     parts.lpszUrlPath = path; parts.dwUrlPathLength = static_cast<DWORD>(std::size(path));
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
         throw std::runtime_error("setup verification requires an https URL");
-    HINTERNET session = WinHttpOpen(L"raPId pairing", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    HINTERNET session = WinHttpOpen(L"raPId pairing", WINHTTP_ACCESS_TYPE_NO_PROXY,
                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) throw std::runtime_error("cannot open Windows HTTPS session");
     HINTERNET connection = WinHttpConnect(session, host, parts.nPort, 0);
@@ -552,7 +552,8 @@ Options parse_options(int argc, wchar_t** argv) {
     if (options.pi_host.empty()) throw std::runtime_error("Pi host cannot be empty");
     if (!options.verify_setup_url.empty() && options.pinned_certificate_fingerprint.empty())
         throw std::runtime_error("--verify-setup-url requires --certificate-fingerprint");
-    if (options.protocol == Protocol::v4 && !options.no_forward && options.auth_key.empty() && !options.self_test) {
+    if (options.protocol == Protocol::v4 && !options.no_forward && options.auth_key.empty() &&
+        !options.self_test && options.verify_setup_url.empty()) {
         throw std::runtime_error(
             "Protocol v4 requires a 256-bit HMAC key. Set --auth-key, --auth-key-file, "
             "RAPID_TELEMETRY_KEY, or auth_key in the daemon config.");
