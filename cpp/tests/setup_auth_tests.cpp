@@ -306,6 +306,16 @@ int main() {
                 pairing_store.peers().size() == 1, "HTTPS pairing returns one-use envelope");
     require(pairing_auth.handle(result_request).status == 202,
             "pairing envelope cannot be replayed");
+    auto cancel = secure("/api/v1/pairing/window", "POST", {{"open", false}});
+    cancel.headers["cookie"] = pairing_cookie;
+    cancel.headers["x-csrf-token"] = pairing_csrf;
+    require(pairing_auth.handle(cancel).status == 200,
+            "owner can close pairing window after handoff");
+    state_request = secure("/api/v1/pairing/state");
+    state_request.headers["cookie"] = pairing_cookie;
+    const auto closed_state = Json::parse(pairing_auth.handle(state_request).body);
+    require(closed_state["active"] == false && closed_state["pending"] == false,
+            "closing pairing window clears its pending state");
     std::cout << "setup migration, owner authentication, session and CSRF tests passed\n";
     return 0;
   } catch (const std::exception &error) {
