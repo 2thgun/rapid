@@ -562,10 +562,13 @@ int verify_setup_certificate(const std::wstring& url, const std::string& expecte
 
 std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std::string_view tx, std::string_view nonce,
                                                     std::string_view companion, std::string_view ephemeral,
-                                                    std::string_view ciphertext64, std::string_view tag64,
+                                                    std::string_view envelope_nonce64, std::string_view ciphertext64,
+                                                    std::string_view tag64,
                                                     std::span<const std::uint8_t> private_blob) {
     auto peer = hex_bytes(ephemeral, 32); auto cipher = base64_decode(ciphertext64); auto tagv = base64_decode(tag64);
-    auto nonce_bytes = hex_bytes(nonce, 16); if (cipher.size() != 32 || tagv.size() != 16) throw std::runtime_error("invalid pairing envelope sizes");
+    auto envelope_nonce = base64_decode(envelope_nonce64);
+    if (envelope_nonce.size() != 12 || cipher.size() != 32 || tagv.size() != 16)
+        throw std::runtime_error("invalid pairing envelope sizes");
     BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_KEY_HANDLE local = nullptr, peer_key = nullptr; BCRYPT_SECRET_HANDLE secret = nullptr;
     try {
         if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0) throw std::runtime_error("CNG ECDH unavailable");
@@ -578,7 +581,7 @@ std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std:
         const std::string salt = "rapid-pairing-salt-v1|" + std::string(tx) + "|" + std::string(nonce); const std::string info = "rapid-pairing-envelope-v1";
         const std::string aad = "rapid-pairing-envelope-v1|" + std::string(device) + "|" + std::string(tx) + "|" + std::string(nonce) + "|" + std::string(companion) + "|" + std::string(ephemeral);
         auto key = cng_hkdf_sha256(shared, std::span<const std::uint8_t>((const std::uint8_t*)salt.data(), salt.size()), std::span<const std::uint8_t>((const std::uint8_t*)info.data(), info.size()));
-        std::array<std::uint8_t, 16> tag{}; std::copy(tagv.begin(), tagv.end(), tag.begin()); auto plain = cng_aes256_gcm(false, key, nonce_bytes, std::span<const std::uint8_t>((const std::uint8_t*)aad.data(), aad.size()), cipher, &tag);
+        std::array<std::uint8_t, 16> tag{}; std::copy(tagv.begin(), tagv.end(), tag.begin()); auto plain = cng_aes256_gcm(false, key, envelope_nonce, std::span<const std::uint8_t>((const std::uint8_t*)aad.data(), aad.size()), cipher, &tag);
         BCryptDestroySecret(secret); BCryptDestroyKey(peer_key); BCryptDestroyKey(local); BCryptCloseAlgorithmProvider(alg, 0); SecureZeroMemory(shared.data(), shared.size()); SecureZeroMemory(key.data(), key.size()); return plain;
     } catch (...) { if (secret) BCryptDestroySecret(secret); if (peer_key) BCryptDestroyKey(peer_key); if (local) BCryptDestroyKey(local); if (alg) BCryptCloseAlgorithmProvider(alg, 0); throw; }
 }
@@ -594,7 +597,7 @@ int run_pairing(const Options& options) {
     const std::string request_body = "{\"label\":\"" + json_escape(options.pairing_label) + "\",\"companion_public_key\":\"" + pubhex + "\"}";
     const auto requested = pairing_http(base + L"/api/v1/pairing/request", L"POST", request_body, options.pinned_certificate_fingerprint); if (requested.status != 200 && requested.status != 201) throw std::runtime_error("pairing request rejected");
     const auto tx = json_field(requested.body, "transaction_id"); const auto nonce = json_field(requested.body, "nonce"); std::cout << "Pairing verification code: " << cng_pairing_verification_code(device, fp, tx, nonce, pubhex) << '\n';
-    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); if (json_field(result.body, "nonce") != nonce) throw std::runtime_error("pairing result nonce mismatch"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
+    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "nonce"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
     throw std::runtime_error("pairing approval timed out");
 }
 

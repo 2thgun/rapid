@@ -44,6 +44,7 @@ int main(int argc, char **argv) {
     std::unique_ptr<SetupStore> setup;
     std::unique_ptr<PairingCoordinator> pairing;
     std::unique_ptr<PairingTransport> pairing_transport;
+    std::string pairing_certificate_fingerprint;
     if (!settings.setup_directory.empty()) {
       setup = std::make_unique<SetupStore>(settings.setup_directory);
       const auto paired_keys = setup->peer_keys();
@@ -55,8 +56,9 @@ int main(int argc, char **argv) {
       const auto private_key = settings.setup_directory / "device.key";
       if (settings.pairing_enabled && fs::is_regular_file(certificate) && fs::is_regular_file(private_key)) {
         const auto device_id = setup->snapshot().at("device_id").get<std::string>();
+        pairing_certificate_fingerprint = certificate_fingerprint(certificate);
         pairing = std::make_unique<PairingCoordinator>(
-            *setup, device_id, certificate_fingerprint(certificate),
+            *setup, device_id, pairing_certificate_fingerprint,
             "/run/rapid/pairing.json", "/run/rapid/pairing-approval.json",
             "/run/rapid/pairing-state.json", "/run/rapid/pairing-control.json");
         pairing_transport = std::make_unique<PairingTransport>(*pairing);
@@ -86,6 +88,13 @@ int main(int argc, char **argv) {
       start([&] {
         serve_tls(settings.host, settings.pairing_port,
                   [&](const Request &request) -> Response {
+                    const auto path = request.target.substr(0, request.target.find('?'));
+                    if (request.method == "GET" && path == "/api/v1/setup") {
+                      auto status = setup_status(setup->snapshot());
+                      status["certificate_fingerprint"] = pairing_certificate_fingerprint;
+                      return {200, status.dump(), "application/json",
+                              {{"Cache-Control", "no-store"}}};
+                    }
                     return pairing_transport->handle(request);
                   }, settings.setup_directory / "device.crt",
                   settings.setup_directory / "device.key");
