@@ -55,6 +55,7 @@ int main(int argc, char **argv) {
                 (fs::status(private_key_file).permissions() & fs::perms::others_all) == fs::perms::none,
             "first boot creates a persistent private TLS identity");
     const auto activation = bootstrap["bootstrap"]["activation_token"].get<std::string>();
+    const auto certificate_bytes = read_file(certificate_file);
     require(activation.size() == 64 &&
                 activation.find_first_not_of("0123456789abcdef") == std::string::npos,
             "first boot creates a 256-bit activation token");
@@ -72,8 +73,10 @@ int main(int argc, char **argv) {
     run_firstboot();
     const auto resumed = Json::parse(read_file(firstboot_status))["bootstrap"];
     require(resumed["activation_token"] == activation &&
-                resumed["access_point_password"] == ap_password,
-            "interrupted onboarding preserves AP credentials and activation token");
+                resumed["access_point_password"] == ap_password &&
+                read_file(certificate_file) == certificate_bytes &&
+                resumed["certificate_fingerprint"] == bootstrap["bootstrap"]["certificate_fingerprint"],
+            "interrupted onboarding preserves AP credentials, activation token and device identity");
     const auto fake_nmcli = root.path / "nmcli";
     const auto nmcli_log = root.path / "nmcli.log";
     {
