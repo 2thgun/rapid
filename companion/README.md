@@ -53,3 +53,8 @@ The planned replacement for private pre-paired bundles is specified in
 [the companion pairing contract](PAIRING-CONTRACT.md). The Pi transport and
 physical panel approval are implemented; the Windows request, envelope and
 reconnect client remain the unimplemented customer flow.
+
+The shipped `START-RAPID.cmd` and `start-rapid-daemon.vbs` launchers prefer
+`%LOCALAPPDATA%\raPId\pairing.key.dpapi` when it exists. This lets a recovered
+per-user pairing start without copying or exposing `telemetry.key`; the legacy
+bundle key remains a compatibility fallback for existing demo kits.

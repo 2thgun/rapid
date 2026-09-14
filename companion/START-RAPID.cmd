@@ -3,10 +3,14 @@ setlocal DisableDelayedExpansion
 cd /d "%~dp0"
 if not exist "%~dp0rapid-telemetry-daemon.exe" goto missing_exe
 if not exist "%~dp0daemon.conf" goto missing_config
-if not exist "%~dp0telemetry.key" goto missing_key
 if not exist "%~dp0recordings\" mkdir "%~dp0recordings" 2>nul
 if not exist "%~dp0recordings\" goto not_writable
 set "RAPID_TELEMETRY_KEY="
+if exist "%LOCALAPPDATA%\raPId\pairing.key.dpapi" (
+    start "" "%~dp0rapid-telemetry-daemon.exe" --config "%~dp0daemon.conf" --auth-key-dpapi-file "%LOCALAPPDATA%\raPId\pairing.key.dpapi"
+    exit /b 0
+)
+if not exist "%~dp0telemetry.key" goto missing_key
 start "" "%~dp0rapid-telemetry-daemon.exe" --config "%~dp0daemon.conf" --auth-key-file "%~dp0telemetry.key"
 exit /b 0
 
