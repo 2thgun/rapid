@@ -98,8 +98,9 @@ ARM64 gate. See wiki evidence `dc2524e`.
 
 The Windows daemon now has a per-user DPAPI credential container and explicit
 load/store options; it also has a WinHTTP HTTPS setup probe that verifies an
-explicit SHA-256 certificate pin and fails closed on mismatch. This is not yet
-the graphical pairing handshake. The Pi package now includes
+explicit SHA-256 certificate pin and fails closed on mismatch. The Pi panel
+now renders and approves the pairing handoff; the Windows request, envelope
+decryption and reconnect client remain pending. The Pi package now includes
 `rapid-display-recovery` with preview/confirm/rollback, boot recovery and stale
 calibration reset; its output and evdev paths still need hardware confirmation.
 

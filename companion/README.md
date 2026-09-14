@@ -35,5 +35,6 @@ write credentials. The full request, code comparison, envelope decryption and
 DPAPI handoff are still pending.
 
 The planned replacement for private pre-paired bundles is specified in
-[the companion pairing contract](PAIRING-CONTRACT.md). It is a development
-contract; transport and approval remain an unimplemented customer flow.
+[the companion pairing contract](PAIRING-CONTRACT.md). The Pi transport and
+physical panel approval are implemented; the Windows request, envelope and
+reconnect client remain the unimplemented customer flow.
