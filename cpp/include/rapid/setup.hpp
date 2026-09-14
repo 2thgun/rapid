@@ -15,6 +15,9 @@ public:
   // Compare-and-swap prevents a delayed browser/service request from replacing
   // newer configuration. No unauthenticated HTTP write route exposes this.
   bool update(std::int64_t expected_revision, const Json &settings);
+  // Successful application is recorded separately from desired settings. It
+  // preserves the revision because this is an acknowledgement, not a new edit.
+  bool mark_setup_complete(std::int64_t expected_revision);
   std::string owner_hash();
   bool claim_owner(const std::string &password_hash);
   // Private pairing records are never returned by setup_status(). The caller

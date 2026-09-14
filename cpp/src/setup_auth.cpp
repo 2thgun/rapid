@@ -240,24 +240,36 @@ Response SetupAuth::handle(const Request &request) {
     return reply(200, {{"reset", true}});
   }
   if (path == "/api/v1/settings" && request.method == "GET") {
-    const auto state = store_.snapshot();
-    Json response{{"revision", state.at("revision")}, {"settings", state.at("settings")},
-                  {"applied", false},
-                  {"apply_queued", queued(apply_request_file_)}};
+    auto state = store_.snapshot();
+    std::optional<Json> application, wifi;
+    bool settings_applied = false, wifi_connected = false;
     try {
       if (!apply_result_file_.empty()) {
         const auto result = Json::parse(read_file(apply_result_file_));
-        if (result.is_object() && result.value("revision", -1) == state.at("revision"))
-          response["application"] = result;
+        if (result.is_object() && result.value("revision", -1) == state.at("revision")) {
+          settings_applied = result.value("hostname_applied", false);
+          application = result;
+        }
       }
     } catch (const std::exception &) {}
     try {
       if (!wifi_result_file_.empty()) {
         const auto result = Json::parse(read_file(wifi_result_file_));
-        if (result.is_object() && result.value("revision", -1) == state.at("revision"))
-          response["wifi"] = result;
+        if (result.is_object() && result.value("revision", -1) == state.at("revision")) {
+          wifi_connected = result.value("connected", false);
+          wifi = result;
+        }
       }
     } catch (const std::exception &) {}
+    if (!state.at("setup_complete") && settings_applied && wifi_connected &&
+        store_.mark_setup_complete(state.at("revision")))
+      state = store_.snapshot();
+    Json response{{"revision", state.at("revision")}, {"settings", state.at("settings")},
+                  {"applied", false},
+                  {"apply_queued", queued(apply_request_file_)}};
+    response["setup_complete"] = state.at("setup_complete");
+    if (application) response["application"] = *application;
+    if (wifi) response["wifi"] = *wifi;
     return reply(200, response);
   }
   if (path == "/api/v1/settings/retry" && request.method == "POST") {

@@ -133,10 +133,12 @@ int main() {
     const auto apply_directory = root.path / "apply";
     fs::create_directory(apply_directory);
     const auto apply_result = apply_directory / "result.json";
+    const auto wifi_result = apply_directory / "wifi-result.json";
     const auto calibration = apply_directory / "touch-calibration.conf";
     atomic_file(calibration, "stale calibration\n");
     SetupAuth auth(store, 8002, [&] { return time; }, {}, "127.0.0.1",
-                   apply_directory / "request.json", apply_result, {}, {}, {}, nullptr,
+                   apply_directory / "request.json", apply_result, {},
+                   apply_directory / "wifi-request.json", wifi_result, nullptr,
                    false, {}, true, calibration);
     const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
     require(public_setup["owner_configured"] == false &&
@@ -207,6 +209,10 @@ int main() {
     response = Json::parse(auth.handle(settings).body);
     require(response["application"]["hostname_applied"] == true,
             "matching root application result is available to the authenticated owner");
+    atomic_file(wifi_result, Json{{"revision", 8}, {"connected", true}}.dump());
+    response = Json::parse(auth.handle(settings).body);
+    require(response["setup_complete"] == true && store.snapshot()["setup_complete"] == true,
+            "matching settings and Home Wi-Fi completion finish onboarding persistently");
     auto retry = request("/api/v1/settings/retry", "POST", {{"revision", 8}});
     retry.headers["cookie"] = session_cookie;
     require(auth.handle(retry).status == 403, "settings retry requires CSRF token");
@@ -270,7 +276,8 @@ int main() {
     auto oversized = login_request;
     oversized.body = std::string(1025, 'x');
     require(auth.handle(oversized).status == 413, "oversized auth request rejected");
-    require(store.snapshot()["setup_complete"] == false, "owner enrollment does not pretend setup is complete");
+    require(store.snapshot()["setup_complete"] == true,
+            "successful settings and Wi-Fi application remains complete across later auth activity");
     SetupStore pairing_store(root.path / "pairing");
     const auto pairing_panel = root.path / "pairing-panel.json";
     const auto pairing_approval = root.path / "pairing-approval.json";

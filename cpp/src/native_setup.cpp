@@ -189,6 +189,27 @@ bool SetupStore::update(std::int64_t expected_revision, const Json &settings) {
   }
 }
 
+bool SetupStore::mark_setup_complete(std::int64_t expected_revision) {
+  std::lock_guard lock(mutex_);
+  store_.exec("BEGIN IMMEDIATE");
+  try {
+    auto document = snapshot_unlocked();
+    if (document["revision"] != expected_revision) {
+      store_.exec("ROLLBACK");
+      return false;
+    }
+    document.erase("revision");
+    document.erase("schema_version");
+    document["setup_complete"] = true;
+    store_.exec("UPDATE setup_state SET document=? WHERE id=1", {document.dump()});
+    store_.exec("COMMIT");
+    return true;
+  } catch (...) {
+    store_.exec("ROLLBACK");
+    throw;
+  }
+}
+
 Json setup_status(const Json &snapshot) {
   return {{"available", true}, {"schema_version", snapshot.at("schema_version")},
           {"revision", snapshot.at("revision")}, {"device_id", snapshot.at("device_id")},
