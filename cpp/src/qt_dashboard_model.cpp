@@ -1,5 +1,6 @@
 #include "qt_dashboard_model.hpp"
 
+#include <algorithm>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
@@ -106,8 +107,9 @@ void DashboardModel::pollPairingPanel() {
       label = object.value("label").toString();
       code = object.value("code").toString();
       transaction = object.value("transaction_id").toString();
-      bool numeric = false;
-      code.toLongLong(&numeric);
+      const bool numeric = code.size() == 8 && std::all_of(code.cbegin(), code.cend(),
+          [](const QChar character) { return character >= QLatin1Char('0') &&
+              character <= QLatin1Char('9'); });
       pending = !label.isEmpty() && transaction.size() == 32 &&
           code.size() == 8 && numeric;
     }
