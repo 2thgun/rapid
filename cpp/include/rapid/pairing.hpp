@@ -71,12 +71,15 @@ struct CompletedPairing {
 // layers should call consume() only after local approval has succeeded.
 class PairingCoordinator {
   SetupStore &store_;
+  mutable std::mutex mutex_;
   std::string device_id_;
   PairingWindow window_;
   fs::path panel_file_;
   fs::path panel_approval_file_;
   void publish_panel(double now);
   void apply_panel_approval(double now);
+  std::optional<CompletedPairing> consume_impl(
+      double now, const std::string &expected_transaction);
 
 public:
   PairingCoordinator(SetupStore &store, std::string device_id,

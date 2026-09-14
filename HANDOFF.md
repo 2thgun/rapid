@@ -113,6 +113,8 @@ setup page can open/cancel the window and approve the displayed code. Plain HTTP
 does not expose those pairing routes. The coordinator now publishes only
 transaction, label, code and expiry metadata to `/run/rapid/pairing.json` with
 private permissions, clearing it on expiry, cancellation or consumption.
+Its state transitions are serialized across panel, browser and companion
+polling.
 Physical panel rendering and touch approval, the Windows pairing
 request/envelope/DPAPI client flow and pinned reconnect remain pending;
 the Pi ARM64 rebuild and hardware flow are still required.

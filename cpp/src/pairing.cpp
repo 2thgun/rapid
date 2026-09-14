@@ -348,27 +348,42 @@ void PairingCoordinator::apply_panel_approval(double now) {
   publish_panel(now);
 }
 
-void PairingCoordinator::open(double now) { window_.open(now); publish_panel(now); }
-void PairingCoordinator::cancel() { window_.cancel(); publish_panel(monotonic()); }
+void PairingCoordinator::open(double now) {
+  std::lock_guard lock(mutex_);
+  window_.open(now); publish_panel(now);
+}
+void PairingCoordinator::cancel() {
+  std::lock_guard lock(mutex_);
+  window_.cancel(); publish_panel(monotonic());
+}
 
 PendingPairing PairingCoordinator::request(const std::string &label,
                                            const std::string &companion_public_key,
                                            double now) {
+  std::lock_guard lock(mutex_);
   const auto result = window_.request(label, companion_public_key, now);
   publish_panel(now); return result;
 }
 
 bool PairingCoordinator::approve(const std::string &transaction_id,
                                  const std::string &code, double now) {
+  std::lock_guard lock(mutex_);
   const auto result = window_.approve(transaction_id, code, now);
   publish_panel(now); return result;
 }
 
 std::optional<CompletedPairing> PairingCoordinator::consume(double now) {
-  return consume(now, {});
+  std::lock_guard lock(mutex_);
+  return consume_impl(now, {});
 }
 
 std::optional<CompletedPairing> PairingCoordinator::consume(
+    double now, const std::string &expected_transaction) {
+  std::lock_guard lock(mutex_);
+  return consume_impl(now, expected_transaction);
+}
+
+std::optional<CompletedPairing> PairingCoordinator::consume_impl(
     double now, const std::string &expected_transaction) {
   apply_panel_approval(now);
   const auto waiting = window_.pending(now);
@@ -388,11 +403,15 @@ std::optional<CompletedPairing> PairingCoordinator::consume(
 }
 
 std::optional<PendingPairing> PairingCoordinator::pending(double now) {
+  std::lock_guard lock(mutex_);
   apply_panel_approval(now);
   const auto result = window_.pending(now);
   publish_panel(now);
   return result;
 }
 
-bool PairingCoordinator::active(double now) const { return window_.active(now); }
+bool PairingCoordinator::active(double now) const {
+  std::lock_guard lock(mutex_);
+  return window_.active(now);
+}
 } // namespace rapid::native
