@@ -49,6 +49,15 @@ int main(int argc, char **argv) {
     require(rolled_back["pending"] == false && rolled_back["rotation"] == 0 &&
                 read_file(log).find("--rotate normal") != std::string::npos,
             "rollback restores the previous orientation");
+    require(run(argv[1], {"--state-file", state.string(), "--xrandr", fake.string(),
+                          "--output", "default", "--rotation", "180", "--preview"}) == 0,
+            "second preview succeeds");
+    require(run(argv[1], {"--state-file", state.string(), "--xrandr", fake.string(),
+                          "--output", "default", "--recover"}) == 0,
+            "boot recovery succeeds");
+    require(Json::parse(read_file(state))["pending"] == false &&
+                Json::parse(read_file(state))["rotation"] == 0,
+            "boot recovery clears an interrupted preview");
     const auto calibration = root / "calibration";
     atomic_file(calibration, "stale");
     require(run(argv[1], {"--state-file", state.string(), "--reset-calibration",

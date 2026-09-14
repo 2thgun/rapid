@@ -49,12 +49,12 @@ int main(int argc, char **argv) {
       else if (option == "--rotation" && i + 1 < argc) rotation = std::stoi(argv[++i]);
       else if (option == "--preview") action = "preview";
       else if (option == "--confirm") action = "confirm";
-      else if (option == "--rollback") action = "rollback";
+      else if (option == "--rollback" || option == "--recover") action = "rollback";
       else if (option == "--reset-calibration") action = "reset-calibration";
       else if (option == "--calibration-file" && i + 1 < argc) calibration_file = argv[++i];
       else if (option == "--help") {
         std::cout << "rapid-display-recovery --state-file PATH [--preview --rotation 0|180 | "
-                     "--confirm | --rollback | --reset-calibration --calibration-file PATH]\n";
+                     "--confirm | --rollback | --recover | --reset-calibration --calibration-file PATH]\n";
         return 0;
       } else throw std::invalid_argument("unknown or incomplete option");
     }
