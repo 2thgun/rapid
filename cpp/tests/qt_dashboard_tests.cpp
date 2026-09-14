@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryFile>
@@ -21,6 +22,14 @@ int main(int argc, char **argv) {
   setup_status.write("{\"bootstrap\":{\"setup_address\":\"192.168.1.64\",\"setup_port\":8002,\"setup_url\":\"http://192.168.1.64:8002/setup\",\"ssid\":\"rapid-123abc\",\"access_point_password\":\"1234567890abcdef\",\"activation_token\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}");
   setup_status.flush();
   qputenv("RAPID_FIRSTBOOT_STATUS", setup_status.fileName().toUtf8());
+  QTemporaryFile pairing_panel;
+  if (!pairing_panel.open()) return 2;
+  const auto pairing_approval = pairing_panel.fileName() + ".approval";
+  pairing_panel.resize(0);
+  pairing_panel.write("{\"transaction_id\":\"0123456789abcdef0123456789abcdef\",\"label\":\"Test PC\",\"code\":\"12345678\",\"expires_at\":120}\n");
+  pairing_panel.flush();
+  qputenv("RAPID_PAIRING_PANEL", pairing_panel.fileName().toUtf8());
+  qputenv("RAPID_PAIRING_APPROVAL", pairing_approval.toUtf8());
   QJsonObject state{{"companion_connected", true}, {"companion_daemon_state", "driving"},
                     {"telemetry_fresh", true}, {"session_id", "qt-test"},
                     {"samples_received", 1}, {"throttle", 0.75}, {"brake", 0.25},
@@ -74,6 +83,10 @@ int main(int argc, char **argv) {
   require(model.setupNotice().contains("rapid-123abc") &&
               model.setupNotice().contains("0123456789abcdef 0123456789abcdef"),
           "First-boot credentials are rendered from the local status file");
+  require(model.pairingPending() && model.pairingLabel() == "Test PC" &&
+              model.pairingCode() == "12345678" && model.approvePairing(),
+          "Pairing panel metadata and approval action are exposed");
+  require(QFile::exists(pairing_approval), "Pairing panel approval handoff is written");
   require(model.graphSamples().size() == 1, "Repeated polling duplicated a source sample");
   require(model.graphSamples().first().toMap()["throttle"].toDouble() == 75, "Pedal scale");
   state["samples_received"] = 2;
