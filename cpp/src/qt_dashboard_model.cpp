@@ -110,7 +110,12 @@ void DashboardModel::pollPairingPanel() {
       const bool numeric = code.size() == 8 && std::all_of(code.cbegin(), code.cend(),
           [](const QChar character) { return character >= QLatin1Char('0') &&
               character <= QLatin1Char('9'); });
-      pending = !label.isEmpty() && transaction.size() == 32 &&
+      const bool transaction_hex = transaction.size() == 32 &&
+          std::all_of(transaction.cbegin(), transaction.cend(), [](const QChar character) {
+            return (character >= QLatin1Char('0') && character <= QLatin1Char('9')) ||
+                (character >= QLatin1Char('a') && character <= QLatin1Char('f'));
+          });
+      pending = !label.isEmpty() && transaction_hex &&
           code.size() == 8 && numeric;
     }
   }

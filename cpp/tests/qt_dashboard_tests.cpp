@@ -93,6 +93,11 @@ int main(int argc, char **argv) {
   require(!(approval_permissions & QFileDevice::ReadOther) &&
               !(approval_permissions & QFileDevice::WriteOther),
           "Pairing panel approval handoff is not world-readable");
+  pairing_panel.resize(0);
+  pairing_panel.write("{\"transaction_id\":\"0123456789abcdef0123456789abcdeg\",\"label\":\"Bad PC\",\"code\":\"12345678\"}");
+  pairing_panel.flush();
+  spin(600);
+  require(!model.pairingPending(), "Malformed pairing transaction is ignored");
   require(model.graphSamples().size() == 1, "Repeated polling duplicated a source sample");
   require(model.graphSamples().first().toMap()["throttle"].toDouble() == 75, "Pedal scale");
   state["samples_received"] = 2;
