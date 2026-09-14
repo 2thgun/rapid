@@ -20,6 +20,11 @@ pairing envelope. On the pinned toolchain the exported public blob is validated
 as the expected 72-byte CNG representation and its 32-byte wire segment is
 checked before future HTTPS transport.
 
+The same self-test now exercises the Windows CNG HKDF-SHA-256 and AES-256-GCM
+operations used by the envelope contract, including authenticated-data
+verification and a decrypt round trip. This validates the platform crypto
+layer before the HTTPS request client is connected.
+
 The pairing credential storage primitive is available in the native daemon. A
 paired 256-bit key can be imported into the current user's DPAPI scope with
 `--store-auth-key-dpapi PATH` and loaded with `--auth-key-dpapi-file PATH`;

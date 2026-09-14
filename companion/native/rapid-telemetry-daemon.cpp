@@ -119,6 +119,89 @@ std::vector<std::uint8_t> read_dpapi_credential(const fs::path& path) {
     return dpapi_unprotect(blob);
 }
 
+std::vector<std::uint8_t> cng_hmac_sha256(std::span<const std::uint8_t> key,
+                                          std::span<const std::uint8_t> data) {
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr,
+                                    BCRYPT_ALG_HANDLE_HMAC_FLAG) < 0)
+        throw std::runtime_error("CNG SHA-256 provider unavailable");
+    DWORD object_size = 0, result_size = 0;
+    bool ok = BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+                                reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size),
+                                &result_size, 0) >= 0 && object_size > 0;
+    std::vector<std::uint8_t> object(object_size), digest(32);
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (ok) ok = BCryptCreateHash(algorithm, &hash, object.data(), object_size,
+                                  const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0) >= 0;
+    if (ok) ok = BCryptHashData(hash, const_cast<PUCHAR>(data.data()),
+                                static_cast<ULONG>(data.size()), 0) >= 0;
+    if (ok) ok = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0;
+    if (hash) BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (!ok) throw std::runtime_error("CNG HMAC-SHA256 failed");
+    return digest;
+}
+
+std::vector<std::uint8_t> cng_hkdf_sha256(std::span<const std::uint8_t> secret,
+                                          std::span<const std::uint8_t> salt,
+                                          std::span<const std::uint8_t> info) {
+    const std::array<std::uint8_t, 32> zero_salt{};
+    const auto prk = cng_hmac_sha256(salt.empty() ? std::span<const std::uint8_t>(zero_salt) : salt, secret);
+    std::vector<std::uint8_t> message;
+    message.reserve(info.size() + 1);
+    message.insert(message.end(), info.begin(), info.end());
+    message.push_back(1);
+    return cng_hmac_sha256(prk, message);
+}
+
+std::vector<std::uint8_t> cng_aes256_gcm(bool encrypt, std::span<const std::uint8_t> key,
+                                         std::span<const std::uint8_t> nonce,
+                                         std::span<const std::uint8_t> aad,
+                                         std::span<const std::uint8_t> input,
+                                         std::array<std::uint8_t, 16>* tag) {
+    if (key.size() != 32 || nonce.empty() || (!encrypt && (!tag || tag->size() != 16)))
+        throw std::invalid_argument("invalid CNG AES-GCM input");
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_AES_ALGORITHM, nullptr, 0) < 0)
+        throw std::runtime_error("CNG AES provider unavailable");
+    const wchar_t mode[] = BCRYPT_CHAIN_MODE_GCM;
+    bool ok = BCryptSetProperty(algorithm, BCRYPT_CHAINING_MODE,
+                                reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(mode)),
+                                sizeof(mode), 0) >= 0;
+    DWORD object_size = 0, result_size = 0;
+    ok = ok && BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+                                 reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size),
+                                 &result_size, 0) >= 0;
+    std::vector<std::uint8_t> object(object_size), output(input.size() + (encrypt ? 16 : 0));
+    BCRYPT_KEY_HANDLE key_handle = nullptr;
+    ok = ok && BCryptGenerateSymmetricKey(algorithm, &key_handle, object.data(), object_size,
+                                          const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0) >= 0;
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO auth{};
+    BCRYPT_INIT_AUTH_MODE_INFO(auth);
+    auth.pbNonce = const_cast<PUCHAR>(nonce.data());
+    auth.cbNonce = static_cast<ULONG>(nonce.size());
+    auth.pbAuthData = const_cast<PUCHAR>(aad.data());
+    auth.cbAuthData = static_cast<ULONG>(aad.size());
+    std::array<std::uint8_t, 16> local_tag{};
+    auth.pbTag = encrypt ? local_tag.data() : const_cast<PUCHAR>(tag->data());
+    auth.cbTag = static_cast<ULONG>(local_tag.size());
+    ULONG written = 0;
+    if (ok) {
+        const auto status = encrypt
+            ? BCryptEncrypt(key_handle, const_cast<PUCHAR>(input.data()), static_cast<ULONG>(input.size()),
+                            &auth, nullptr, 0, output.data(), static_cast<ULONG>(output.size()), &written, 0)
+            : BCryptDecrypt(key_handle, const_cast<PUCHAR>(input.data()), static_cast<ULONG>(input.size()),
+                            &auth, nullptr, 0, output.data(), static_cast<ULONG>(output.size()), &written, 0);
+        ok = status >= 0;
+    }
+    if (key_handle) BCryptDestroyKey(key_handle);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (!ok) throw std::runtime_error("CNG AES-GCM authentication failed");
+    output.resize(written);
+    if (encrypt && tag) *tag = local_tag;
+    return output;
+}
+
 constexpr wchar_t kMutexName[] = L"Local\\raPIdTelemetryDaemon";
 constexpr wchar_t kWindowClass[] = L"raPIdTelemetryDaemonWindow";
 constexpr UINT kTrayMessage = WM_APP + 1;
@@ -2221,6 +2304,28 @@ void pairing_crypto_self_test() {
                             right.data(), static_cast<ULONG>(right.size()), &right_size, 0) < 0 ||
             left_size != left.size() || right_size != right.size() || left != right)
             throw std::runtime_error("CNG Curve25519 shared-secret mismatch");
+        const std::string salt_text = "rapid-pairing-salt-v1|0123456789abcdef0123456789abcdef|00112233445566778899aabbccddeeff";
+        const std::string info_text = "rapid-pairing-envelope-v1";
+        const std::string aad_text = "rapid-pairing-envelope-v1|device|transaction|nonce|companion|ephemeral";
+        const auto derived_vector = cng_hkdf_sha256(
+            left, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(salt_text.data()), salt_text.size()),
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(info_text.data()), info_text.size()));
+        std::array<std::uint8_t, 32> envelope_key{};
+        std::copy(derived_vector.begin(), derived_vector.end(), envelope_key.begin());
+        const std::string envelope_plain = "pairing-key-test-32-byte-material!";
+        std::array<std::uint8_t, 16> envelope_tag{};
+        const std::array<std::uint8_t, 12> envelope_nonce{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+        const auto envelope_cipher = cng_aes256_gcm(
+            true, envelope_key, envelope_nonce,
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(aad_text.data()), aad_text.size()),
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(envelope_plain.data()), envelope_plain.size()),
+            &envelope_tag);
+        const auto envelope_round_trip = cng_aes256_gcm(
+            false, envelope_key, envelope_nonce,
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(aad_text.data()), aad_text.size()),
+            envelope_cipher, &envelope_tag);
+        if (std::string(reinterpret_cast<const char*>(envelope_round_trip.data()), envelope_round_trip.size()) != envelope_plain)
+            throw std::runtime_error("CNG HKDF/AES-GCM envelope round trip failed");
         SecureZeroMemory(left.data(), left.size());
         SecureZeroMemory(right.data(), right.size());
         SecureZeroMemory(first_wire.data(), first_wire.size());
