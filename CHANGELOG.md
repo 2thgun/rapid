@@ -5,9 +5,24 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Added code-confirmed PC pairing. `rapid-pi` serves an HTTPS pairing listener,
+  the owner approves the matching code on the Pi panel or setup page, and the
+  telemetry key is delivered once in an encrypted envelope. Paired PCs can be
+  revoked individually. The Windows companion's `--pairing-url` command stores
+  the key with DPAPI and checks the pinned Pi identity before reconnecting.
+  Manual `telemetry.key` setup is deprecated for new pairings.
+- Added first-boot setup: a persistent device TLS identity, a device-specific
+  setup AP and a physical setup card showing the activation details.
+- Added constrained settings application for hostname, Home Wi-Fi (with setup-AP
+  restore on failure) and display rotation (with preview, confirmation and
+  boot-time rollback), plus an authenticated touchscreen calibration reset.
+  Interactive calibration is not implemented yet.
+- Fixed brief companion packet gaps splitting one driving session into several
+  recordings; the session and spool now survive ten seconds of silence.
+- Revoking the last paired PC no longer re-enables unauthenticated v3 telemetry.
+
 - Added opt-in browser owner enrollment to the loopback setup service using a
   private activation token, bounded attempts and permanent owner-claim protection.
-  Automatic AP bootstrap and physical token display are still pending.
 
 - Fixed Wi-Fi AP/Off requests reporting success after NetworkManager errors;
   added regression checks for failure reporting and Home-to-AP recovery.
