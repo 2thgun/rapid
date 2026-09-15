@@ -5,7 +5,9 @@ Description=raPId constrained setup settings application
 Type=oneshot
 User=root
 Environment=DISPLAY=:0
-ExecStart=/usr/lib/rapid/rapid-apply --request-file /run/rapid-apply/request.json --result-file /run/rapid-apply/result.json --display-recovery /usr/lib/rapid/rapid-display-recovery --display-state-file /var/lib/rapid/display-recovery.json --display-output default --display-calibration-file /var/lib/rapid-setup/touch-calibration.conf
+ExecStart=/usr/lib/rapid/rapid-apply --request-file /run/rapid-apply/request.json --result-file /run/rapid-apply/result.json --display-recovery /usr/lib/rapid/rapid-display-recovery --display-state-file /var/lib/rapid/display-recovery.json --display-output default --display-calibration-file /var/lib/rapid-setup/touch-calibration.conf --display-confirm-file /run/rapid-apply/display-confirm.json
+# Bounded: hostname, preview, the 30-second owner confirmation and rollback.
+TimeoutStartSec=120
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

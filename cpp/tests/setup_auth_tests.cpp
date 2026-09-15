@@ -144,7 +144,8 @@ int main() {
     SetupAuth auth(store, 8002, [&] { return time; }, {}, "127.0.0.1",
                    apply_directory / "request.json", apply_result, completion_status,
                    apply_directory / "wifi-request.json", wifi_result, nullptr,
-                   false, {}, true, calibration, calibration_request);
+                   false, {}, true, calibration, calibration_request,
+                   apply_directory / "display-confirm.json");
     const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
     require(public_setup["owner_configured"] == false &&
                 public_setup["capabilities"]["settings_write"] == true,
@@ -218,11 +219,32 @@ int main() {
     require(response["apply_queued"] == false,
             "settings status clears its queued flag after the applicator consumes the request");
     atomic_file(apply_result, Json{{"revision", 8}, {"hostname_applied", true},
+                                  {"rotation", "awaiting_confirmation"},
                                   {"pending", Json::array({"rotation", "wifi"})}}.dump());
     response = Json::parse(auth.handle(settings).body);
-    require(response["application"]["hostname_applied"] == true,
+    require(response["application"]["hostname_applied"] == true &&
+                response["application"]["rotation"] == "awaiting_confirmation",
             "matching root application result is available to the authenticated owner");
+    const auto display_confirm = apply_directory / "display-confirm.json";
+    auto confirm_display = request("/api/v1/settings/confirm-display", "POST", {{"revision", 8}});
+    confirm_display.headers["cookie"] = session_cookie;
+    require(auth.handle(confirm_display).status == 403 && !fs::exists(display_confirm),
+            "orientation confirmation requires the CSRF token");
+    confirm_display.headers["x-csrf-token"] = credentials["csrf_token"].get<std::string>();
+    auto stale_confirm = confirm_display;
+    stale_confirm.body = Json{{"revision", 7}}.dump();
+    require(auth.handle(stale_confirm).status == 409 && !fs::exists(display_confirm),
+            "orientation confirmation must name the current revision");
     atomic_file(wifi_result, Json{{"revision", 8}, {"connected", true}}.dump());
+    response = Json::parse(auth.handle(settings).body);
+    require(response["setup_complete"] == false,
+            "onboarding is not complete while an orientation change awaits confirmation");
+    require(auth.handle(confirm_display).status == 202 &&
+                Json::parse(read_file(display_confirm))["revision"] == 8,
+            "owner can keep a previewed orientation from the browser");
+    atomic_file(apply_result, Json{{"revision", 8}, {"hostname_applied", true}, {"rotation", "confirmed"},
+                                  {"pending", Json::array({"wifi"})}}.dump());
+    require(auth.handle(confirm_display).status == 409, "a kept orientation cannot be confirmed again");
     response = Json::parse(auth.handle(settings).body);
     require(response["setup_complete"] == true && store.snapshot()["setup_complete"] == true,
             "matching settings and Home Wi-Fi completion finish onboarding persistently");

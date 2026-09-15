@@ -20,6 +20,10 @@ last completed checks, not a guarantee of current device state.
   targets, a verification tap and automatic rollback when unconfirmed. Rotating
   the display to 180° now also rotates touch input, and an existing X server
   touch matrix is preserved.
+- A changed display orientation now waits for the owner to keep it on the Pi
+  screen or setup page. If it isn't kept within 30 seconds, the previous
+  orientation returns. Saving without changing the orientation no longer
+  previews it.
 - Fixed brief companion packet gaps splitting one driving session into several
   recordings; the session and spool now survive ten seconds of silence.
 - Revoking the last paired PC no longer re-enables unauthenticated v3 telemetry.

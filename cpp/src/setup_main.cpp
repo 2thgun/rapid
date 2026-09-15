@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
   try {
     fs::path directory, assets = "cpp/assets", token_file, apply_request_file,
              apply_result_file, firstboot_status_file, tls_certificate,
-             tls_private_key, calibration_file, calibration_request_file;
+             tls_private_key, calibration_file, calibration_request_file, display_confirm_file;
     std::string pairing_device_id, pairing_certificate_fingerprint;
     fs::path wifi_request_file, wifi_result_file;
     int port = 8002;
@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
       const std::string option = argv[i];
       if (option == "--help") {
-        std::cout << "rapid-setup-server --state-directory PATH [--assets PATH] [--port PORT] [--set-owner] [--enrollment-token-file PATH] [--apply-request-file PATH] [--apply-result-file PATH] [--firstboot-status-file PATH] [--calibration-file PATH] [--calibration-request-file PATH] [--listen IPV4] [--tls-certificate PATH --tls-private-key PATH] [--device-id HEX32 --certificate-fingerprint HEX64]\n"
+        std::cout << "rapid-setup-server --state-directory PATH [--assets PATH] [--port PORT] [--set-owner] [--enrollment-token-file PATH] [--apply-request-file PATH] [--apply-result-file PATH] [--firstboot-status-file PATH] [--calibration-file PATH] [--calibration-request-file PATH] [--display-confirm-file PATH] [--listen IPV4] [--tls-certificate PATH --tls-private-key PATH] [--device-id HEX32 --certificate-fingerprint HEX64]\n"
                      "Defaults to loopback. A non-loopback listener requires an enrollment token. "
                      "--set-owner reads a new owner password from standard input.\n";
         return 0;
@@ -72,6 +72,7 @@ int main(int argc, char **argv) {
       else if (option == "--firstboot-status-file" && i + 1 < argc) firstboot_status_file = argv[++i];
       else if (option == "--calibration-file" && i + 1 < argc) calibration_file = argv[++i];
       else if (option == "--calibration-request-file" && i + 1 < argc) calibration_request_file = argv[++i];
+      else if (option == "--display-confirm-file" && i + 1 < argc) display_confirm_file = argv[++i];
       else if (option == "--tls-certificate" && i + 1 < argc) tls_certificate = argv[++i];
       else if (option == "--tls-private-key" && i + 1 < argc) tls_private_key = argv[++i];
       else if (option == "--device-id" && i + 1 < argc) pairing_device_id = argv[++i];
@@ -122,7 +123,7 @@ int main(int argc, char **argv) {
                    apply_result_file, firstboot_status_file, wifi_request_file,
                    wifi_result_file, pairing.get(), !tls_certificate.empty(),
                    pairing_certificate_fingerprint, false, calibration_file,
-                   calibration_request_file);
+                   calibration_request_file, display_confirm_file);
     if (enroll) {
       std::string password;
       if (!std::getline(std::cin, password) || !auth.enroll(password))

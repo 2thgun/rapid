@@ -43,7 +43,8 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <label for="rotation">Orientation</label>
 <select id="rotation"><option value="0">Landscape</option><option value="180">Upside-down landscape</option></select>
 <button id="save-settings" type="submit">Save and apply hostname</button>
-<button id="retry-settings" type="button" hidden>Retry failed hostname application</button>
+<button id="retry-settings" type="button" hidden>Retry settings application</button>
+<button id="confirm-rotation" type="button" hidden>Keep the new orientation</button>
 </form>
 <dl><dt>Startup preference</dt><dd>Saved Wi-Fi, then access point</dd></dl>
 <p>Saving applies the device name shortly after submission. Home Wi-Fi joining
@@ -117,8 +118,10 @@ async function showProfile() {
   document.getElementById('rotation').value = String(data.settings.rotation);
   document.getElementById('login').hidden = true;
   document.getElementById('profile').hidden = false;
-  document.getElementById('retry-settings').hidden =
-    !(data.application && data.application.hostname_applied === false);
+  const application = data.application || {};
+  document.getElementById('retry-settings').hidden = !(application.hostname_applied === false ||
+    application.rotation === 'rolled_back' || application.rotation === 'failed');
+  document.getElementById('confirm-rotation').hidden = application.rotation !== 'awaiting_confirmation';
   await showPeers();
   await showPairing();
   return data;
@@ -212,21 +215,45 @@ document.getElementById('pairing-approve').addEventListener('click', async event
 });
 
 async function waitForHostnameApplication(targetRevision) {
-  for (let attempt = 0; attempt < 10; ++attempt) {
+  // Long enough for a changed orientation's 30-second confirmation window.
+  for (let attempt = 0; attempt < 80; ++attempt) {
     await new Promise(resolve => setTimeout(resolve, 500));
     const profile = await showProfile();
     if (profile.revision !== targetRevision) return;
-    if (profile.application && profile.application.hostname_applied) {
-      message.textContent = 'Device name applied. Orientation is still saved only.';
+    const application = profile.application;
+    if (!application) continue;
+    if (application.hostname_applied === false) {
+      message.textContent = 'Profile saved, but the device name could not be applied. Save again to retry.';
       return;
     }
-    if (profile.application && profile.application.hostname_applied === false) {
-      message.textContent = 'Profile saved, but the device name could not be applied. Save again to retry.';
+    if (application.rotation === 'awaiting_confirmation') {
+      message.textContent = 'Device name applied. Keep the new orientation on the Pi screen or with the button below within 30 seconds, or it will be restored.';
+      continue;
+    }
+    if (application.rotation === 'rolled_back') {
+      message.textContent = 'Device name applied. The new orientation was not kept, so the previous one was restored. Retry to preview it again.';
+      return;
+    }
+    if (application.rotation === 'failed') {
+      message.textContent = 'Device name applied, but the orientation could not be changed. Retry to try again.';
+      return;
+    }
+    if (application.hostname_applied) {
+      message.textContent = application.rotation === 'confirmed' ? 'Device name and new orientation applied.' : 'Device name applied.';
       return;
     }
   }
   message.textContent = 'Profile saved. The device name is still waiting to be applied.';
 }
+document.getElementById('confirm-rotation').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await api('/api/v1/settings/confirm-display', 'POST', {revision});
+    message.textContent = 'Keeping the new orientation.';
+  } catch (error) { message.textContent = error.message; }
+  finally { button.disabled = false; }
+});
 async function waitForWifiApplication(targetRevision) {
   for (let attempt = 0; attempt < 70; ++attempt) {
     await new Promise(resolve => setTimeout(resolve, 500));

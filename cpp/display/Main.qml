@@ -93,6 +93,18 @@ Window {
             MouseArea { id: pairingApprove; anchors.fill: parent; enabled: !dashboard.pairingApprovalSent; onClicked: dashboard.approvePairing() }
         }
     }
+    Card {
+        visible: dashboard.displayConfirmPending
+        x: 6; y: 44; width: 468; height: 72; z: 6
+        border.color: root.accent; border.width: 2
+        Label { x: 12; y: 12; width: 300; text: "KEEP THIS ORIENTATION?"; color: root.accent; font.pixelSize: 14 }
+        Label { x: 12; y: 40; width: 300; text: "Reverts automatically unless kept within 30 seconds"; font.pixelSize: 11 }
+        Rectangle { x: 326; y: 10; width: 130; height: 52; radius: 4; opacity: dashboard.displayConfirmSent ? 0.45 : 1
+            color: keepOrientation.pressed ? "#403519" : "#221c0d"; border.color: root.accent; border.width: 2
+            Text { anchors.centerIn: parent; text: dashboard.displayConfirmSent ? "KEPT" : "KEEP"; color: root.accent; font.pixelSize: 16; font.bold: true }
+            MouseArea { id: keepOrientation; anchors.fill: parent; enabled: !dashboard.displayConfirmSent; onClicked: dashboard.confirmDisplay() }
+        }
+    }
     Item {
         id: body
         x: 6; y: 46; width: 468; height: 214

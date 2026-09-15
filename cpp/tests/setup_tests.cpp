@@ -113,8 +113,11 @@ int main(int argc, char **argv) {
     const auto hostname_log = root.path / "hostnamectl.log";
     const auto fake_display = root.path / "display-recovery";
     const auto display_log = root.path / "display-recovery.log";
+    const auto display_state = root.path / "display-state.json";
+    const auto display_confirm = root.path / "display-confirm.json";
+    const auto touch_calibration = root.path / "touch-calibration.conf";
     atomic_file(apply_request, Json{{"revision", 2}, {"settings",
-        {{"hostname", "rapid-applied"}, {"rotation", 0},
+        {{"hostname", "rapid-applied"}, {"rotation", 180},
          {"boot_network", "home_then_ap"}}}}.dump());
     {
       std::ofstream script(fake_hostnamectl);
@@ -132,30 +135,64 @@ int main(int argc, char **argv) {
     }
     fs::permissions(fake_display, fs::perms::owner_all);
     setenv("RAPID_TEST_DISPLAY_LOG", display_log.c_str(), 1);
-    const auto apply = fork();
-    require(apply >= 0, "fork settings applicator");
-    if (apply == 0) {
-      execl(argv[3], argv[3], "--request-file", apply_request.c_str(), "--result-file",
-            apply_result.c_str(), "--hostnamectl", fake_hostnamectl.c_str(),
-            "--display-recovery", fake_display.c_str(), "--display-state-file",
-            (root.path / "display-state.json").c_str(), "--display-output", "default",
-            "--display-calibration-file", (root.path / "touch-calibration.conf").c_str(), nullptr);
-      _exit(127);
-    }
-    int apply_status = 0;
-    require(waitpid(apply, &apply_status, 0) == apply && WIFEXITED(apply_status) &&
-                WEXITSTATUS(apply_status) == 0 && !fs::exists(apply_request),
-            "settings applicator applies and consumes a valid hostname request");
-    unsetenv("RAPID_TEST_HOSTNAME_LOG");
+    const auto launch_apply = [&](int timeout) {
+      const auto child = fork();
+      require(child >= 0, "fork settings applicator");
+      if (child == 0) {
+        const auto seconds = std::to_string(timeout);
+        execl(argv[3], argv[3], "--request-file", apply_request.c_str(), "--result-file",
+              apply_result.c_str(), "--hostnamectl", fake_hostnamectl.c_str(),
+              "--display-recovery", fake_display.c_str(), "--display-state-file", display_state.c_str(),
+              "--display-output", "default", "--display-calibration-file", touch_calibration.c_str(),
+              "--display-confirm-file", display_confirm.c_str(), "--display-confirm-timeout",
+              seconds.c_str(), nullptr);
+        _exit(127);
+      }
+      return child;
+    };
+    const auto succeeded = [](pid_t child) {
+      int status = 0;
+      return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    };
+    const auto result_rotation = [&] {
+      try {
+        return Json::parse(read_file(apply_result)).value("rotation", std::string{});
+      } catch (const std::exception &) {
+        return std::string{};
+      }
+    };
+    auto apply = launch_apply(10);
+    for (int i = 0; i < 100 && result_rotation() != "awaiting_confirmation"; ++i) usleep(50000);
+    require(result_rotation() == "awaiting_confirmation" && !fs::exists(apply_request),
+            "a changed orientation is previewed and waits for the owner after consuming its request");
+    atomic_file(display_confirm, Json{{"revision", 2}}.dump());
+    require(succeeded(apply), "settings applicator finishes after owner confirmation");
     require(read_file(hostname_log) == "set-hostname rapid-applied\n",
             "settings applicator invokes only fixed hostnamectl arguments");
     const auto applied = Json::parse(read_file(apply_result));
-    require(applied["hostname_applied"] == true &&
-                applied["pending"] == Json::array({"wifi", "calibration"}) &&
-                read_file(display_log).find("--preview --calibration-file " +
-                                            (root.path / "touch-calibration.conf").string()) != std::string::npos &&
+    require(applied["hostname_applied"] == true && applied["rotation"] == "confirmed" &&
+                applied["pending"] == Json::array({"wifi"}) && !fs::exists(display_confirm) &&
+                read_file(display_log).find("--rotation 180 --preview --calibration-file " +
+                                            touch_calibration.string()) != std::string::npos &&
                 read_file(display_log).find("--confirm") != std::string::npos,
-            "settings applicator records a secret-free completion result");
+            "owner confirmation keeps the previewed orientation in a secret-free result");
+    atomic_file(apply_request, Json{{"revision", 4}, {"settings",
+        {{"hostname", "rapid-applied"}, {"rotation", 180}, {"boot_network", "home_then_ap"}}}}.dump());
+    atomic_file(display_confirm, Json{{"revision", 2}}.dump());
+    apply = launch_apply(1);
+    require(succeeded(apply) && result_rotation() == "rolled_back" &&
+                Json::parse(read_file(apply_result))["pending"] == Json::array({"rotation", "wifi"}) &&
+                read_file(display_log).find("--rollback --calibration-file") != std::string::npos,
+            "an unconfirmed orientation rolls back after its timeout and ignores a stale confirmation");
+    atomic_file(display_state, Json{{"rotation", 180}, {"pending", false}}.dump());
+    atomic_file(apply_request, Json{{"revision", 5}, {"settings",
+        {{"hostname", "rapid-applied"}, {"rotation", 180}, {"boot_network", "home_then_ap"}}}}.dump());
+    const auto display_calls = read_file(display_log);
+    apply = launch_apply(1);
+    require(succeeded(apply) && result_rotation() == "unchanged" && read_file(display_log) == display_calls &&
+                Json::parse(read_file(apply_result))["pending"] == Json::array({"wifi"}),
+            "saving an unchanged orientation neither previews nor asks for confirmation");
+    unsetenv("RAPID_TEST_HOSTNAME_LOG");
     const auto wifi_request = root.path / "wifi-request.json";
     const auto wifi_result = root.path / "wifi-result.json";
     const auto wifi_log = root.path / "wifi.log";

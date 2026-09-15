@@ -54,6 +54,10 @@ int main(int argc, char **argv) {
   qputenv("RAPID_TOUCH_CALIBRATION", calibration_path.toUtf8());
   const auto calibration_request = helper_directory.filePath("calibration-request.json");
   qputenv("RAPID_CALIBRATION_REQUEST", calibration_request.toUtf8());
+  const auto apply_result = helper_directory.filePath("apply-result.json");
+  const auto display_confirm = helper_directory.filePath("display-confirm.json");
+  qputenv("RAPID_APPLY_RESULT", apply_result.toUtf8());
+  qputenv("RAPID_DISPLAY_CONFIRM", display_confirm.toUtf8());
   QJsonObject state{{"companion_connected", true}, {"companion_daemon_state", "driving"},
                     {"telemetry_fresh", true}, {"session_id", "qt-test"},
                     {"samples_received", 1}, {"throttle", 0.75}, {"brake", 0.25},
@@ -195,5 +199,25 @@ int main(int argc, char **argv) {
   spin(1600);
   require(model.calibrationStage() == "capture" && !QFile::exists(calibration_request),
           "A setup-page request starts panel calibration once");
+
+  const auto write_result = [&](const QByteArray &contents) {
+    QFile file(apply_result);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(contents) == contents.size(),
+            "write apply result fixture");
+  };
+  write_result("{\"revision\":9,\"hostname_applied\":true,\"rotation\":\"awaiting_confirmation\"}");
+  spin(700);
+  require(model.displayConfirmPending() && model.confirmDisplay() && !model.confirmDisplay(),
+          "The panel can keep a previewed orientation exactly once");
+  {
+    QFile confirmation(display_confirm);
+    require(confirmation.open(QIODevice::ReadOnly) &&
+                QJsonDocument::fromJson(confirmation.readAll()).object().value("revision").toInteger() == 9,
+            "Panel confirmation names the previewed settings revision");
+  }
+  write_result("{\"revision\":9,\"hostname_applied\":true,\"rotation\":\"confirmed\"}");
+  spin(700);
+  require(!model.displayConfirmPending() && !model.displayConfirmSent(),
+          "The orientation prompt clears once the applicator keeps it");
   std::cout << "Qt model polling, deduplication, null, gap and calibration checks passed\n";
 }

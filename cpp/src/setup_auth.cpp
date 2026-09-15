@@ -45,7 +45,7 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      fs::path wifi_result_file, PairingCoordinator *pairing,
                      bool secure_transport, std::string certificate_fingerprint,
                      bool pairing_transport_enabled, fs::path calibration_file,
-                     fs::path calibration_request_file)
+                     fs::path calibration_request_file, fs::path display_confirm_file)
     : store_(store), clock_(std::move(clock)),
       origin_((secure_transport ? "https://" : "http://") + host + ":" + std::to_string(port)),
       authority_(std::move(host) + ":" + std::to_string(port)),
@@ -55,7 +55,8 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
       wifi_request_file_(std::move(wifi_request_file)),
       wifi_result_file_(std::move(wifi_result_file)),
       firstboot_status_file_(std::move(firstboot_status_file)), calibration_file_(std::move(calibration_file)),
-      calibration_request_file_(std::move(calibration_request_file)), pairing_(pairing),
+      calibration_request_file_(std::move(calibration_request_file)),
+      display_confirm_file_(std::move(display_confirm_file)), pairing_(pairing),
       secure_transport_(secure_transport),
       certificate_fingerprint_(std::move(certificate_fingerprint)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
@@ -265,7 +266,11 @@ Response SetupAuth::handle(const Request &request) {
       if (!apply_result_file_.empty()) {
         const auto result = Json::parse(read_file(apply_result_file_));
         if (result.is_object() && result.value("revision", -1) == state.at("revision")) {
-          settings_applied = result.value("hostname_applied", false);
+          // A changed orientation counts only once the owner has kept it.
+          const auto rotation = result.value("rotation", std::string{});
+          settings_applied = result.value("hostname_applied", false) &&
+                             rotation != "awaiting_confirmation" && rotation != "rolled_back" &&
+                             rotation != "failed";
           application = result;
         }
       }
@@ -324,6 +329,31 @@ Response SetupAuth::handle(const Request &request) {
       return reply(503, {{"detail", "settings application queue is unavailable"}});
     }
     return reply(202, {{"revision", state.at("revision")}, {"queued", true}});
+  }
+  if (path == "/api/v1/settings/confirm-display" && request.method == "POST") {
+    if (!equal(header(request, "x-csrf-token"), session->second.csrf))
+      return reply(403, {{"detail", "invalid CSRF token"}});
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || body.size() != 1 || !body.contains("revision") ||
+        !body["revision"].is_number_integer())
+      return reply(400, {{"detail", "revision required"}});
+    const auto state = store_.snapshot();
+    bool awaiting = false;
+    try {
+      const auto result = Json::parse(read_file(apply_result_file_));
+      awaiting = result.is_object() && result.value("revision", -1) == state.at("revision") &&
+                 result.value("rotation", std::string{}) == "awaiting_confirmation";
+    } catch (const std::exception &) {}
+    if (body["revision"] != state.at("revision") || !awaiting)
+      return reply(409, {{"detail", "no orientation change is awaiting confirmation"}});
+    if (display_confirm_file_.empty())
+      return reply(503, {{"detail", "orientation confirmation is unavailable"}});
+    try {
+      atomic_file(display_confirm_file_, Json{{"revision", state.at("revision")}}.dump());
+    } catch (const std::exception &) {
+      return reply(503, {{"detail", "orientation confirmation is unavailable"}});
+    }
+    return reply(202, {{"revision", state.at("revision")}, {"confirmation_queued", true}});
   }
   if (path == "/api/v1/peers" && request.method == "GET")
     return reply(200, {{"peers", store_.peers()}});

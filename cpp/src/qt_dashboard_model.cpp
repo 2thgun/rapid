@@ -81,6 +81,7 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   calibration_timeout_->setSingleShot(true);
   connect(calibration_timeout_, &QTimer::timeout, this, &DashboardModel::calibrationTimedOut);
   QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
+  QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
   QTimer::singleShot(0, this, &DashboardModel::pollLive);
   QTimer::singleShot(0, this, &DashboardModel::pollNetworkMode);
   QTimer::singleShot(0, this, &DashboardModel::pollLogStatus);
@@ -182,6 +183,48 @@ bool DashboardModel::approvePairing() {
   QFile::remove(path);
   if (!QFile::rename(temporary, path)) return false;
   pairing_approval_sent_ = true;
+  bump();
+  return true;
+}
+
+void DashboardModel::pollDisplayConfirmation() {
+  QFile file(qEnvironmentVariable("RAPID_APPLY_RESULT", "/run/rapid-apply/result.json"));
+  bool pending = false;
+  qint64 revision = -1;
+  if (file.open(QIODevice::ReadOnly)) {
+    const auto object = QJsonDocument::fromJson(file.readAll()).object();
+    const auto value = object.value("revision");
+    if (object.value("rotation").toString() == "awaiting_confirmation" && value.isDouble()) {
+      pending = true;
+      revision = value.toInteger();
+    }
+  }
+  if (pending != display_confirm_pending_ || revision != display_confirm_revision_) {
+    if (revision != display_confirm_revision_ || !pending) display_confirm_sent_ = false;
+    display_confirm_pending_ = pending;
+    display_confirm_revision_ = revision;
+    bump();
+  }
+  QTimer::singleShot(500, this, &DashboardModel::pollDisplayConfirmation);
+}
+
+bool DashboardModel::confirmDisplay() {
+  if (!display_confirm_pending_ || display_confirm_sent_) return false;
+  // The root applicator accepts only a confirmation naming the previewed revision.
+  const QString path = qEnvironmentVariable("RAPID_DISPLAY_CONFIRM", "/run/rapid-apply/display-confirm.json");
+  const auto temporary = path + ".tmp";
+  QFile file(temporary);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+  const QJsonObject object{{"revision", display_confirm_revision_}};
+  if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0 || !file.flush()) {
+    file.close();
+    QFile::remove(temporary);
+    return false;
+  }
+  file.close();
+  QFile::remove(path);
+  if (!QFile::rename(temporary, path)) return false;
+  display_confirm_sent_ = true;
   bump();
   return true;
 }

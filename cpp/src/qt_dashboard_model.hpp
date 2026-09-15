@@ -27,6 +27,8 @@ class DashboardModel final : public QObject {
   Q_PROPERTY(QString pairingTransaction READ pairingTransaction NOTIFY changed)
   Q_PROPERTY(bool pairingApprovalSent READ pairingApprovalSent NOTIFY changed)
   Q_PROPERTY(QVariantList graphSamples READ graphSamples NOTIFY changed)
+  Q_PROPERTY(bool displayConfirmPending READ displayConfirmPending NOTIFY changed)
+  Q_PROPERTY(bool displayConfirmSent READ displayConfirmSent NOTIFY changed)
   Q_PROPERTY(QString calibrationStage READ calibrationStage NOTIFY changed)
   Q_PROPERTY(QString calibrationMessage READ calibrationMessage NOTIFY changed)
   Q_PROPERTY(QPointF calibrationTarget READ calibrationTarget NOTIFY changed)
@@ -45,6 +47,8 @@ public:
   QString pairingTransaction() const { return pairing_transaction_; }
   bool pairingApprovalSent() const { return pairing_approval_sent_; }
   QVariantList graphSamples() const { return graph_samples_; }
+  bool displayConfirmPending() const { return display_confirm_pending_; }
+  bool displayConfirmSent() const { return display_confirm_sent_; }
   // Empty when idle; otherwise capture, applying, verify, done or failed.
   QString calibrationStage() const { return calibration_stage_; }
   QString calibrationMessage() const { return calibration_message_; }
@@ -56,6 +60,7 @@ public:
   Q_INVOKABLE QString percentValue(const QString &key) const;
   Q_INVOKABLE void setNetworkMode(const QString &mode);
   Q_INVOKABLE bool approvePairing();
+  Q_INVOKABLE bool confirmDisplay();
   Q_INVOKABLE void startCalibration();
   Q_INVOKABLE void calibrationTap(double x, double y);
 
@@ -69,6 +74,7 @@ private:
   void pollSetupStatus();
   void pollPairingPanel();
   void pollCalibrationFile();
+  void pollDisplayConfirmation();
   void runDisplayRecovery(const QStringList &arguments,
                           std::function<void(bool, const QString &)> done);
   void calibrationTimedOut();
@@ -98,6 +104,9 @@ private:
   QString last_graph_sample_;
   qint64 last_graph_gap_ms_ = 0;
   QVariantList graph_samples_;
+  bool display_confirm_pending_ = false;
+  bool display_confirm_sent_ = false;
+  qint64 display_confirm_revision_ = -1;
   QString calibration_stage_;
   QString calibration_message_;
   QList<QPointF> calibration_taps_;

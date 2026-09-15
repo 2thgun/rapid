@@ -21,6 +21,7 @@ class SetupAuth {
   fs::path firstboot_status_file_;
   fs::path calibration_file_;
   fs::path calibration_request_file_;
+  fs::path display_confirm_file_;
   PairingCoordinator *pairing_ = nullptr;
   std::unique_ptr<PairingTransport> pairing_transport_;
   bool secure_transport_ = false;
@@ -35,7 +36,7 @@ public:
             fs::path wifi_result_file = {}, PairingCoordinator *pairing = nullptr,
             bool secure_transport = false, std::string certificate_fingerprint = {},
             bool pairing_transport_enabled = true, fs::path calibration_file = {},
-            fs::path calibration_request_file = {});
+            fs::path calibration_request_file = {}, fs::path display_confirm_file = {});
   // The caller supplies an exact loopback or AP authority. It is never inferred
   // from an untrusted Host header.
   bool enroll(const std::string &password);
