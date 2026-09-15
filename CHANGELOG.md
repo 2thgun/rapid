@@ -16,7 +16,10 @@ last completed checks, not a guarantee of current device state.
 - Added constrained settings application for hostname, Home Wi-Fi (with setup-AP
   restore on failure) and display rotation (with preview, confirmation and
   boot-time rollback), plus an authenticated touchscreen calibration reset.
-  Interactive calibration is not implemented yet.
+- Added on-panel touch calibration (Wi-Fi menu → Calibrate touch). It uses five
+  targets, a verification tap and automatic rollback when unconfirmed. Rotating
+  the display to 180° now also rotates touch input, and an existing X server
+  touch matrix is preserved.
 - Fixed brief companion packet gaps splitting one driving session into several
   recordings; the session and spool now survive ten seconds of silence.
 - Revoking the last paired PC no longer re-enables unauthenticated v3 telemetry.

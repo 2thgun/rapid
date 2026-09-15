@@ -51,7 +51,7 @@ void set_hostname(const fs::path &program, const std::string &hostname) {
 }
 
 void apply_rotation(const fs::path &program, const fs::path &state_file,
-                    const std::string &output, int rotation) {
+                    const std::string &output, int rotation, const fs::path &calibration_file) {
   const auto run = [&](const std::vector<std::string> &arguments) {
     const auto child = fork();
     if (child < 0) throw std::runtime_error("cannot start display recovery command");
@@ -68,8 +68,14 @@ void apply_rotation(const fs::path &program, const fs::path &state_file,
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
       throw std::runtime_error("display rotation application failed");
   };
-  run({"--state-file", state_file.string(), "--output", output,
-       "--rotation", std::to_string(rotation), "--preview"});
+  std::vector<std::string> preview{"--state-file", state_file.string(), "--output", output,
+                                   "--rotation", std::to_string(rotation), "--preview"};
+  // Touch coordinates must follow the picture, including any saved calibration.
+  if (!calibration_file.empty()) {
+    preview.push_back("--calibration-file");
+    preview.push_back(calibration_file.string());
+  }
+  run(preview);
   run({"--state-file", state_file.string(), "--output", output, "--confirm"});
 }
 } // namespace
@@ -79,13 +85,14 @@ int main(int argc, char **argv) {
   std::optional<std::int64_t> revision;
   try {
     fs::path hostnamectl = "/usr/bin/hostnamectl";
-    fs::path display_recovery, display_state;
+    fs::path display_recovery, display_state, display_calibration;
     std::string display_output = "default";
     for (int i = 1; i < argc; ++i) {
       const std::string option = argv[i];
       if (option == "--help") {
         std::cout << "rapid-apply --request-file PATH --result-file PATH [--hostnamectl PATH] "
-                     "[--display-recovery PATH --display-state-file PATH --display-output NAME]\n"
+                     "[--display-recovery PATH --display-state-file PATH --display-output NAME "
+                     "[--display-calibration-file PATH]]\n"
                      "Applies validated setup settings through constrained services.\n";
         return 0;
       } else if (option == "--request-file" && i + 1 < argc) request_file = argv[++i];
@@ -94,6 +101,7 @@ int main(int argc, char **argv) {
       else if (option == "--display-recovery" && i + 1 < argc) display_recovery = argv[++i];
       else if (option == "--display-state-file" && i + 1 < argc) display_state = argv[++i];
       else if (option == "--display-output" && i + 1 < argc) display_output = argv[++i];
+      else if (option == "--display-calibration-file" && i + 1 < argc) display_calibration = argv[++i];
       else throw std::invalid_argument("unknown or incomplete argument; use --help");
     }
     require(!request_file.empty() && !result_file.empty(), "request and result files are required");
@@ -114,7 +122,7 @@ int main(int argc, char **argv) {
       require(fs::is_regular_file(display_recovery) && ::access(display_recovery.c_str(), X_OK) == 0,
               "display recovery command is unavailable");
       apply_rotation(display_recovery, display_state, display_output,
-                     request["settings"]["rotation"].get<int>());
+                     request["settings"]["rotation"].get<int>(), display_calibration);
     } else {
       pending.push_back("rotation");
     }

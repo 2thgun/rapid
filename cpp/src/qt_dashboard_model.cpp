@@ -10,9 +10,11 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QProcess>
 #include <QTimer>
 #include <QUrlQuery>
 #include <QtMath>
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -48,11 +50,37 @@ QString setup_notice(const QByteArray &contents) {
       .arg(ssid, password, url, token.sliced(0, 16), token.sliced(16, 16),
            token.sliced(32, 16), token.sliced(48, 16));
 }
+
+// Inset targets avoid the bezel, where resistive panels are least linear.
+const QPointF calibration_points[] = {{0.1, 0.1}, {0.9, 0.1}, {0.9, 0.9}, {0.1, 0.9}, {0.5, 0.5}};
+constexpr qsizetype calibration_point_count = 5;
+const QPointF verification_point{0.3, 0.7};
+constexpr double verification_tolerance = 0.06;
+
+QString calibration_file() {
+  return qEnvironmentVariable("RAPID_TOUCH_CALIBRATION", "/var/lib/rapid-setup/touch-calibration.conf");
+}
+
+QStringList display_recovery_files() {
+  return {"--state-file", qEnvironmentVariable("RAPID_DISPLAY_STATE", "/var/lib/rapid/display-recovery.json"),
+          "--calibration-file", calibration_file()};
+}
+
+QString file_signature(const QString &path) {
+  const QFileInfo info(path);
+  return info.exists() ? QString::number(info.lastModified().toMSecsSinceEpoch()) + ':' +
+                             QString::number(info.size())
+                       : QString{};
+}
 }  // namespace
 
 DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
-    : QObject(parent), endpoint_(std::move(endpoint)), network_(new QNetworkAccessManager(this)) {
+    : QObject(parent), endpoint_(std::move(endpoint)), network_(new QNetworkAccessManager(this)),
+      calibration_timeout_(new QTimer(this)) {
   network_->setTransferTimeout(1800);
+  calibration_timeout_->setSingleShot(true);
+  connect(calibration_timeout_, &QTimer::timeout, this, &DashboardModel::calibrationTimedOut);
+  QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
   QTimer::singleShot(0, this, &DashboardModel::pollLive);
   QTimer::singleShot(0, this, &DashboardModel::pollNetworkMode);
   QTimer::singleShot(0, this, &DashboardModel::pollLogStatus);
@@ -156,6 +184,141 @@ bool DashboardModel::approvePairing() {
   pairing_approval_sent_ = true;
   bump();
   return true;
+}
+
+QPointF DashboardModel::calibrationTarget() const {
+  if (calibration_stage_ == "capture" && calibration_taps_.size() < calibration_point_count)
+    return calibration_points[calibration_taps_.size()];
+  if (calibration_stage_ == "verify") return verification_point;
+  return {-1, -1};
+}
+
+void DashboardModel::startCalibration() {
+  if (calibration_stage_ == "capture" || calibration_stage_ == "applying" ||
+      calibration_stage_ == "verify")
+    return;
+  calibration_taps_.clear();
+  calibration_stage_ = "capture";
+  calibration_message_ = "Tap the centre of each target (1 of 5)";
+  calibration_timeout_->start(60000);
+  bump();
+}
+
+void DashboardModel::calibrationTap(double x, double y) {
+  if (calibration_stage_ == "done" || calibration_stage_ == "failed") {
+    calibration_stage_.clear();
+    calibration_message_.clear();
+    bump();
+  } else if (calibration_stage_ == "capture") {
+    calibration_taps_.append({x, y});
+    if (calibration_taps_.size() < calibration_point_count) {
+      calibration_message_ = QStringLiteral("Tap the centre of each target (%1 of %2)")
+                                 .arg(calibration_taps_.size() + 1).arg(calibration_point_count);
+      calibration_timeout_->start(60000);
+      bump();
+      return;
+    }
+    auto arguments = display_recovery_files();
+    arguments << "--calibrate";
+    for (qsizetype i = 0; i < calibration_point_count; ++i)
+      arguments << "--sample" << QStringLiteral("%1,%2,%3,%4")
+                                     .arg(calibration_taps_[i].x(), 0, 'f', 6)
+                                     .arg(calibration_taps_[i].y(), 0, 'f', 6)
+                                     .arg(calibration_points[i].x(), 0, 'f', 6)
+                                     .arg(calibration_points[i].y(), 0, 'f', 6);
+    calibration_timeout_->stop();
+    calibration_stage_ = "applying";
+    calibration_message_ = "Applying calibration…";
+    bump();
+    runDisplayRecovery(arguments, [this](bool ok, const QString &error) {
+      if (!ok) {
+        finishCalibration("failed", error.isEmpty() ? QStringLiteral("Calibration rejected; try again") : error);
+        return;
+      }
+      calibration_stage_ = "verify";
+      calibration_message_ = "Tap the target to keep the new calibration";
+      calibration_timeout_->start(30000);
+      bump();
+    });
+  } else if (calibration_stage_ == "verify") {
+    calibration_timeout_->stop();
+    const bool accurate = std::hypot(x - verification_point.x(), y - verification_point.y()) <=
+                          verification_tolerance;
+    calibration_stage_ = "applying";
+    bump();
+    runDisplayRecovery(display_recovery_files() << (accurate ? "--confirm-calibration" : "--rollback-calibration"),
+                       [this, accurate](bool ok, const QString &error) {
+                         if (accurate && ok) finishCalibration("done", "Touch calibration saved");
+                         else if (accurate) finishCalibration("failed", error.isEmpty() ? QStringLiteral("Calibration could not be saved") : error);
+                         else finishCalibration("failed", "Tap missed the target; previous calibration restored");
+                       });
+  }
+}
+
+void DashboardModel::calibrationTimedOut() {
+  if (calibration_stage_ == "capture") {
+    finishCalibration("failed", "Calibration timed out");
+  } else if (calibration_stage_ == "verify") {
+    // An unconfirmed calibration may be unusable, so it never outlives its preview.
+    calibration_stage_ = "applying";
+    bump();
+    runDisplayRecovery(display_recovery_files() << "--rollback-calibration", [this](bool, const QString &) {
+      finishCalibration("failed", "Calibration not confirmed; previous calibration restored");
+    });
+  }
+}
+
+void DashboardModel::finishCalibration(const QString &stage, const QString &message) {
+  calibration_taps_.clear();
+  calibration_stage_ = stage;
+  calibration_message_ = message;
+  // The panel changed the file itself; do not re-apply it as an external change.
+  calibration_signature_ = file_signature(calibration_file());
+  const int generation = ++calibration_generation_;
+  bump();
+  QTimer::singleShot(4000, this, [this, generation] {
+    if (generation != calibration_generation_ ||
+        (calibration_stage_ != "done" && calibration_stage_ != "failed"))
+      return;
+    calibration_stage_.clear();
+    calibration_message_.clear();
+    bump();
+  });
+}
+
+void DashboardModel::runDisplayRecovery(const QStringList &arguments,
+                                        std::function<void(bool, const QString &)> done) {
+  auto *process = new QProcess(this);
+  connect(process, &QProcess::finished, this,
+          [process, done](int code, QProcess::ExitStatus status) {
+            const auto error = QString::fromUtf8(process->readAllStandardError()).trimmed().left(120);
+            process->deleteLater();
+            done(status == QProcess::NormalExit && code == 0, error);
+          });
+  connect(process, &QProcess::errorOccurred, this, [process, done](QProcess::ProcessError error) {
+    if (error != QProcess::FailedToStart) return;
+    process->deleteLater();
+    done(false, QStringLiteral("Display recovery helper is unavailable"));
+  });
+  process->start(qEnvironmentVariable("RAPID_DISPLAY_RECOVERY", "/usr/lib/rapid/rapid-display-recovery"),
+                 arguments);
+}
+
+void DashboardModel::pollCalibrationFile() {
+  // The authenticated setup page starts calibration through a private runtime
+  // file. Removing it before starting makes each request start at most once.
+  const auto request = qEnvironmentVariable("RAPID_CALIBRATION_REQUEST", "/run/rapid/calibration-request.json");
+  if (QFile::exists(request) && QFile::remove(request)) startCalibration();
+  const auto signature = file_signature(calibration_file());
+  if (!calibration_signature_known_) {
+    calibration_signature_ = signature;
+    calibration_signature_known_ = true;
+  } else if (signature != calibration_signature_ && calibration_stage_.isEmpty()) {
+    // For example a browser calibration reset: apply it without restarting the panel.
+    calibration_signature_ = signature;
+    runDisplayRecovery(display_recovery_files() << "--apply-input", [](bool, const QString &) {});
+  }
+  QTimer::singleShot(1000, this, &DashboardModel::pollCalibrationFile);
 }
 
 void DashboardModel::consumeLive(QNetworkReply *reply) {

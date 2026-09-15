@@ -44,7 +44,8 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      fs::path firstboot_status_file, fs::path wifi_request_file,
                      fs::path wifi_result_file, PairingCoordinator *pairing,
                      bool secure_transport, std::string certificate_fingerprint,
-                     bool pairing_transport_enabled, fs::path calibration_file)
+                     bool pairing_transport_enabled, fs::path calibration_file,
+                     fs::path calibration_request_file)
     : store_(store), clock_(std::move(clock)),
       origin_((secure_transport ? "https://" : "http://") + host + ":" + std::to_string(port)),
       authority_(std::move(host) + ":" + std::to_string(port)),
@@ -53,7 +54,8 @@ SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
       apply_result_file_(std::move(apply_result_file)),
       wifi_request_file_(std::move(wifi_request_file)),
       wifi_result_file_(std::move(wifi_result_file)),
-      firstboot_status_file_(std::move(firstboot_status_file)), calibration_file_(std::move(calibration_file)), pairing_(pairing),
+      firstboot_status_file_(std::move(firstboot_status_file)), calibration_file_(std::move(calibration_file)),
+      calibration_request_file_(std::move(calibration_request_file)), pairing_(pairing),
       secure_transport_(secure_transport),
       certificate_fingerprint_(std::move(certificate_fingerprint)) {
   if (!enrollment_token_.empty() && (enrollment_token_.size() != 64 ||
@@ -238,6 +240,22 @@ Response SetupAuth::handle(const Request &request) {
     fs::remove(calibration_file_, error);
     if (error) return reply(503, {{"detail", "calibration reset failed"}});
     return reply(200, {{"reset", true}});
+  }
+  if (path == "/api/v1/calibration/start" && request.method == "POST") {
+    if (!equal(header(request, "x-csrf-token"), session->second.csrf))
+      return reply(403, {{"detail", "invalid CSRF token"}});
+    const auto body = Json::parse(request.body, nullptr, false);
+    if (!body.is_object() || !body.empty())
+      return reply(400, {{"detail", "empty JSON object required"}});
+    if (calibration_request_file_.empty())
+      return reply(503, {{"detail", "panel calibration is unavailable"}});
+    // The panel consumes this key-free request and shows the tap targets.
+    try {
+      atomic_file(calibration_request_file_, Json{{"requested", true}}.dump() + "\n");
+    } catch (const std::exception &) {
+      return reply(503, {{"detail", "panel calibration request failed"}});
+    }
+    return reply(200, {{"requested", true}});
   }
   if (path == "/api/v1/settings" && request.method == "GET") {
     auto state = store_.snapshot();

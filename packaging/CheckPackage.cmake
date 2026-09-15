@@ -60,6 +60,8 @@ read_service("./usr/lib/systemd/system/rapid-firstboot.service" firstboot_servic
 read_service("./usr/lib/systemd/system/rapid-provision.service" provision_service)
 read_service("./usr/lib/systemd/system/rapid-setup.service" setup_service)
 read_service("./usr/lib/systemd/system/rapid.service" runtime_service)
+read_service("./usr/lib/systemd/system/rapid-apply.service" apply_service)
+read_service("./usr/lib/rapid/rapid-panel" panel_script)
 file(REMOVE "${data_tar}")
 if(NOT firstboot_service MATCHES "User=rapid" OR
    NOT firstboot_service MATCHES "Group=rapid" OR
@@ -78,7 +80,8 @@ if(NOT setup_service MATCHES "User=rapid" OR
    NOT setup_service MATCHES "--enrollment-token-file /var/lib/rapid-setup/enrollment[.]token" OR
    NOT setup_service MATCHES "--tls-certificate /var/lib/rapid-setup/device[.]crt" OR
    NOT setup_service MATCHES "--tls-private-key /var/lib/rapid-setup/device[.]key" OR
-   NOT setup_service MATCHES "--calibration-file /var/lib/rapid-setup/touch-calibration[.]conf")
+   NOT setup_service MATCHES "--calibration-file /var/lib/rapid-setup/touch-calibration[.]conf" OR
+   NOT setup_service MATCHES "--calibration-request-file /run/rapid/calibration-request[.]json")
   message(FATAL_ERROR "Setup service must use generated rapid-owned AP/TLS state and fixed listener")
 endif()
 if(NOT firstboot_service MATCHES "--tls-certificate /var/lib/rapid-setup/device[.]crt" OR
@@ -90,9 +93,14 @@ if(NOT runtime_service MATCHES "Requires=rapid-firstboot[.]service rapid-provisi
    NOT runtime_service MATCHES "EnvironmentFile=-/etc/rapid/runtime[.]env")
   message(FATAL_ERROR "Runtime must start after fresh-device provisioning and permit pairing-only startup")
 endif()
+if(NOT apply_service MATCHES "--display-calibration-file /var/lib/rapid-setup/touch-calibration[.]conf" OR
+   NOT panel_script MATCHES "--calibration-file /var/lib/rapid-setup/touch-calibration[.]conf --rollback-calibration --record-input-baseline")
+  message(FATAL_ERROR "Touch input must follow rotation and roll back unconfirmed calibration at panel start")
+endif()
 execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)
-if(NOT result EQUAL 0 OR NOT dependencies MATCHES "libargon2" OR NOT dependencies MATCHES "libqt6core")
+if(NOT result EQUAL 0 OR NOT dependencies MATCHES "libargon2" OR NOT dependencies MATCHES "libqt6core" OR
+   NOT dependencies MATCHES "xinput")
   message(FATAL_ERROR "Missing generated runtime library dependencies")
 endif()
 execute_process(COMMAND "${DPKG_DEB}" --ctrl-tarfile "${PACKAGE}" OUTPUT_FILE "${PACKAGE}.control.tar"

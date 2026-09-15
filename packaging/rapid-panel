@@ -3,5 +3,10 @@ set -eu
 xset s off
 xset -dpms
 xset s noblank
+# Record the touch matrix X applies from its own configuration, then compose the
+# confirmed raPId calibration and rotation with it. A calibration left
+# unconfirmed by an interrupted session is rolled back. Touch problems must never
+# prevent the dashboard from starting.
+/usr/lib/rapid/rapid-display-recovery --state-file /var/lib/rapid/display-recovery.json --calibration-file /var/lib/rapid-setup/touch-calibration.conf --rollback-calibration --record-input-baseline || true
 export QT_QUICK_BACKEND=software
 exec /usr/lib/rapid/rapid-qt-display

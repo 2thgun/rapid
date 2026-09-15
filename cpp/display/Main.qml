@@ -220,7 +220,7 @@ Window {
     Rectangle {
         visible: root.wifiMenu; anchors.fill: parent; color: "#b0000000"; z: 10
         MouseArea { anchors.fill: parent; onClicked: root.wifiMenu = false }
-        Card { x: 30; y: 90; width: 420; height: 130
+        Card { x: 30; y: 58; width: 420; height: 196
             Label { x: 14; y: 14; text: "WI-FI MODE"; font.pixelSize: 14 }
             Row { x: 12; y: 48; spacing: 8
                 Repeater { model: [["home","HOME"],["ap","ACCESS POINT"],["off","WI-FI OFF"]]
@@ -231,6 +231,29 @@ Window {
                     }
                 }
             }
+            Rectangle { x: 12; y: 120; width: 394; height: 62; radius: 4
+                color: calibrateTouch.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                Label { anchors.centerIn: parent; text: "CALIBRATE TOUCH"; color: "#f4f7f9"; font.pixelSize: 12 }
+                MouseArea { id: calibrateTouch; anchors.fill: parent; onClicked: { root.wifiMenu = false; dashboard.startCalibration() } }
+            }
         }
+    }
+    Rectangle {
+        id: calibration
+        visible: dashboard.calibrationStage.length > 0
+        anchors.fill: parent; z: 30; color: "#070a0d"
+        readonly property point target: dashboard.calibrationTarget
+        Text { x: 40; y: 78; width: 400; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
+            text: dashboard.calibrationMessage; color: "#f4f7f9"; font.pixelSize: 14; font.bold: true }
+        Item {
+            visible: calibration.target.x >= 0
+            x: calibration.target.x * root.width - 16; y: calibration.target.y * root.height - 16
+            width: 32; height: 32
+            Rectangle { x: 15; width: 2; height: 32; color: root.accent }
+            Rectangle { y: 15; width: 32; height: 2; color: root.accent }
+            Rectangle { x: 8; y: 8; width: 16; height: 16; radius: 8; color: "transparent"; border.color: root.accent; border.width: 2 }
+        }
+        // Record the initial contact point; release positions drift on resistive panels.
+        MouseArea { anchors.fill: parent; onPressed: mouse => dashboard.calibrationTap(mouse.x / width, mouse.y / height) }
     }
 }

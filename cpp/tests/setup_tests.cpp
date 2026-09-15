@@ -138,7 +138,8 @@ int main(int argc, char **argv) {
       execl(argv[3], argv[3], "--request-file", apply_request.c_str(), "--result-file",
             apply_result.c_str(), "--hostnamectl", fake_hostnamectl.c_str(),
             "--display-recovery", fake_display.c_str(), "--display-state-file",
-            (root.path / "display-state.json").c_str(), "--display-output", "default", nullptr);
+            (root.path / "display-state.json").c_str(), "--display-output", "default",
+            "--display-calibration-file", (root.path / "touch-calibration.conf").c_str(), nullptr);
       _exit(127);
     }
     int apply_status = 0;
@@ -151,7 +152,8 @@ int main(int argc, char **argv) {
     const auto applied = Json::parse(read_file(apply_result));
     require(applied["hostname_applied"] == true &&
                 applied["pending"] == Json::array({"wifi", "calibration"}) &&
-                read_file(display_log).find("--preview") != std::string::npos &&
+                read_file(display_log).find("--preview --calibration-file " +
+                                            (root.path / "touch-calibration.conf").string()) != std::string::npos &&
                 read_file(display_log).find("--confirm") != std::string::npos,
             "settings applicator records a secret-free completion result");
     const auto wifi_request = root.path / "wifi-request.json";

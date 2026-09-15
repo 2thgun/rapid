@@ -137,13 +137,14 @@ int main() {
     const auto completion_status = apply_directory / "firstboot-status.json";
     const auto calibration = apply_directory / "touch-calibration.conf";
     atomic_file(calibration, "stale calibration\n");
+    const auto calibration_request = apply_directory / "calibration-request.json";
     atomic_file(completion_status, Json{{"owner_configured", true},
                                         {"setup_complete", false},
                                         {"state", "settings_application_required"}}.dump());
     SetupAuth auth(store, 8002, [&] { return time; }, {}, "127.0.0.1",
                    apply_directory / "request.json", apply_result, completion_status,
                    apply_directory / "wifi-request.json", wifi_result, nullptr,
-                   false, {}, true, calibration);
+                   false, {}, true, calibration, calibration_request);
     const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
     require(public_setup["owner_configured"] == false &&
                 public_setup["capabilities"]["settings_write"] == true,
@@ -181,6 +182,14 @@ int main() {
     reset.headers["x-csrf-token"] = credentials["csrf_token"];
     require(auth.handle(reset).status == 200 && !fs::exists(calibration),
             "owner can reset stale touchscreen calibration");
+    auto start_calibration = request("/api/v1/calibration/start", "POST", Json::object());
+    start_calibration.headers["cookie"] = session_cookie;
+    require(auth.handle(start_calibration).status == 403 && !fs::exists(calibration_request),
+            "panel calibration start requires the CSRF token");
+    start_calibration.headers["x-csrf-token"] = credentials["csrf_token"];
+    require(auth.handle(start_calibration).status == 200 && fs::exists(calibration_request) &&
+                read_file(calibration_request).find("key") == std::string::npos,
+            "owner can start calibration on the Pi display through a key-free request");
     require(login.headers[0].second.find("HttpOnly; SameSite=Strict") != std::string::npos,
             "session cookie has browser protections");
     auto settings = request("/api/v1/settings");
