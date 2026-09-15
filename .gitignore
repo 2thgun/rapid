@@ -1,24 +1,81 @@
-data/
-config.toml
-!packaging/config.toml
-companion/.selftest/
-.tools/
+# Build directories and generated artifacts
 build/
 build-*/
 dist/
+.staging/
+.backup/
+.tools/
+companion/.selftest/
+companion/.selftest*/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+cmake_install.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+_CPack_Packages/
+install_manifest.txt
+Testing/
+compile_commands.json
+zig-cache/
+.zig-cache/
+zig-out/
+
+# Compiled binaries, packages and installers
 *.exe
 *.pdb
-*.ld
-*.ldx
-companion/.selftest*/
 *.obj
-*.lib
+*.o
 *.a
-*.log
-*.old
+*.lib
+*.so
+*.dll
+*.dylib
+*.deb
+*.msi
+*.wixobj
+*.wixpdb
+*.tar.gz
+
+# Private keys, credentials and device identity.
+# Never commit these to source or to the wiki. A key that reaches history
+# stays in history: rotate it rather than relying on a later deletion.
+*.key
+telemetry.key
+*.pem
+*.crt
+*.csr
+*.pfx
+*.p12
+*.token
+runtime.env
 .env
 .env.*
 !.env.example
-.staging/
-.backup/
+daemon.conf
+rapid-network-mode.conf
+
+# Runtime configuration and state.
+# packaging/config.toml is the tracked packaged default and stays in Git.
+config.toml
+!packaging/config.toml
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Recordings, logs, backups and disposable session evidence
+*.ld
+*.ldx
+*.log
+*.old
 .local/
+
+# Editor and operating system noise
+.vscode/
+.idea/
+.vs/
+*.user
+*.swp
+.DS_Store
+Desktop.ini
