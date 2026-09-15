@@ -1,6 +1,7 @@
 # Working in raPId
 
-Read HANDOFF.md, then initialize the wiki submodule and read wiki/Resume-Work.md.
+Read PROJECT.md (working method) and HANDOFF.md, then initialize the wiki
+submodule and read wiki/Resume-Work.md.
 The repository and its pinned wiki are sufficient to resume source development.
 
 - Runtime work belongs in C++. Inspect current code and service state; old logs
