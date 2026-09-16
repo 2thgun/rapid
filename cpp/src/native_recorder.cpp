@@ -275,8 +275,9 @@ void Recorder::start(const Json &message) {
                     message["upload_after_session"].is_boolean()
                 ? message["upload_after_session"].get<bool>()
                 : policy_ == "all" || (policy_ == "races" && session == "race");
-  last_lap_ = -1;
+  lap_boundary_ = LapBoundary{};
   lap_start_ = 0;
+  next_lap_number_ = 1;
   last_frame_ = nullptr;
   checkpoint();
   log("Recording native telemetry session");
@@ -366,29 +367,53 @@ void Recorder::record(const Json &message) {
   }
   const auto &frame = message.at("telemetry");
   int lap = int(number(frame, "lap_number"));
+  double lap_time_ms =
+      number(message, "current_lap_ms", number(frame, "current_lap_ms"));
+  Json lap_position_value =
+      frame.contains("lap_position") ? frame["lap_position"]
+                                     : message.value("lap_position", Json());
+  bool has_position = lap_position_value.is_number();
+  double lap_position = has_position ? lap_position_value.get<double>() : 0;
+  if (has_position && lap_position > 1)
+    lap_position /= 100;
   auto count = checkpoint_["sample_count"].get<std::size_t>();
-  if (last_lap_ < 0) {
-    last_lap_ = lap;
-    lap_start_ = count;
-  }
-  if (lap > last_lap_) {
+  // A lap closes when lap_number increases, or -- the AC1 gap in #16 -- when
+  // current_lap_ms resets together with lap_position wrapping even though
+  // lap_number never ticks. Both paths share one debounced rule
+  // (lap_boundary.hpp) so a flicker at the line or a reversal cannot create
+  // more than one lap. Laps are numbered by detection order rather than by
+  // the sim's own counter, because that counter is exactly what sometimes
+  // fails to tick (session-c28a1574...: lap_number stays 6 for the whole
+  // file, so "lap - 1" would collide across separate laps).
+  auto boundary =
+      lap_boundary_.step(lap, lap_time_ms, lap_position, has_position);
+  if (boundary.closed && count > lap_start_) {
     int completed = int(
         number(message, "completed_lap_ms", number(frame, "completed_lap_ms")));
-    if (completed > 0 && count > lap_start_) {
+    bool derived = completed <= 0;
+    if (derived) {
+      // The sim gave no completed time for this lap -- observed for 4 of the
+      // 5 lap_number increments in session-4e6de929 -- so derive it from the
+      // recorder's own sample clock instead of dropping the lap.
+      completed = int(std::lround(double(count - lap_start_) * 1000.0 / rate));
+    }
+    if (completed > 0) {
       Json valid = message.value("lap_valid", frame.value("lap_valid", Json()));
-      if (!valid.is_boolean())
+      if (!valid.is_boolean() || derived)
         valid = nullptr;
-      Json segment = {{"number", std::max(0, lap - 1)},
+      Json segment = {{"number", next_lap_number_},
                       {"start_sample", lap_start_},
                       {"end_sample", count},
                       {"time_ms", completed},
                       {"valid", valid}};
       checkpoint_["laps"].push_back(segment);
       checkpoint();
+      log("Lap " + std::to_string(next_lap_number_) + " recorded");
+      ++next_lap_number_;
     }
-    last_lap_ = lap;
-    lap_start_ = count;
   }
+  if (boundary.closed)
+    lap_start_ = count;
   write_frame(frame, false);
   last_frame_ = frame;
   if (checkpoint_["sample_count"].get<std::size_t>() % rate == 0)
