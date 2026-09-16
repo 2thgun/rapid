@@ -12,8 +12,41 @@ if (!wheelPair || wheelPair[1] !== ' rad/s' ||
                    qmlSource.includes('root.pair("wheel_speed_fl","wheel_speed_fr"," km/h")')))) {
   throw new Error('Wheel angular-speed displays must use rad/s');
 }
+if (source.includes('steering * 180 / Math.PI') || source.includes("state.simulator === 'iRacing'")) {
+  throw new Error('Steering wheel must not assume radians or single out one simulator');
+}
+if (!embedded && (qmlSource.includes('root.number("steering_angle")*180/Math.PI') ||
+                  qmlSource.includes('steering_angle") === "iRacing"'))) {
+  throw new Error('Main.qml steering wheel must not assume radians or single out one simulator');
+}
+if (!embedded && !qmlSource.includes('steering_lock_deg')) {
+  throw new Error('Main.qml steering wheel must derive degrees from the steering lock channel');
+}
 const sampleFunction = source.match(/function addGraphSample\(state\) \{[\s\S]*?\n\}/);
 if (!sampleFunction) throw new Error('Dashboard graph function missing');
+const steeringConst = source.match(/const defaultLockToLockDeg = \d+;/);
+const steeringFunction = source.match(/function steeringDegrees\(state\) \{[\s\S]*?\n\}/);
+if (!steeringConst || !steeringFunction) throw new Error('Dashboard steering-degrees helper missing');
+const steeringRun = new Function(`
+  ${steeringConst[0]}
+  ${steeringFunction[0]}
+  const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const noSample = steeringDegrees({steering_angle: null, steering_lock_deg: 900});
+  check(noSample.degrees === null && noSample.known === false, 'No steering sample yields no angle');
+  const known = steeringDegrees({steering_angle: 1, steering_lock_deg: 700});
+  check(known.known === true && Math.abs(known.degrees - 350) < 1e-9,
+    'Known lock: full-lock normalised input maps to half the lock-to-lock angle');
+  const unknownNull = steeringDegrees({steering_angle: -1, steering_lock_deg: null});
+  check(unknownNull.known === false && Math.abs(unknownNull.degrees + 450) < 1e-9,
+    'Unknown lock (absent) falls back to the configurable default and says so');
+  const unknownZero = steeringDegrees({steering_angle: -1, steering_lock_deg: 0});
+  check(unknownZero.known === false && Math.abs(unknownZero.degrees + 450) < 1e-9,
+    'A zero lock is treated as unknown, not a real zero-degree lock');
+  const iracing = steeringDegrees({steering_angle: .4, steering_lock_deg: 900, simulator: 'iRacing'});
+  check(iracing.known === true && Math.abs(iracing.degrees - 180) < 1e-9,
+    'iRacing uses the same normalised-times-lock formula as every other simulator');
+`);
+steeringRun();
 const run = new Function(`
   let clock = 1000;
   const performance = {now: () => clock};
@@ -107,7 +140,7 @@ function runTick(livePushActiveInitial, fetchImpl) {
   check(failed.applyFailure === 1 && failed.applyState.length === 0,
     'A failed fallback fetch reports a connection failure rather than a partial state');
   if (typeof document !== 'undefined') document.body.textContent = 'GRAPH_TESTS_PASSED';
-  else console.log('Graph freshness, duplicate polling, gaps, restart, aging, push coalescing and fallback-poll checks passed');
+  else console.log('Graph freshness, duplicate polling, gaps, restart, aging, push coalescing, fallback-poll and steering-lock degrees checks passed');
 })().catch(error => {
   if (typeof document !== 'undefined') document.body.textContent = 'GRAPH_TESTS_FAILED: ' + error.message;
   else { console.error(error); process.exitCode = 1; }

@@ -4,7 +4,7 @@
 {"Fuel Level","Fuel","l","fuel",1.0,2},
 {"Gear","Gear","","gear",1.0,0},
 {"Engine RPM","RPM","rpm","rpm",1.0,0},
-{"Steered Angle","Steer","rad","steering_angle",1.0,3},
+{"Steered Angle","Steer","","steering_angle",1.0,3},
 {"Ground Speed","Speed","km/h","speed_kmh",1.0,1},
 {"Velocity Lat","Vel Lat","m/s","velocity_x",1.0,2},
 {"Velocity Vert","Vel Vert","m/s","velocity_y",1.0,2},

@@ -271,7 +271,8 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
         state_["schema_version"] = 4;
         state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
         if (m.contains("session_id")) state_["session_id"] = m["session_id"];
-        for (const char *key : {"track_name", "car_model", "driver_name", "session_name"})
+        for (const char *key : {"track_name", "car_model", "driver_name", "session_name",
+                                "steering_lock_deg"})
           if (m.contains(key)) state_[key] = m[key];
       }
       // "paused" (#15) is a live run with a gap (pause/menu/alt-tab): the
@@ -493,8 +494,8 @@ void Runtime::expire() {
       session_.clear();
     }
     for (const auto *key :
-         {"rpm", "steering_angle", "g_x", "g_y", "g_z", "throttle", "brake",
-          "companion_daemon_state", "companion_source_host"})
+         {"rpm", "steering_angle", "steering_lock_deg", "g_x", "g_y", "g_z",
+          "throttle", "brake", "companion_daemon_state", "companion_source_host"})
       state_[key] = nullptr;
     state_["companion_connected"] = false;
     state_["connected"] = state_.value("acc_connected", false);
