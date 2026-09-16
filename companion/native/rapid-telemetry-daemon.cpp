@@ -586,6 +586,14 @@ std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std:
         std::copy(peer.begin(), peer.end(), blob.begin() + 8);
         if (BCryptImportKeyPair(alg, nullptr, BCRYPT_ECCPUBLIC_BLOB, &peer_key, blob.data(), blob_size, 0) < 0 || BCryptSecretAgreement(local, peer_key, &secret, 0) < 0) throw std::runtime_error("CNG Curve25519 agreement failed");
         std::array<std::uint8_t, 32> shared{}; ULONG shared_size = 0; if (BCryptDeriveKey(secret, BCRYPT_KDF_RAW_SECRET, nullptr, shared.data(), shared.size(), &shared_size, 0) < 0 || shared_size != shared.size()) throw std::runtime_error("CNG shared secret derivation failed");
+        // CNG's BCRYPT_KDF_RAW_SECRET returns the Curve25519 ECDH output in the
+        // reverse byte order from RFC 7748/OpenSSL's little-endian convention
+        // (verified against the Pi's OpenSSL-derived secret for the same keys
+        // via the #14 pairing interop fixtures); without this the companion
+        // derives a different HKDF key than the Pi used to seal the envelope
+        // and every real pairing fails even though both sides' self-tests
+        // passed in isolation.
+        std::reverse(shared.begin(), shared.end());
         const std::string salt = "rapid-pairing-salt-v1|" + std::string(tx) + "|" + std::string(nonce); const std::string info = "rapid-pairing-envelope-v1";
         const std::string aad = "rapid-pairing-envelope-v1|" + std::string(device) + "|" + std::string(tx) + "|" + std::string(nonce) + "|" + std::string(companion) + "|" + std::string(ephemeral);
         auto key = cng_hkdf_sha256(shared, std::span<const std::uint8_t>((const std::uint8_t*)salt.data(), salt.size()), std::span<const std::uint8_t>((const std::uint8_t*)info.data(), info.size()));
@@ -2668,6 +2676,155 @@ void pairing_crypto_self_test() {
     }
 }
 
+// Pairing interop fixtures (#14): everything a real Windows --pairing-url
+// client would produce for one pairing exchange, generated through the same
+// CNG Curve25519 / HKDF-SHA256 / AES-256-GCM calls run_pairing() and
+// decrypt_pairing_envelope() use, not a re-implementation. Linux CTest reads
+// these files and feeds them to the real rapid-pi pairing listener code
+// (PairingWindow::verification_code, PairingCoordinator, open_pairing_key).
+//
+// Direction chosen: the companion identity (X25519 keypair, verification
+// code) is real Windows-generated material consumed by Linux, which is the
+// direction that crosses in production (Windows sends its public key and
+// shows the code first). The envelope is also encrypted with real Windows
+// CNG crypto, playing the Pi's role for this fixture only, because Linux CI
+// cannot invoke the Windows binary to decrypt something Linux encrypts; this
+// is the reverse of the production envelope direction (Pi encrypts, Windows
+// decrypts), but validates the identical HKDF/AES-256-GCM wire format
+// (salt, AAD and nonce/tag conventions) that direction depends on. See
+// developer/handoffs/2026-09-16-step2.md for the full rationale.
+//
+// device_id/certificate_fingerprint/transaction_id/nonce below are fixed,
+// clearly-synthetic test constants standing in for values a real Pi would
+// issue; the companion and "Pi ephemeral" keypairs are freshly generated
+// each run, exactly like a real pairing exchange, and no key here is ever a
+// real paired device's credential.
+void write_pairing_interop_fixtures(const fs::path& pairing_fixtures) {
+    fs::create_directories(pairing_fixtures);
+    auto write_text = [&](const char* name, const std::string& text) {
+        std::ofstream out(pairing_fixtures / name);
+        out << text << '\n';
+        if (!out) throw std::runtime_error("Cannot write pairing interop fixture");
+    };
+    auto write_hex = [&](const char* name, std::span<const std::uint8_t> bytes) {
+        write_text(name, hex_text(bytes));
+    };
+    const std::string device_id = "cafef00dcafef00dcafef00dcafef00d";
+    const std::string fingerprint =
+        "cafef00dcafef00dcafef00dcafef00dcafef00dcafef00dcafef00dcafef00d";
+    const std::string transaction_id = "0123456789abcdef0123456789abcdef";
+    const std::string nonce = "fedcba9876543210fedcba9876543210";
+    write_text("device-id.hex", device_id);
+    write_text("certificate-fingerprint.hex", fingerprint);
+    write_text("transaction-id.hex", transaction_id);
+    write_text("nonce.hex", nonce);
+
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_KEY_HANDLE companion_key = nullptr, pi_key = nullptr;
+    BCRYPT_SECRET_HANDLE secret = nullptr;
+    auto close = [&] {
+        if (secret) BCryptDestroySecret(secret);
+        if (companion_key) BCryptDestroyKey(companion_key);
+        if (pi_key) BCryptDestroyKey(pi_key);
+        if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    };
+    try {
+        const wchar_t curve[] = L"Curve25519";
+        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0 ||
+            BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME,
+                              reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(curve)), sizeof(curve), 0) < 0)
+            throw std::runtime_error("BCrypt ECDH provider unavailable for pairing fixtures");
+        // The companion identity: the real key material a Windows client
+        // would generate for --pairing-url, exported the same way
+        // run_pairing() exports it for the POST body and for local decrypt.
+        if (BCryptGenerateKeyPair(alg, &companion_key, 255, 0) < 0 ||
+            BCryptFinalizeKeyPair(companion_key, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 companion key generation failed");
+        const auto companion_public = export_curve25519_wire_public(companion_key);
+        const auto companion_public_hex = hex_text(companion_public);
+        ULONG companion_private_size = 0;
+        if (BCryptExportKey(companion_key, nullptr, BCRYPT_ECCPRIVATE_BLOB, nullptr, 0,
+                            &companion_private_size, 0) < 0)
+            throw std::runtime_error("CNG companion private-key export failed");
+        std::vector<std::uint8_t> companion_private_blob(companion_private_size);
+        if (BCryptExportKey(companion_key, nullptr, BCRYPT_ECCPRIVATE_BLOB, companion_private_blob.data(),
+                            companion_private_size, &companion_private_size, 0) < 0 ||
+            companion_private_blob.size() < 32)
+            throw std::runtime_error("CNG companion private-key export failed");
+        // BCRYPT_ECCKEY_BLOB header (8 bytes) + X + Y + D, each cbKey (32)
+        // bytes for Curve25519; D (the last 32 bytes) is the raw private
+        // scalar, the same raw little-endian form OpenSSL's
+        // EVP_PKEY_new_raw_private_key expects on the Linux side.
+        const std::vector<std::uint8_t> companion_private(
+            companion_private_blob.end() - 32, companion_private_blob.end());
+        SecureZeroMemory(companion_private_blob.data(), companion_private_blob.size());
+
+        // The Pi's ephemeral key for this exchange: only its public half
+        // ever crosses to Windows in the real protocol (inside the
+        // envelope), so its private half stays local to this self-test
+        // process, exactly as it would stay local to the real Pi.
+        if (BCryptGenerateKeyPair(alg, &pi_key, 255, 0) < 0 || BCryptFinalizeKeyPair(pi_key, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 Pi ephemeral key generation failed");
+        const auto pi_public = export_curve25519_wire_public(pi_key);
+        const auto pi_public_hex = hex_text(pi_public);
+
+        if (BCryptSecretAgreement(pi_key, companion_key, &secret, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 pairing agreement failed");
+        std::array<std::uint8_t, 32> shared{};
+        ULONG shared_size = 0;
+        if (BCryptDeriveKey(secret, BCRYPT_KDF_RAW_SECRET, nullptr, shared.data(),
+                            static_cast<ULONG>(shared.size()), &shared_size, 0) < 0 ||
+            shared_size != shared.size())
+            throw std::runtime_error("CNG Curve25519 pairing shared-secret derivation failed");
+        // This fixture stands in for the Pi's OpenSSL-computed ECDH secret
+        // (see the identical fix and rationale in decrypt_pairing_envelope):
+        // CNG's raw KDF output is byte-reversed relative to RFC 7748/OpenSSL,
+        // so without this the fixture would not match what a real Pi derives.
+        std::reverse(shared.begin(), shared.end());
+
+        const std::string salt_text = "rapid-pairing-salt-v1|" + transaction_id + "|" + nonce;
+        const std::string info_text = "rapid-pairing-envelope-v1";
+        const std::string aad_text = "rapid-pairing-envelope-v1|" + device_id + "|" + transaction_id + "|" +
+            nonce + "|" + companion_public_hex + "|" + pi_public_hex;
+        const auto derived_vector = cng_hkdf_sha256(
+            shared, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(salt_text.data()), salt_text.size()),
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(info_text.data()), info_text.size()));
+        std::array<std::uint8_t, 32> envelope_key{};
+        std::copy(derived_vector.begin(), derived_vector.end(), envelope_key.begin());
+        // Stand-in for the 256-bit telemetry key the Pi would actually seal;
+        // fixed and obviously synthetic, never a real paired credential.
+        std::array<std::uint8_t, 32> envelope_plain{};
+        for (std::size_t i = 0; i < envelope_plain.size(); ++i)
+            envelope_plain[i] = static_cast<std::uint8_t>(i);
+        const std::array<std::uint8_t, 12> envelope_iv{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+        std::array<std::uint8_t, 16> envelope_tag{};
+        const auto envelope_cipher = cng_aes256_gcm(
+            true, envelope_key, envelope_iv,
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(aad_text.data()), aad_text.size()),
+            envelope_plain, &envelope_tag);
+
+        const auto verification_code = cng_pairing_verification_code(
+            device_id, fingerprint, transaction_id, nonce, companion_public_hex);
+        write_text("verification-code.txt", verification_code);
+        write_hex("companion-public-key.hex", companion_public);
+        write_hex("companion-private-key.hex", companion_private);
+        write_hex("pi-ephemeral-public-key.hex", pi_public);
+        write_hex("envelope-nonce.hex", envelope_iv);
+        write_hex("envelope-ciphertext.hex", envelope_cipher);
+        write_hex("envelope-tag.hex", envelope_tag);
+        write_hex("envelope-plaintext.hex", envelope_plain);
+
+        SecureZeroMemory(shared.data(), shared.size());
+        SecureZeroMemory(envelope_key.data(), envelope_key.size());
+        SecureZeroMemory(const_cast<std::uint8_t*>(companion_private.data()), companion_private.size());
+        close();
+    } catch (...) {
+        close();
+        throw;
+    }
+    std::cout << "Windows pairing interop fixtures written: " << pairing_fixtures.string() << '\n';
+}
+
 bool run_self_test(const fs::path& directory, int sample_rate) {
     pairing_crypto_self_test();
     const auto [ac_frame, ac_metadata] = assetto_self_test::run();
@@ -2708,6 +2865,7 @@ bool run_self_test(const fs::path& directory, int sample_rate) {
     save("ac-telemetry.hex", encoder.telemetry_packet(Game::ac, ac_frame, sample_rate, std::chrono::steady_clock::now()));
     save("ac-ended.hex", encoder.status_packet(Game::ac, V4StatusState::ended, "", 2, sample_rate));
     encoder.end_run();
+    write_pairing_interop_fixtures(directory / "pairing-fixtures");
     const auto test_config = directory / "portable-self-test.conf";
     {
         std::ofstream output(test_config);
