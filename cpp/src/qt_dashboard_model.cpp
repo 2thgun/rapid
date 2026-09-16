@@ -13,6 +13,8 @@
 #include <QProcess>
 #include <QTimer>
 #include <QUrlQuery>
+#include <QAbstractSocket>
+#include <QWebSocket>
 #include <QtMath>
 #include <cmath>
 #include <utility>
@@ -31,6 +33,16 @@ QUrl endpoint_path(QUrl endpoint, const QString &path, int port = -1) {
   endpoint.setPath(path);
   endpoint.setQuery(QUrlQuery());
   if (port > 0) endpoint.setPort(port);
+  return endpoint;
+}
+
+// The live push socket (#17) reuses the same host/port as the HTTP endpoint,
+// asking the native server for the coalesced display state rather than the
+// engineering telemetry view's raw sample-event history.
+QUrl live_socket_endpoint(QUrl endpoint) {
+  endpoint.setScheme(endpoint.scheme() == "https" ? "wss" : "ws");
+  endpoint.setPath("/api/v1/live");
+  endpoint.setQuery(QUrlQuery{{"mode", "state"}});
   return endpoint;
 }
 
@@ -77,16 +89,55 @@ QString file_signature(const QString &path) {
 DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
     : QObject(parent), endpoint_(std::move(endpoint)), network_(new QNetworkAccessManager(this)),
       calibration_timeout_(new QTimer(this)) {
+  live_socket_url_ = live_socket_endpoint(endpoint_);
   network_->setTransferTimeout(1800);
   calibration_timeout_->setSingleShot(true);
   connect(calibration_timeout_, &QTimer::timeout, this, &DashboardModel::calibrationTimedOut);
   QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
+  // The HTTP poll loop keeps running underneath the socket (it is a no-op
+  // fetch while the push is active, see pollLive()) so that losing the
+  // socket at any moment falls straight back to it without a gap.
   QTimer::singleShot(0, this, &DashboardModel::pollLive);
+  QTimer::singleShot(0, this, &DashboardModel::connectLiveSocket);
   QTimer::singleShot(0, this, &DashboardModel::pollNetworkMode);
   QTimer::singleShot(0, this, &DashboardModel::pollLogStatus);
   QTimer::singleShot(0, this, &DashboardModel::pollSetupStatus);
   QTimer::singleShot(0, this, &DashboardModel::pollPairingPanel);
+}
+
+void DashboardModel::connectLiveSocket() {
+  if (!live_socket_) {
+    live_socket_ = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+    connect(live_socket_, &QWebSocket::connected, this, &DashboardModel::liveSocketConnected);
+    connect(live_socket_, &QWebSocket::disconnected, this, &DashboardModel::liveSocketDisconnected);
+    connect(live_socket_, &QWebSocket::textMessageReceived, this, &DashboardModel::consumeLiveMessage);
+    connect(live_socket_, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error), this,
+            [this](QAbstractSocket::SocketError) { liveSocketDisconnected(); });
+  }
+  if (live_socket_->state() == QAbstractSocket::UnconnectedState)
+    live_socket_->open(live_socket_url_);
+}
+
+void DashboardModel::liveSocketConnected() {
+  live_push_active_ = true;
+  bump();
+}
+
+void DashboardModel::liveSocketDisconnected() {
+  const bool was_active = live_push_active_;
+  live_push_active_ = false;
+  if (was_active) bump();
+  // Retry with a fixed backoff; a display should not need a restart to
+  // recover a socket the server dropped or that never came up.
+  QTimer::singleShot(2000, this, &DashboardModel::connectLiveSocket);
+}
+
+void DashboardModel::consumeLiveMessage(const QString &message) {
+  const auto document = QJsonDocument::fromJson(message.toUtf8());
+  if (!document.isObject()) return;
+  live_push_active_ = true;
+  applyLiveState(document.object().toVariantMap());
 }
 
 QVariant DashboardModel::value(const QString &key) const { return state_.value(key); }
@@ -105,7 +156,10 @@ void DashboardModel::bump() {
 }
 
 void DashboardModel::pollLive() {
-  if (!live_request_pending_) {
+  // The socket is the primary source once connected; this loop keeps ticking
+  // regardless so a lost or never-established socket has a fallback already
+  // running instead of one that must be started from scratch.
+  if (!live_push_active_ && !live_request_pending_) {
     live_request_pending_ = true;
     auto *reply = network_->get(QNetworkRequest(endpoint_path(endpoint_, "/api/live")));
     connect(reply, &QNetworkReply::finished, this, [this, reply] { consumeLive(reply); });
@@ -366,21 +420,36 @@ void DashboardModel::pollCalibrationFile() {
 
 void DashboardModel::consumeLive(QNetworkReply *reply) {
   live_request_pending_ = false;
+  // A push already delivered a newer state while this fallback request was
+  // in flight; do not let a slower, now-stale HTTP reply overwrite it.
+  if (live_push_active_) {
+    reply->deleteLater();
+    return;
+  }
   if (reply->error() == QNetworkReply::NoError) {
     const auto document = QJsonDocument::fromJson(reply->readAll());
     if (document.isObject()) {
-      state_ = document.object().toVariantMap();
-      updateStatus();
+      applyLiveState(document.object().toVariantMap());
     } else {
-      state_["telemetry_fresh"] = false;
-      status_ = "Dashboard sent invalid telemetry";
+      applyLiveFailure("Dashboard sent invalid telemetry");
     }
   } else {
-    state_["telemetry_fresh"] = false;
-    status_ = "Dashboard connection lost";
+    applyLiveFailure("Dashboard connection lost");
   }
-  updateGraphHistory();
   reply->deleteLater();
+}
+
+void DashboardModel::applyLiveState(QVariantMap state) {
+  state_ = std::move(state);
+  updateStatus();
+  updateGraphHistory();
+  bump();
+}
+
+void DashboardModel::applyLiveFailure(const QString &message) {
+  state_["telemetry_fresh"] = false;
+  status_ = message;
+  updateGraphHistory();
   bump();
 }
 

@@ -49,5 +49,66 @@ const run = new Function(`
     'Inactive history continues aging');
 `);
 run();
-if (typeof document !== 'undefined') document.body.textContent = 'GRAPH_TESTS_PASSED';
-else console.log('Graph freshness, duplicate polling, gaps, restart and aging passed');
+
+// Live push (#17): pushed frames are coalesced to only the newest before
+// being rendered, and the HTTP poll is the fallback used only while no push
+// is active.
+const pushFunctions = source.match(
+  /function queuePush\(raw\) \{[\s\S]*?\n\}\nfunction flushPending\(\) \{[\s\S]*?\n\}/);
+if (!pushFunctions) throw new Error('Live push coalescing functions missing');
+const runPush = new Function('check', `
+  let livePushActive = false, pendingState = null;
+  const applied = [];
+  const applyState = state => applied.push(state);
+  ${pushFunctions[0]}
+  check(livePushActive === false, 'Push starts inactive until the socket delivers a frame');
+  queuePush(JSON.stringify({rpm: 1000}));
+  check(livePushActive === true, 'A pushed frame marks the live socket active');
+  queuePush(JSON.stringify({rpm: 2000}));
+  queuePush(JSON.stringify({rpm: 3000}));
+  check(applied.length === 0, 'Pushed frames wait for the next render frame');
+  flushPending();
+  check(applied.length === 1 && applied[0].rpm === 3000,
+    'Several pushes before one frame coalesce to only the newest');
+  flushPending();
+  check(applied.length === 1, 'A frame with no new push renders nothing extra');
+  queuePush('not valid json');
+  check(pendingState === null, 'A malformed push frame is dropped, not queued or thrown');
+`);
+runPush((ok, message) => { if (!ok) throw new Error(message); });
+
+const tickFunction = source.match(/async function tick\(\) \{[\s\S]*?\n\}/);
+if (!tickFunction) throw new Error('Dashboard fallback poll function missing');
+function runTick(livePushActiveInitial, fetchImpl) {
+  const calls = {fetch: 0, applyState: [], applyFailure: 0};
+  const harness = new Function('livePushActiveInitial', 'fetchImpl', 'calls', `
+    return (async () => {
+      let livePushActive = livePushActiveInitial;
+      const applyState = state => calls.applyState.push(state);
+      const applyFailure = () => { calls.applyFailure += 1; };
+      const setTimeout = () => {};
+      const AbortSignal = {timeout: () => undefined};
+      const fetch = async (...args) => { calls.fetch += 1; return fetchImpl(...args); };
+      ${tickFunction[0]}
+      await tick();
+    })();
+  `);
+  return harness(livePushActiveInitial, fetchImpl, calls).then(() => calls);
+}
+(async () => {
+  const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const polled = await runTick(false, async () => ({ok: true, json: async () => ({rpm: 42})}));
+  check(polled.fetch === 1 && polled.applyState.length === 1 && polled.applyState[0].rpm === 42,
+    'Fallback polling fetches and applies state while the push socket is down');
+  const suppressed = await runTick(true, async () => ({ok: true, json: async () => ({rpm: 42})}));
+  check(suppressed.fetch === 0,
+    'Fallback polling is suppressed while the live push socket is active');
+  const failed = await runTick(false, async () => { throw new Error('offline'); });
+  check(failed.applyFailure === 1 && failed.applyState.length === 0,
+    'A failed fallback fetch reports a connection failure rather than a partial state');
+  if (typeof document !== 'undefined') document.body.textContent = 'GRAPH_TESTS_PASSED';
+  else console.log('Graph freshness, duplicate polling, gaps, restart, aging, push coalescing and fallback-poll checks passed');
+})().catch(error => {
+  if (typeof document !== 'undefined') document.body.textContent = 'GRAPH_TESTS_FAILED: ' + error.message;
+  else { console.error(error); process.exitCode = 1; }
+});

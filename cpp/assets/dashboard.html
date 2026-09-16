@@ -255,64 +255,102 @@ fields['network-mode'].addEventListener('pointerdown', async event => {
   } catch (_) { fields['network-mode'].textContent = 'WIFI ERROR'; }
   setTimeout(() => { fields['network-mode'].disabled = false; }, 3000);
 });
+// Live data path (#17): a WebSocket push (/api/v1/live?mode=state) drives the
+// display at frame rate, with the previous HTTP poll of /api/live kept as a
+// fallback for whenever the socket is unavailable or drops. Only the newest
+// pushed state is ever rendered -- a message that arrives before the next
+// animation frame replaces, rather than queues behind, the one before it.
+function applyState(state) {
+  fields.status.textContent = !state.companion_connected
+    ? 'Waiting for daemon connection…'
+    : state.companion_daemon_state === 'driving'
+      ? state.telemetry_fresh ? `${state.simulator || 'Simulator'} connected` : 'Waiting for fresh telemetry'
+      : state.simulator
+        ? `${state.simulator} detected — waiting for driving`
+        : 'Daemon connected — waiting for simulator';
+  fields.sim.textContent = state.simulator || 'raPId';
+  const power = fields['power-status'];
+  power.className = state.power_limited ? 'limit' : state.power_limited_since_boot ? 'warn' : '';
+  power.textContent = !state.power_status_available ? 'PWR ?' :
+    state.power_limited ? 'PWR LIMIT' : state.power_limited_since_boot ? 'PWR WARN' : 'PWR OK';
+  fields.gear.textContent = state.gear === -1 ? 'R' : state.gear === 0 ? 'N' : state.gear ?? '—';
+  fields.rpm.textContent = state.rpm ?? '—';
+  fields['rpm-fill'].style.width = `${clamp((state.rpm || 0) / 100, 0, 100)}%`;
+  fields.speed.textContent = state.speed_kmh == null ? '—' : Math.round(state.speed_kmh);
+  fields.lap.textContent = formatTime(state.current_lap_ms);
+  fields.last.textContent = formatTime(state.completed_lap_ms);
+  fields.delta.textContent = state.delta_ms == null ? '—' :
+    `${state.delta_ms > 0 ? '+' : ''}${formatTime(Math.abs(state.delta_ms))}`;
+  const throttle = clamp(Number(state.throttle) || 0, 0, 1);
+  const brake = clamp(Number(state.brake) || 0, 0, 1);
+  fields['throttle-value'].textContent = state.throttle == null ? '—' : `${Math.round(throttle * 100)}%`;
+  fields['throttle-fill'].style.width = `${throttle * 100}%`;
+  fields['brake-value'].textContent = state.brake == null ? '—' : `${Math.round(brake * 100)}%`;
+  fields['brake-fill'].style.width = `${brake * 100}%`;
+  const steering = Number(state.steering_angle) || 0;
+  fields['steering-value'].textContent = state.steering_angle == null ? '—' : `${steering >= 0 ? '+' : ''}${Math.round(steering * 180 / Math.PI)}°`;
+  fields['steering-wheel'].style.transform = `rotate(${steering * 180 / Math.PI}deg)`;
+  const gx = Number(state.g_x) || 0;
+  const gz = Number(state.g_z) || 0;
+  fields['g-dot'].style.left = `${50 + clamp(gx / 2, -1, 1) * 42}%`;
+  fields['g-dot'].style.top = `${50 + clamp(gz / 2, -1, 1) * 42}%`;
+  fields['g-value'].textContent = state.g_x == null ? '—' : `${Math.hypot(gx, gz).toFixed(2)}g`;
+  fields['lap-number'].textContent = state.lap_number ?? '—';
+  addGraphSample(state);
+  setMetric('timing-lap', formatTime(state.current_lap_ms)); setMetric('timing-last', formatTime(state.completed_lap_ms));
+  setMetric('timing-best', formatTime(state.best_lap_ms));
+  setMetric('timing-delta', state.delta_ms == null ? null : `${state.delta_ms > 0 ? '+' : ''}${formatTime(Math.abs(state.delta_ms))}`);
+  setMetric('timing-number', state.lap_number); setMetric('track-name', state.track_name); setMetric('car-name', state.car_model); setMetric('driver-name', state.driver_name);
+  const sector = number => { const time = state[`sector_${number}_ms`], delta = state[`sector_${number}_delta_ms`]; return time == null ? null : `${formatTime(time)}${delta == null ? '' : ` (${delta > 0 ? '+' : ''}${formatTime(Math.abs(delta))})`}`; };
+  setMetric('sector-1', sector(1)); setMetric('sector-2', sector(2)); setMetric('sector-3', sector(3));
+  setMetric('lap-position', state.lap_position == null ? null : `${Math.round((state.lap_position > 1 ? state.lap_position / 100 : state.lap_position) * 100)}%`);
+  setMetric('recording-state', state.recording ? 'REC' : 'IDLE'); setMetric('sample-count', state.recorded_samples);
+  setMetric('fuel', state.fuel == null ? null : `${state.fuel.toFixed(1)} L`); setMetric('tc', state.tc); setMetric('abs', state.abs_activity == null ? null : `${Math.round(state.abs_activity * 100)}%`); setMetric('limiter', state.pit_limiter == null ? null : state.pit_limiter ? 'ON' : 'OFF');
+  setMetric('wheel-front', pair(state.wheel_speed_fl, state.wheel_speed_fr, ' rad/s')); setMetric('wheel-rear', pair(state.wheel_speed_rl, state.wheel_speed_rr, ' rad/s'));
+  setMetric('damage-front', state.damage_front == null ? null : `${Math.round(state.damage_front * 100)}%`); setMetric('damage-rear', state.damage_rear == null ? null : `${Math.round(state.damage_rear * 100)}%`);
+  const tyre = corner => state[`core_temp_${corner}`] == null || state[`pressure_${corner}`] == null ? null : `${Math.round(state[`core_temp_${corner}`])} C ${state[`pressure_${corner}`].toFixed(1)}`;
+  setMetric('tyre-fl', tyre('fl')); setMetric('tyre-fr', tyre('fr')); setMetric('tyre-rl', tyre('rl')); setMetric('tyre-rr', tyre('rr'));
+  setMetric('suspension-front', pair(state.suspension_fl, state.suspension_fr)); setMetric('suspension-rear', pair(state.suspension_rl, state.suspension_rr));
+}
+function applyFailure() {
+  fields.status.textContent = 'Dashboard connection lost';
+  addGraphSample({});
+}
+let livePushActive = false, pendingState = null, reconnectTimer = null;
+function queuePush(raw) {
+  try { pendingState = JSON.parse(raw); livePushActive = true; } catch (_) { /* ignore a malformed push frame */ }
+}
+function flushPending() {
+  if (!pendingState) return;
+  const state = pendingState;
+  pendingState = null;
+  applyState(state);
+}
+function renderFrame() { flushPending(); requestAnimationFrame(renderFrame); }
+requestAnimationFrame(renderFrame);
+function connectLive() {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/live?mode=state`);
+  ws.onopen = () => { livePushActive = true; };
+  ws.onmessage = event => queuePush(event.data);
+  ws.onclose = ws.onerror = () => {
+    livePushActive = false;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectLive, 2000);
+  };
+}
+connectLive();
 async function tick() {
-  try {
-    const response = await fetch('/api/live', {cache: 'no-store', signal: AbortSignal.timeout(2000)});
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const state = await response.json();
-    fields.status.textContent = !state.companion_connected
-      ? 'Waiting for daemon connection…'
-      : state.companion_daemon_state === 'driving'
-        ? state.telemetry_fresh ? `${state.simulator || 'Simulator'} connected` : 'Waiting for fresh telemetry'
-        : state.simulator
-          ? `${state.simulator} detected — waiting for driving`
-          : 'Daemon connected — waiting for simulator';
-    fields.sim.textContent = state.simulator || 'raPId';
-    const power = fields['power-status'];
-    power.className = state.power_limited ? 'limit' : state.power_limited_since_boot ? 'warn' : '';
-    power.textContent = !state.power_status_available ? 'PWR ?' :
-      state.power_limited ? 'PWR LIMIT' : state.power_limited_since_boot ? 'PWR WARN' : 'PWR OK';
-    fields.gear.textContent = state.gear === -1 ? 'R' : state.gear === 0 ? 'N' : state.gear ?? '—';
-    fields.rpm.textContent = state.rpm ?? '—';
-    fields['rpm-fill'].style.width = `${clamp((state.rpm || 0) / 100, 0, 100)}%`;
-    fields.speed.textContent = state.speed_kmh == null ? '—' : Math.round(state.speed_kmh);
-    fields.lap.textContent = formatTime(state.current_lap_ms);
-    fields.last.textContent = formatTime(state.completed_lap_ms);
-    fields.delta.textContent = state.delta_ms == null ? '—' :
-      `${state.delta_ms > 0 ? '+' : ''}${formatTime(Math.abs(state.delta_ms))}`;
-    const throttle = clamp(Number(state.throttle) || 0, 0, 1);
-    const brake = clamp(Number(state.brake) || 0, 0, 1);
-    fields['throttle-value'].textContent = state.throttle == null ? '—' : `${Math.round(throttle * 100)}%`;
-    fields['throttle-fill'].style.width = `${throttle * 100}%`;
-    fields['brake-value'].textContent = state.brake == null ? '—' : `${Math.round(brake * 100)}%`;
-    fields['brake-fill'].style.width = `${brake * 100}%`;
-    const steering = Number(state.steering_angle) || 0;
-    fields['steering-value'].textContent = state.steering_angle == null ? '—' : `${steering >= 0 ? '+' : ''}${Math.round(steering * 180 / Math.PI)}°`;
-    fields['steering-wheel'].style.transform = `rotate(${steering * 180 / Math.PI}deg)`;
-    const gx = Number(state.g_x) || 0;
-    const gz = Number(state.g_z) || 0;
-    fields['g-dot'].style.left = `${50 + clamp(gx / 2, -1, 1) * 42}%`;
-    fields['g-dot'].style.top = `${50 + clamp(gz / 2, -1, 1) * 42}%`;
-    fields['g-value'].textContent = state.g_x == null ? '—' : `${Math.hypot(gx, gz).toFixed(2)}g`;
-    fields['lap-number'].textContent = state.lap_number ?? '—';
-    addGraphSample(state);
-    setMetric('timing-lap', formatTime(state.current_lap_ms)); setMetric('timing-last', formatTime(state.completed_lap_ms));
-    setMetric('timing-best', formatTime(state.best_lap_ms));
-    setMetric('timing-delta', state.delta_ms == null ? null : `${state.delta_ms > 0 ? '+' : ''}${formatTime(Math.abs(state.delta_ms))}`);
-    setMetric('timing-number', state.lap_number); setMetric('track-name', state.track_name); setMetric('car-name', state.car_model); setMetric('driver-name', state.driver_name);
-    const sector = number => { const time = state[`sector_${number}_ms`], delta = state[`sector_${number}_delta_ms`]; return time == null ? null : `${formatTime(time)}${delta == null ? '' : ` (${delta > 0 ? '+' : ''}${formatTime(Math.abs(delta))})`}`; };
-    setMetric('sector-1', sector(1)); setMetric('sector-2', sector(2)); setMetric('sector-3', sector(3));
-    setMetric('lap-position', state.lap_position == null ? null : `${Math.round((state.lap_position > 1 ? state.lap_position / 100 : state.lap_position) * 100)}%`);
-    setMetric('recording-state', state.recording ? 'REC' : 'IDLE'); setMetric('sample-count', state.recorded_samples);
-    setMetric('fuel', state.fuel == null ? null : `${state.fuel.toFixed(1)} L`); setMetric('tc', state.tc); setMetric('abs', state.abs_activity == null ? null : `${Math.round(state.abs_activity * 100)}%`); setMetric('limiter', state.pit_limiter == null ? null : state.pit_limiter ? 'ON' : 'OFF');
-    setMetric('wheel-front', pair(state.wheel_speed_fl, state.wheel_speed_fr, ' rad/s')); setMetric('wheel-rear', pair(state.wheel_speed_rl, state.wheel_speed_rr, ' rad/s'));
-    setMetric('damage-front', state.damage_front == null ? null : `${Math.round(state.damage_front * 100)}%`); setMetric('damage-rear', state.damage_rear == null ? null : `${Math.round(state.damage_rear * 100)}%`);
-    const tyre = corner => state[`core_temp_${corner}`] == null || state[`pressure_${corner}`] == null ? null : `${Math.round(state[`core_temp_${corner}`])} C ${state[`pressure_${corner}`].toFixed(1)}`;
-    setMetric('tyre-fl', tyre('fl')); setMetric('tyre-fr', tyre('fr')); setMetric('tyre-rl', tyre('rl')); setMetric('tyre-rr', tyre('rr'));
-    setMetric('suspension-front', pair(state.suspension_fl, state.suspension_fr)); setMetric('suspension-rear', pair(state.suspension_rl, state.suspension_rr));
-  } catch (error) {
-    fields.status.textContent = 'Dashboard connection lost';
-    addGraphSample({});
+  // The socket is the primary source once connected; this fallback keeps
+  // polling underneath it so a lost or never-established socket already has
+  // a running replacement instead of one started from scratch.
+  if (!livePushActive) {
+    try {
+      const response = await fetch('/api/live', {cache: 'no-store', signal: AbortSignal.timeout(2000)});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      applyState(await response.json());
+    } catch (error) {
+      applyFailure();
+    }
   }
   setTimeout(tick, 200);
 }
