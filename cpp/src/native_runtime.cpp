@@ -11,6 +11,16 @@
 
 namespace rapid::native {
 namespace {
+double percentile(const std::deque<double> &values, double rank) {
+  if (values.empty())
+    return 0;
+  std::vector<double> sorted(values.begin(), values.end());
+  std::sort(sorted.begin(), sorted.end());
+  const auto index = static_cast<std::size_t>(
+      std::ceil(rank * double(sorted.size() - 1)));
+  return sorted[index];
+}
+
 const std::set<std::string> &live_channels() {
   static const auto keys = [] {
     struct Channel {
@@ -120,6 +130,30 @@ void Runtime::sectors(Json &f) {
 }
 bool Runtime::receive(const std::string &payload, const std::string &host) {
   std::lock_guard lock(mutex_);
+  const auto processing_started = monotonic();
+  const auto record_metrics = [&](const Json &message) {
+    const auto stream = string(message, "session_id");
+    if (!stream.empty() && stream != metrics_session_) {
+      metrics_session_ = stream;
+      sender_lag_ms_.clear();
+      process_ms_.clear();
+    }
+    if (message.contains("_received_monotonic") &&
+        message.contains("monotonic_us")) {
+      const auto lag =
+          (number(message, "_received_monotonic") -
+           number(message, "monotonic_us") / 1000000.0) *
+          1000;
+      if (std::isfinite(lag))
+        sender_lag_ms_.push_back(lag);
+    }
+    process_ms_.push_back((monotonic() - processing_started) * 1000);
+    constexpr std::size_t max_samples = 256;
+    if (sender_lag_ms_.size() > max_samples)
+      sender_lag_ms_.pop_front();
+    if (process_ms_.size() > max_samples)
+      process_ms_.pop_front();
+  };
   try {
     if (!source_.empty() && source_ != host)
       return false;
@@ -267,6 +301,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
       }
       if (v4 && m.contains("session_id") && m["session_id"].is_string())
         state_["session_id"] = m["session_id"];
+      record_metrics(m);
       return true;
     }
     if (identity != session_ && version == 3)
@@ -319,6 +354,8 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     state_["session_id"] = m.value("session_id", Json());
     state_["session_active"] = true;
     state_["session_name"] = m.value("session_name", Json());
+    record_metrics(m);
+    m.erase("_received_monotonic");
     if (version == 3) {
       m["telemetry"] = frame;
       try {
@@ -409,6 +446,11 @@ Json Runtime::snapshot() const {
       result["session_id"].is_string())
     recorder_status.erase("session_id");
   result.update(recorder_status);
+  result["sender_lag_ms"] = {
+      {"p50", percentile(sender_lag_ms_, .50)},
+      {"p95", percentile(sender_lag_ms_, .95)}};
+  result["process_ms"] = {{"p50", percentile(process_ms_, .50)},
+                          {"p95", percentile(process_ms_, .95)}};
   result["upload_enabled"] = config_.upload_enabled;
   result["runtime"] = "cpp";
   return result;

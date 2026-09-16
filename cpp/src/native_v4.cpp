@@ -108,6 +108,7 @@ Json receive_v4(Database &store, const std::string &bytes,
 
 Json receive_v4(Database &store, const std::string &bytes,
                 const std::string &key, const std::string &peer_namespace) {
+  const auto received_monotonic = monotonic();
   if (key.size() != 32 || bytes.size() < 84 || bytes.size() > 4096)
     throw AuthenticationError(
         "v4 authentication unavailable or invalid packet length");
@@ -247,6 +248,7 @@ Json receive_v4(Database &store, const std::string &bytes,
     check(!metadata.empty(), "missing v4 run metadata");
   message.update(metadata);
   message["_wire_gap"] = std::min<std::uint64_t>(gap, 1000000);
+  message["_received_monotonic"] = received_monotonic;
   // The sequence includes control packets, so gaps are not missing sample
   // counts.
   message["_packet_gap"] = 0;

@@ -113,6 +113,8 @@ class Runtime {
   std::vector<std::string> paired_keys_;
   int best_sectors_[3]{};
   std::deque<std::pair<std::uint64_t, Json>> events_;
+  std::string metrics_session_;
+  std::deque<double> sender_lag_ms_, process_ms_;
   std::uint64_t next_event_ = 1;
   void sectors(Json &frame);
 

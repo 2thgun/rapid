@@ -97,6 +97,12 @@ int main(int argc, char **argv) {
               "pedals and metadata");
       require(state["recording"] == true && state["recorded_samples"] == 1,
               "v4 recording active");
+      require(state["sender_lag_ms"]["p50"].is_number() &&
+                  state["sender_lag_ms"]["p95"].is_number() &&
+                  state["sender_lag_ms"]["p95"] >= state["sender_lag_ms"]["p50"] &&
+                  state["process_ms"]["p50"].is_number() &&
+                  state["process_ms"]["p95"].is_number(),
+              "v4 latency percentiles exposed");
       require(r.receive(driving, "127.0.0.1"),
               "authenticated driving heartbeat");
       require(r.receive(next, "127.0.0.1"), "telemetry after heartbeat");

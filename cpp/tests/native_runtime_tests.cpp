@@ -65,6 +65,9 @@ int main(int argc, char **argv) {
       require(!live.snapshot()["telemetry_fresh"].get<bool>(), "no sample is not fresh");
       require(live.receive(sample().dump(), "127.0.0.1"), "freshness sample");
       require(live.snapshot()["telemetry_fresh"] == true, "new sample is fresh");
+      require(live.snapshot()["process_ms"]["p50"].is_number() &&
+                  live.snapshot()["process_ms"]["p95"].is_number(),
+              "processing latency percentiles exposed");
       std::this_thread::sleep_for(std::chrono::milliseconds(1600));
       Json heartbeat = {{"version", 3}, {"type", "status"}, {"state", "driving"}, {"simulator", "ACC"}};
       require(live.receive(heartbeat.dump(), "127.0.0.1"), "driving heartbeat");
