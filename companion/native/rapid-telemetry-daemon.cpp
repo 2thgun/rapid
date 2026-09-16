@@ -302,57 +302,63 @@ struct Channel {
     const char* unit;
     const char* key;
     double scale;
+    int dec;
 };
 
+// Keep this table's name/short_name/dec columns identical to
+// cpp/include/rapid/channels.inc (owned by s7-motec/#19); the companion
+// cannot #include that file because it is a separate Visual Studio project.
+// unit/scale are owned per-channel by other steps (e.g. steering's unit is
+// s4-steering's/#18) and are intentionally left untouched here.
 constexpr std::array<Channel, field_count> kChannels{{
-    {"Time", "Time", "s", "elapsed", 1.0},
-    {"Throttle Position", "Throttle", "%", "throttle", 100.0},
-    {"Brake Position", "Brake", "%", "brake", 100.0},
-    {"Fuel Level", "Fuel", "l", "fuel", 1.0},
-    {"Gear", "Gear", "", "gear", 1.0},
-    {"Engine RPM", "RPM", "rpm", "rpm", 1.0},
-    {"Steering Position", "Steer", "rad", "steering_angle", 1.0},
-    {"Ground Speed", "Speed", "km/h", "speed_kmh", 1.0},
-    {"Velocity X", "Vel X", "m/s", "velocity_x", 1.0},
-    {"Velocity Y", "Vel Y", "m/s", "velocity_y", 1.0},
-    {"Velocity Z", "Vel Z", "m/s", "velocity_z", 1.0},
-    {"G Force X", "G X", "g", "g_x", 1.0},
-    {"G Force Y", "G Y", "g", "g_y", 1.0},
-    {"G Force Z", "G Z", "g", "g_z", 1.0},
-    {"Wheel Slip FL", "Slip FL", "", "wheel_slip_fl", 1.0},
-    {"Wheel Slip FR", "Slip FR", "", "wheel_slip_fr", 1.0},
-    {"Wheel Slip RL", "Slip RL", "", "wheel_slip_rl", 1.0},
-    {"Wheel Slip RR", "Slip RR", "", "wheel_slip_rr", 1.0},
-    {"Tyre Pressure FL", "Press FL", "psi", "pressure_fl", 1.0},
-    {"Tyre Pressure FR", "Press FR", "psi", "pressure_fr", 1.0},
-    {"Tyre Pressure RL", "Press RL", "psi", "pressure_rl", 1.0},
-    {"Tyre Pressure RR", "Press RR", "psi", "pressure_rr", 1.0},
-    {"Wheel Speed FL", "WhlSp FL", "rad/s", "wheel_speed_fl", 1.0},
-    {"Wheel Speed FR", "WhlSp FR", "rad/s", "wheel_speed_fr", 1.0},
-    {"Wheel Speed RL", "WhlSp RL", "rad/s", "wheel_speed_rl", 1.0},
-    {"Wheel Speed RR", "WhlSp RR", "rad/s", "wheel_speed_rr", 1.0},
-    {"Tyre Core Temp FL", "Core FL", "C", "core_temp_fl", 1.0},
-    {"Tyre Core Temp FR", "Core FR", "C", "core_temp_fr", 1.0},
-    {"Tyre Core Temp RL", "Core RL", "C", "core_temp_rl", 1.0},
-    {"Tyre Core Temp RR", "Core RR", "C", "core_temp_rr", 1.0},
-    {"Suspension Travel FL", "Susp FL", "m", "suspension_fl", 1.0},
-    {"Suspension Travel FR", "Susp FR", "m", "suspension_fr", 1.0},
-    {"Suspension Travel RL", "Susp RL", "m", "suspension_rl", 1.0},
-    {"Suspension Travel RR", "Susp RR", "m", "suspension_rr", 1.0},
-    {"TC Activity", "TC", "", "tc", 1.0},
-    {"Heading", "Heading", "rad", "heading", 1.0},
-    {"Pitch", "Pitch", "rad", "pitch", 1.0},
-    {"Roll", "Roll", "rad", "roll", 1.0},
-    {"Damage Front", "Dmg F", "", "damage_front", 1.0},
-    {"Damage Rear", "Dmg R", "", "damage_rear", 1.0},
-    {"Damage Left", "Dmg L", "", "damage_left", 1.0},
-    {"Damage Right", "Dmg Rgt", "", "damage_right", 1.0},
-    {"Damage Center", "Dmg C", "", "damage_center", 1.0},
-    {"Pit Limiter", "Pit Lim", "", "pit_limiter", 1.0},
-    {"ABS Activity", "ABS", "", "abs", 1.0},
-    {"Lap Number", "Lap", "", "lap_number", 1.0},
-    {"Lap Time", "Lap Time", "s", "current_lap_ms", 0.001},
-    {"Lap Position", "Lap Pos", "%", "lap_position", 100.0},
+    {"Time", "Time", "s", "elapsed", 1.0, 3},
+    {"Throttle Pos", "Throttle", "%", "throttle", 100.0, 1},
+    {"Brake Pos", "Brake", "%", "brake", 100.0, 1},
+    {"Fuel Level", "Fuel", "l", "fuel", 1.0, 2},
+    {"Gear", "Gear", "", "gear", 1.0, 0},
+    {"Engine RPM", "RPM", "rpm", "rpm", 1.0, 0},
+    {"Steered Angle", "Steer", "rad", "steering_angle", 1.0, 3},
+    {"Ground Speed", "Speed", "km/h", "speed_kmh", 1.0, 1},
+    {"Velocity Lat", "Vel Lat", "m/s", "velocity_x", 1.0, 2},
+    {"Velocity Vert", "Vel Vert", "m/s", "velocity_y", 1.0, 2},
+    {"Velocity Long", "Vel Long", "m/s", "velocity_z", 1.0, 2},
+    {"G Force Lat", "G Lat", "g", "g_x", 1.0, 2},
+    {"G Force Vert", "G Vert", "g", "g_y", 1.0, 2},
+    {"G Force Long", "G Long", "g", "g_z", 1.0, 2},
+    {"Wheel Slip FL", "Slip FL", "", "wheel_slip_fl", 1.0, 2},
+    {"Wheel Slip FR", "Slip FR", "", "wheel_slip_fr", 1.0, 2},
+    {"Wheel Slip RL", "Slip RL", "", "wheel_slip_rl", 1.0, 2},
+    {"Wheel Slip RR", "Slip RR", "", "wheel_slip_rr", 1.0, 2},
+    {"Tyre Press FL", "Press FL", "psi", "pressure_fl", 1.0, 1},
+    {"Tyre Press FR", "Press FR", "psi", "pressure_fr", 1.0, 1},
+    {"Tyre Press RL", "Press RL", "psi", "pressure_rl", 1.0, 1},
+    {"Tyre Press RR", "Press RR", "psi", "pressure_rr", 1.0, 1},
+    {"Wheel Speed FL", "WhlSp FL", "rad/s", "wheel_speed_fl", 1.0, 1},
+    {"Wheel Speed FR", "WhlSp FR", "rad/s", "wheel_speed_fr", 1.0, 1},
+    {"Wheel Speed RL", "WhlSp RL", "rad/s", "wheel_speed_rl", 1.0, 1},
+    {"Wheel Speed RR", "WhlSp RR", "rad/s", "wheel_speed_rr", 1.0, 1},
+    {"Tyre Temp FL", "Temp FL", "C", "core_temp_fl", 1.0, 1},
+    {"Tyre Temp FR", "Temp FR", "C", "core_temp_fr", 1.0, 1},
+    {"Tyre Temp RL", "Temp RL", "C", "core_temp_rl", 1.0, 1},
+    {"Tyre Temp RR", "Temp RR", "C", "core_temp_rr", 1.0, 1},
+    {"Suspension Travel FL", "Susp FL", "m", "suspension_fl", 1.0, 3},
+    {"Suspension Travel FR", "Susp FR", "m", "suspension_fr", 1.0, 3},
+    {"Suspension Travel RL", "Susp RL", "m", "suspension_rl", 1.0, 3},
+    {"Suspension Travel RR", "Susp RR", "m", "suspension_rr", 1.0, 3},
+    {"TC Activity", "TC", "", "tc", 1.0, 0},
+    {"Heading", "Heading", "rad", "heading", 1.0, 3},
+    {"Pitch", "Pitch", "rad", "pitch", 1.0, 3},
+    {"Roll", "Roll", "rad", "roll", 1.0, 3},
+    {"Damage Front", "Dmg F", "", "damage_front", 1.0, 2},
+    {"Damage Rear", "Dmg R", "", "damage_rear", 1.0, 2},
+    {"Damage Left", "Dmg L", "", "damage_left", 1.0, 2},
+    {"Damage Right", "Dmg Rgt", "", "damage_right", 1.0, 2},
+    {"Damage Center", "Dmg C", "", "damage_center", 1.0, 2},
+    {"Pit Limiter", "Pit Lim", "", "pit_limiter", 1.0, 0},
+    {"ABS Activity", "ABS", "", "abs", 1.0, 0},
+    {"Lap Number", "Lap", "", "lap_number", 1.0, 0},
+    {"Lap Time", "Lap Time", "s", "current_lap_ms", 0.001, 3},
+    {"Lap Position", "Lap Pos", "%", "lap_position", 100.0, 1},
 }};
 
 constexpr std::uint64_t field_bit(Field field) {
@@ -1897,7 +1903,8 @@ private:
             write_value<std::uint16_t>(output, 0x07); write_value<std::uint16_t>(output, 4);
             write_value<std::uint16_t>(output, static_cast<std::uint16_t>(sample_rate_));
             write_value<std::int16_t>(output, 0); write_value<std::int16_t>(output, 1);
-            write_value<std::int16_t>(output, 1); write_value<std::int16_t>(output, 0);
+            write_value<std::int16_t>(output, 1);
+            write_value<std::int16_t>(output, static_cast<std::int16_t>(kChannels[i].dec));
             write_fixed(output, kChannels[i].name, 32); write_fixed(output, kChannels[i].short_name, 8);
             write_fixed(output, kChannels[i].unit, 12); write_zeros(output, 40);
             next_data += static_cast<std::uint32_t>(sample_count_ * sizeof(float));

@@ -26,6 +26,7 @@ const std::set<std::string> &live_channels() {
     struct Channel {
       const char *name, *short_name, *unit, *key;
       double scale;
+      int dec;
     };
     const Channel channels[] = {
 #include "rapid/channels.inc"

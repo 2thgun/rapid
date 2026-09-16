@@ -13,6 +13,7 @@ namespace {
 struct Channel {
   const char *name, *short_name, *unit, *key;
   double scale;
+  int dec;
 };
 const Channel channels[] = {
 #include "rapid/channels.inc"
@@ -110,7 +111,7 @@ void write_ld(const fs::path &spool, const fs::path &target, const Json &state,
     little(out, 0, 2);
     little(out, 1, 2);
     little(out, 1, 2);
-    little(out, 0, 2);
+    little(out, static_cast<std::uint16_t>(c.dec), 2);
     fixed(out, c.name, 32);
     fixed(out, c.short_name, 8);
     fixed(out, c.unit, 12);
