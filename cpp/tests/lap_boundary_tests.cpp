@@ -154,6 +154,7 @@ void test_session_c28a_lap6_wrap(const fs::path &fixtures, const fs::path &root)
   log_output = capture_stderr([&] {
     replay_fixture(recorder, fixture);
     recorder.finish();
+    recorder.wait_idle(); // publication runs on the recorder's writer (#17)
   });
   auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
   auto manifest = Json::parse(read_file(path / "manifest.json"));
@@ -178,6 +179,7 @@ void test_session_4e6de929_six_laps(const fs::path &fixtures, const fs::path &ro
   log_output = capture_stderr([&] {
     replay_fixture(recorder, fixture);
     recorder.finish();
+    recorder.wait_idle(); // publication runs on the recorder's writer (#17)
   });
   auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
   auto manifest = Json::parse(read_file(path / "manifest.json"));

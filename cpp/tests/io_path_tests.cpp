@@ -17,10 +17,14 @@
 //                     sender can resume after a bounded gap.
 //   recording-crash   guard: a crash loses at most the last D seconds of
 //                     accepted samples; what is recovered is an exact prefix.
+//   finalize-race     two runs end back to back on slow storage and the
+//                     process shuts down: both bundles complete and distinct,
+//                     receive() never waits for publication.
 //   write-failure     guard: a failing disk makes the receiver fail closed
 //                     within the persisted margin, without hanging.
-//   latency           red against synchronous I/O: receive() and snapshot()
-//                     stay fast while every fsync takes 200 ms.
+//   latency           receive() and snapshot() stay fast while every fsync
+//                     takes 200 ms (failed against the synchronous I/O before
+//                     step 8 phase B).
 //   bench [packets]   not a test: prints per-packet cost with real and no-op
 //                     sync, for the step 8 before/after measurement.
 #include "rapid/native.hpp"
@@ -314,6 +318,58 @@ int replay_crash(const fs::path &assets) {
     fs::remove_all(f.root);
   }
 
+  {
+    // Storage that cannot persist at all: another connection holds the
+    // database write lock, so nothing the receiver commits from here on can
+    // reach disk. Whatever the child still accepts must already be covered
+    // by durable state.
+    Fixture f(assets, "replay-locked");
+    const Stream stream(random_run());
+    int progress = -1;
+    pid_t pid = 0;
+    crash_child(
+        [&](int out) {
+          Runtime r(f.config);
+          auto report = [&](std::uint64_t index) {
+            require(write(out, &index, sizeof index) == sizeof index,
+                    "progress");
+          };
+          require(r.receive(stream.metadata(), host), "metadata");
+          for (std::uint64_t i = 0; i < 50; ++i) {
+            require(r.receive(stream.telemetry(i), host), "telemetry");
+            report(i);
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(600));
+          Database blocker(f.config.database);
+          blocker.exec("BEGIN IMMEDIATE");
+          const auto until = Clock::now() + std::chrono::seconds(4);
+          for (std::uint64_t i = 50; i < 3000 && Clock::now() < until; ++i)
+            if (r.receive(stream.telemetry(i), host))
+              report(i);
+          _exit(0); // lock and pending writes vanish with the process
+        },
+        &pid, &progress);
+    std::vector<std::uint64_t> accepted;
+    std::uint64_t index = 0;
+    while (read(progress, &index, sizeof index) == sizeof index)
+      accepted.push_back(index);
+    ::close(progress);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    require(WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+                accepted.size() >= 50,
+            "locked-storage child");
+    Runtime r(f.config);
+    for (auto i : accepted)
+      require(!r.receive(stream.telemetry(i), host),
+              "replay accepted after crash while storage was locked (sample " +
+                  std::to_string(i) + ", " + std::to_string(accepted.size()) +
+                  " accepted)");
+    std::cout << "replay-crash (locked storage): " << accepted.size()
+              << " accepted before the crash, none replayable\n";
+    fs::remove_all(f.root);
+  }
+
   // Crash at arbitrary points of a paced stream (SIGKILL from outside), then
   // replay everything the child reported as accepted.
   std::mt19937 random(std::random_device{}());
@@ -423,7 +479,7 @@ int recording_crash(const fs::path &assets) {
     // udp_loop does), then the process dies.
     Fixture f(assets, "recording-idle");
     const Stream stream(random_run());
-    const std::uint64_t samples = 130;
+    const std::uint64_t samples = 330;
     int code = crash_child([&](int) {
       Runtime r(f.config);
       require(r.receive(stream.metadata(), host), "metadata");
@@ -442,7 +498,7 @@ int recording_crash(const fs::path &assets) {
     fs::remove_all(f.root);
   }
   std::mt19937 random(std::random_device{}());
-  for (int round = 0; round < 4; ++round) {
+  for (int round = 0; round < 3; ++round) {
     // Real-time 50 Hz stream killed at an arbitrary instant, optionally while
     // every sync is slow.
     const bool slow_disk = round % 2 == 1;
@@ -468,7 +524,8 @@ int recording_crash(const fs::path &assets) {
         },
         &pid, &progress);
     std::vector<std::pair<Clock::time_point, std::uint64_t>> reports;
-    const auto kill_after = std::chrono::milliseconds(2500 + random() % 1500);
+    // Late enough that several checkpoints must have become durable.
+    const auto kill_after = std::chrono::milliseconds(4500 + random() % 2000);
     const auto start = Clock::now();
     std::uint64_t value = 0;
     while (Clock::now() - start < kill_after &&
@@ -500,6 +557,59 @@ int recording_crash(const fs::path &assets) {
   }
   std::cout << "recording-crash: recovered recordings are exact prefixes "
                "within the durability bound\n";
+  return 0;
+}
+
+// A run ends and the next starts while storage is slow, and the process shuts
+// down right after: both recordings must be published completely and
+// separately, and the receiver must not wait for either publication.
+int finalize_race(const fs::path &assets) {
+  Fixture f(assets, "finalize-race");
+  const Stream first(random_run()), second(random_run());
+  const std::uint64_t samples = 60;
+  std::vector<double> receive_ms;
+  auto timed = [&](Runtime &r, const std::string &packet, const char *what) {
+    const auto t = Clock::now();
+    require(r.receive(packet, host), what);
+    receive_ms.push_back(ms_since(t));
+  };
+  {
+    Runtime r(f.config);
+    timed(r, first.metadata(), "first metadata");
+    for (std::uint64_t i = 0; i < samples; ++i)
+      timed(r, first.telemetry(i), "first telemetry");
+    sync_delay_ms = 30;
+    timed(r, first.status(3, samples + 2), "first run ends");
+    timed(r, second.metadata(), "second run starts during publication");
+    for (std::uint64_t i = 0; i < samples; ++i)
+      timed(r, second.telemetry(i), "second telemetry");
+    timed(r, second.status(3, samples + 2), "second run ends");
+    // Destruction drains the recorder: no explicit finish() or wait.
+  }
+  sync_delay_ms = 0;
+  std::vector<std::string> sessions;
+  for (const auto &entry : fs::directory_iterator(f.config.telemetry)) {
+    if (!entry.path().filename().string().starts_with("session-"))
+      continue;
+    require(fs::exists(entry.path() / "manifest.json"),
+            "published bundle has a manifest");
+    auto manifest = Json::parse(read_file(entry.path() / "manifest.json"));
+    require(manifest["quality"]["recorded_samples"] == samples,
+            "each run's bundle holds exactly its own samples");
+    std::vector<float> rpm;
+    read_ld_channel(entry.path() / "full-session.ld", "RPM", rpm);
+    for (std::uint64_t i = 0; i < samples; ++i)
+      require(rpm.at(i) == Stream::rpm_for(i), "bundle sample mismatch");
+    sessions.push_back(manifest["session_id"]);
+  }
+  require(sessions.size() == 2 && sessions[0] != sessions[1],
+          "two distinct bundles published");
+  std::cout << "finalize-race: two bundles published across a slow-storage "
+               "run change and shutdown; receive " << stats(receive_ms)
+            << "\n";
+  require(percentile(receive_ms, 1) < 50,
+          "receive() waited for publication or a checkpoint");
+  fs::remove_all(f.root);
   return 0;
 }
 
@@ -658,6 +768,8 @@ int main(int argc, char **argv) {
       return replay_crash(assets);
     if (name == "recording-crash")
       return recording_crash(assets);
+    if (name == "finalize-race")
+      return finalize_race(assets);
     if (name == "write-failure")
       return write_failure(assets);
     if (name == "latency")

@@ -25,7 +25,7 @@ find_package(CURL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(tomlplusplus REQUIRED)
 find_package(Threads REQUIRED)
-add_library(rapid_native STATIC src/native_common.cpp src/native_v4.cpp src/pairing.cpp src/pairing_transport.cpp src/native_recorder.cpp
+add_library(rapid_native STATIC src/native_common.cpp src/native_v4.cpp src/native_replay.cpp src/pairing.cpp src/pairing_transport.cpp src/native_recorder.cpp
   src/native_runtime.cpp src/native_http.cpp src/native_acc.cpp src/native_upload.cpp src/native_setup.cpp)
 target_include_directories(rapid_native PUBLIC include)
 target_link_libraries(rapid_native PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto OpenSSL::SSL
@@ -136,16 +136,11 @@ if(BUILD_TESTING)
   add_executable(rapid-io-path-tests tests/io_path_tests.cpp)
   target_link_libraries(rapid-io-path-tests PRIVATE rapid_native)
   set_target_properties(rapid-io-path-tests PROPERTIES ENABLE_EXPORTS ON)
-  foreach(io_case replay-crash recording-crash write-failure latency)
+  foreach(io_case replay-crash recording-crash finalize-race write-failure latency)
     add_test(NAME rapid-io-${io_case} COMMAND rapid-io-path-tests
              ${CMAKE_CURRENT_SOURCE_DIR}/assets ${io_case})
     set_tests_properties(rapid-io-${io_case} PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
   endforeach()
-  # Expected red until step 8 phase B moves storage off the receive path: the
-  # test passes only if it fails on its latency requirement (not on setup).
-  # Phase B deletes this line.
-  set_tests_properties(rapid-io-latency PROPERTIES PASS_REGULAR_EXPRESSION
-    "FAIL: (receiver could not keep a 50 Hz schedule|receive\\(\\) waits for storage|snapshot\\(\\) waits for storage)")
   add_executable(rapid-display-recovery-tests tests/display_recovery_tests.cpp)
   target_link_libraries(rapid-display-recovery-tests PRIVATE rapid_native)
   target_compile_options(rapid-display-recovery-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)

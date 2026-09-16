@@ -1,7 +1,9 @@
 #include "rapid/native.hpp"
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <openssl/hmac.h>
+#include <thread>
 
 using namespace rapid::native;
 void require(bool ok, const char *message) {
@@ -131,9 +133,17 @@ int main(int argc, char **argv) {
       require(r.receive(ended, "127.0.0.1"), "end marker accepted");
       require(r.snapshot()["recording"] == false,
               "end marker finalizes recording");
-      auto manifest = Json::parse(read_file(
-          fs::path(r.snapshot()["last_bundle_path"].get<std::string>()) /
-          "manifest.json"));
+      // Publication runs on the recorder's writer thread, off the receive
+      // path (#17); it must complete promptly.
+      Json bundle;
+      for (int i = 0; i < 100 && !bundle.is_string(); ++i) {
+        bundle = r.snapshot()["last_bundle_path"];
+        if (!bundle.is_string())
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      require(bundle.is_string(), "end marker publishes the bundle");
+      auto manifest = Json::parse(
+          read_file(fs::path(bundle.get<std::string>()) / "manifest.json"));
       require(manifest["quality"]["recorded_samples"] == 2,
               "v4 samples exported");
       require(r.receive(ready, "127.0.0.1"), "new authenticated idle stream");

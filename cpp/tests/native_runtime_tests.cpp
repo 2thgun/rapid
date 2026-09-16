@@ -289,6 +289,10 @@ int main(int argc, char **argv) {
         Recorder recorder(recovery, "races");
         for (int i = 0; i < 10; ++i)
           recorder.record(sample(i));
+        // The checkpoint at sample 10 is written by the recorder's writer
+        // thread (#17); crash once it is durable. Bounded crash loss while
+        // the writer is behind is covered by rapid-io-recording-crash.
+        recorder.wait_idle();
         _exit(0);
       } catch (...) {
         _exit(1);
@@ -309,6 +313,7 @@ int main(int argc, char **argv) {
     Recorder recorder(failure, "manual");
     for (int i = 0; i < 10; ++i)
       recorder.record(sample(i));
+    recorder.wait_idle();
     fs::path spool;
     for (const auto &entry : fs::directory_iterator(failure))
       if (entry.path().filename().string().starts_with(".rapid-spool-"))
@@ -318,13 +323,18 @@ int main(int argc, char **argv) {
     bool failed = false;
     try {
       recorder.finish();
+      recorder.wait_idle();
     } catch (...) {
       failed = true;
     }
-    require(failed && fs::exists(spool / "spool.json"),
+    require(failed && fs::exists(spool / "spool.json") &&
+                recorder.status()["last_bundle_path"].is_null(),
             "publication failure preserves spool");
     fs::rename(spool / "01.bin.old", channel);
     recorder.finish();
+    recorder.wait_idle();
+    require(recorder.status()["last_bundle_path"].is_string(),
+            "failed publication succeeds on retry");
     std::cout << "Native runtime: validation, source pinning, replay, state, "
                  "broker, LD, lap, hashes, crash recovery and publication "
                  "retry passed\nEvidence: "

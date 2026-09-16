@@ -187,6 +187,165 @@ void write_ldx(const fs::path &path, const Json &laps, int rate) {
   atomic_file(path, out.str());
 }
 } // namespace
+
+// Storage for the recorder, off the receive path. Jobs run strictly in
+// submission order, which preserves the crash-safety invariant that a durable
+// spool.json never counts rows that are not durable in every channel file:
+// a checkpoint job writes its rows, syncs all channel files, and only then
+// replaces spool.json with the state captured together with those rows.
+struct Recorder::Writer {
+  enum class Kind { open, checkpoint, finalize };
+  struct Job {
+    Kind kind;
+    fs::path spool;
+    std::vector<float> rows; // row-major, channel_count values per sample
+    Json state;
+    std::string reason;
+  };
+  // Rows allowed in the queue before the front stops recording and declares
+  // unrecorded samples: 60 s at the highest supported rate.
+  static constexpr std::size_t max_queued_rows = 6000;
+
+  Recorder &owner;
+  std::mutex mutex;
+  std::condition_variable wake, idle;
+  std::deque<Job> jobs;
+  std::vector<Job> failed; // finalizations to retry on the next finish()
+  bool busy = false, stop = false;
+  std::atomic<std::size_t> queued_rows{0};
+  Json last_bundle;
+  std::string error, last_error;
+  std::map<std::string, std::vector<FILE *>> open; // writer thread only
+  std::thread thread;
+
+  explicit Writer(Recorder &recorder) : owner(recorder) {
+    thread = std::thread([this] { loop(); });
+  }
+  ~Writer() {
+    {
+      std::lock_guard lock(mutex);
+      stop = true;
+    }
+    wake.notify_all();
+    thread.join();
+    // Unfinished spools stay on disk for recovery at the next start.
+    for (auto &[spool, streams] : open)
+      close(streams);
+  }
+  static void close(std::vector<FILE *> &streams) {
+    for (auto *stream : streams)
+      std::fclose(stream);
+    streams.clear();
+  }
+  void submit(Job job) {
+    queued_rows += job.rows.size() / channel_count;
+    {
+      std::lock_guard lock(mutex);
+      jobs.push_back(std::move(job));
+    }
+    wake.notify_all();
+  }
+  void loop() {
+    std::unique_lock lock(mutex);
+    for (;;) {
+      wake.wait(lock, [&] { return stop || !jobs.empty(); });
+      if (jobs.empty())
+        break; // stopping, and every queued job has run
+      auto job = std::move(jobs.front());
+      jobs.pop_front();
+      busy = true;
+      const auto job_rows = job.rows.size() / channel_count;
+      lock.unlock();
+      std::string failure;
+      try {
+        run(job);
+      } catch (const std::exception &e) {
+        failure = e.what();
+        log("ERROR recording: " + failure);
+      }
+      lock.lock();
+      queued_rows -= job_rows;
+      busy = false;
+      if (failure.empty() && job.kind != Kind::open)
+        last_error.clear();
+      if (!failure.empty()) {
+        if (error.empty())
+          error = failure;
+        last_error = failure;
+        if (job.kind == Kind::finalize) {
+          job.rows.clear(); // already written; a retry only publishes
+          failed.push_back(std::move(job));
+        }
+      }
+      if (jobs.empty())
+        idle.notify_all();
+    }
+    idle.notify_all();
+  }
+  void run(Job &job) {
+    if (job.kind == Kind::open) {
+      fs::create_directory(job.spool);
+      std::vector<FILE *> streams;
+      for (std::size_t i = 0; i < channel_count; ++i) {
+        auto *f = std::fopen((job.spool / channel_file(i)).c_str(), "wb");
+        if (!f) {
+          close(streams);
+          throw std::runtime_error("cannot create spool channel");
+        }
+        streams.push_back(f);
+      }
+      open[job.spool.string()] = std::move(streams);
+      return;
+    }
+    auto found = open.find(job.spool.string());
+    if (found == open.end())
+      throw std::runtime_error("spool unavailable: " + job.spool.string());
+    auto &streams = found->second;
+    const auto samples = job.rows.size() / channel_count;
+    if (samples) {
+      std::vector<unsigned char> bytes(samples * 4);
+      for (std::size_t i = 0; i < channel_count; ++i) {
+        for (std::size_t n = 0; n < samples; ++n) {
+          auto bits =
+              std::bit_cast<std::uint32_t>(job.rows[n * channel_count + i]);
+          for (int b = 0; b < 4; ++b)
+            bytes[n * 4 + b] = (bits >> (8 * b)) & 255;
+        }
+        if (std::fwrite(bytes.data(), 1, bytes.size(), streams[i]) !=
+            bytes.size())
+          throw std::runtime_error("spool write failed");
+      }
+      job.rows.clear();
+    }
+    for (auto *f : streams)
+      if (std::fflush(f) || fsync(fileno(f)))
+        throw std::runtime_error("spool sync failed");
+    atomic_file(job.spool / "spool.json", job.state.dump());
+    if (job.kind != Kind::finalize)
+      return;
+    // Do not close or discard the spool before publication succeeds. A failed
+    // publication is retried, and a crash recovers the last durable checkpoint.
+    if (number(job.state, "sample_count") > 0) {
+      auto path = owner.publish(job.spool, job.state, job.reason);
+      close(streams);
+      open.erase(found);
+      fs::rename(job.spool, job.spool.string() + ".old");
+      {
+        std::lock_guard lock(mutex);
+        last_bundle = {
+            {"last_bundle_path", path.string()},
+            {"last_manifest_path", (path / "manifest.json").string()}};
+      }
+      if (owner.callback_)
+        owner.callback_(path);
+      log("Published native telemetry bundle");
+    } else {
+      close(streams);
+      open.erase(found);
+    }
+  }
+};
+
 Recorder::Recorder(fs::path root, std::string policy,
                    std::function<void(const fs::path &)> callback)
     : root_(std::move(root)), callback_(std::move(callback)),
@@ -221,16 +380,15 @@ Recorder::Recorder(fs::path root, std::string policy,
     } catch (const std::exception &e) {
       log(std::string("ERROR spool recovery preserved original: ") + e.what());
     }
+  writer_ = std::make_unique<Writer>(*this);
 }
-Recorder::~Recorder() { close(); }
-void Recorder::close() {
-  for (auto *stream : streams_)
-    std::fclose(stream);
-  streams_.clear();
-}
+// Drains queued storage work: a queued finalization completes, an unfinished
+// spool stays on disk for recovery.
+Recorder::~Recorder() { writer_.reset(); }
 void Recorder::start(const Json &message) {
   spool_ = root_ / (".rapid-spool-" + unique_id());
-  fs::create_directory(spool_);
+  writer_->submit({Writer::Kind::open, spool_, {}, nullptr, {}});
+  active_ = true;
   checkpoint_ = {
       {"metadata",
        {{"session_id",
@@ -258,17 +416,6 @@ void Recorder::start(const Json &message) {
   for (const auto &c : channels)
     if (std::string(c.key) != "elapsed")
       checkpoint_["availability"][c.key] = 0;
-  try {
-    for (std::size_t i = 0; i < channel_count; ++i) {
-      auto *f = std::fopen((spool_ / channel_file(i)).c_str(), "wb");
-      if (!f)
-        throw std::runtime_error("cannot create spool channel");
-      streams_.push_back(f);
-    }
-  } catch (...) {
-    close();
-    throw;
-  }
   auto session = string(message, "session_name");
   for (auto &ch : session)
     ch = std::tolower(static_cast<unsigned char>(ch));
@@ -284,13 +431,21 @@ void Recorder::start(const Json &message) {
   log("Recording native telemetry session");
 }
 void Recorder::checkpoint() {
-  for (auto *f : streams_)
-    if (std::fflush(f) || fsync(fileno(f)))
-      throw std::runtime_error("spool sync failed");
   checkpoint_["upload_after_session"] = upload_;
-  atomic_file(spool_ / "spool.json", checkpoint_.dump());
+  writer_->submit(
+      {Writer::Kind::checkpoint, spool_, std::move(rows_), checkpoint_, {}});
+  rows_.clear();
 }
 void Recorder::write_frame(const Json &frame, bool substituted) {
+  // A writer that cannot keep up must not stall the receiver or grow without
+  // bound: the sample is declared unrecorded instead, and sample indices,
+  // availability and lap boundaries stay consistent with the spool.
+  if (writer_->queued_rows + rows_.size() / channel_count >=
+      Writer::max_queued_rows) {
+    checkpoint_["quality"]["unrecorded_samples"] =
+        number(checkpoint_["quality"], "unrecorded_samples") + 1;
+    return;
+  }
   for (std::size_t i = 0; i < channel_count; ++i) {
     const auto &c = channels[i];
     double value = 0;
@@ -316,12 +471,7 @@ void Recorder::write_frame(const Json &frame, bool substituted) {
       checkpoint_["quality"]["invalid_samples"] =
           number(checkpoint_["quality"], "invalid_samples") + 1;
     }
-    auto bits = std::bit_cast<std::uint32_t>(float(value));
-    unsigned char bytes[4];
-    for (int b = 0; b < 4; ++b)
-      bytes[b] = (bits >> (8 * b)) & 255;
-    if (std::fwrite(bytes, 1, 4, streams_[i]) != 4)
-      throw std::runtime_error("spool write failed");
+    rows_.push_back(float(value));
   }
   checkpoint_["sample_count"] =
       checkpoint_["sample_count"].get<std::size_t>() + 1;
@@ -332,14 +482,14 @@ void Recorder::write_frame(const Json &frame, bool substituted) {
 void Recorder::record(const Json &message) {
   auto session = string(message, "session_id", string(message, "run_id"));
   int rate = std::clamp(int(number(message, "sample_rate_hz", 10)), 1, 100);
-  if (!streams_.empty() &&
+  if (active_ &&
       (string(message, "simulator") !=
            string(checkpoint_["metadata"], "simulator") ||
        rate != number(checkpoint_, "sample_rate_hz") ||
        (!session.empty() &&
         session != string(checkpoint_["metadata"], "session_id"))))
     finish("session_changed");
-  if (streams_.empty())
+  if (!active_)
     start(message);
   for (const auto &[source, target] :
        std::vector<std::pair<std::string, std::string>>{
@@ -483,33 +633,42 @@ fs::path Recorder::publish(const fs::path &spool, Json state,
   return destination;
 }
 void Recorder::finish(const std::string &reason) {
-  if (streams_.empty())
+  if (!active_) {
+    std::vector<Writer::Job> retry;
+    {
+      std::lock_guard lock(writer_->mutex);
+      retry.swap(writer_->failed);
+    }
+    for (auto &job : retry)
+      writer_->submit(std::move(job));
     return;
-  checkpoint();
-  // Do not close or discard the spool before publication succeeds. A failed
-  // write can be retried, and a crash can recover the last durable checkpoint.
-  if (number(checkpoint_, "sample_count") > 0) {
-    auto path = publish(spool_, checkpoint_, reason);
-    close();
-    fs::rename(spool_, spool_.string() + ".old");
-    last_bundle_ = {{"last_bundle_path", path.string()},
-                    {"last_manifest_path", (path / "manifest.json").string()}};
-    if (callback_)
-      callback_(path);
-    log("Published native telemetry bundle");
-  } else
-    close();
+  }
+  checkpoint_["upload_after_session"] = upload_;
+  writer_->submit({Writer::Kind::finalize, spool_, std::move(rows_),
+                   checkpoint_, reason});
+  rows_.clear();
+  active_ = false;
   checkpoint_ = nullptr;
   last_frame_ = nullptr;
   spool_.clear();
 }
+void Recorder::wait_idle() {
+  std::unique_lock lock(writer_->mutex);
+  writer_->idle.wait(lock,
+                     [&] { return writer_->jobs.empty() && !writer_->busy; });
+  if (!writer_->error.empty()) {
+    auto error = std::move(writer_->error);
+    writer_->error.clear();
+    throw std::runtime_error(error);
+  }
+}
 void Recorder::set_upload(bool enabled) {
   upload_ = enabled;
-  if (!streams_.empty())
+  if (active_)
     checkpoint();
 }
 Json Recorder::status() const {
-  Json result = {{"recording", !streams_.empty()},
+  Json result = {{"recording", active_},
                  {"session_id", checkpoint_.is_object()
                                     ? checkpoint_["metadata"]["session_id"]
                                     : Json()},
@@ -521,8 +680,11 @@ Json Recorder::status() const {
                  {"completed_laps",
                   checkpoint_.is_object() ? checkpoint_["laps"].size() : 0},
                  {"upload_after_session", upload_}};
-  if (last_bundle_.is_object())
-    result.update(last_bundle_);
+  std::lock_guard lock(writer_->mutex);
+  if (writer_->last_bundle.is_object())
+    result.update(writer_->last_bundle);
+  if (!writer_->last_error.empty())
+    result["recorder_write_error"] = writer_->last_error;
   return result;
 }
 } // namespace rapid::native

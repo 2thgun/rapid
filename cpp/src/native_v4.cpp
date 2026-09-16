@@ -104,6 +104,48 @@ double wire_decimal(const std::string &text) {
   check(any_digit && at == text.size(), "invalid v4 decimal field");
   return text[0] == '-' ? -value : value;
 }
+// Replay state lives either directly in SQLite (one durable commit per
+// packet) or in a ReplayGuard (batched, durable floors ahead of admission).
+std::optional<ReplayGuard::Run> find_run(Database &store,
+                                         const std::string &id) {
+  auto rows = store.query("SELECT sequence,time,simulator,metadata,closed,"
+                          "active FROM v4_runs WHERE id=?",
+                          {id});
+  if (rows.empty())
+    return std::nullopt;
+  const auto &row = rows[0];
+  return ReplayGuard::Run{row["sequence"].get<std::uint64_t>(),
+                          row["time"].get<std::uint64_t>(),
+                          int(row["simulator"].get<std::int64_t>()),
+                          row["metadata"].get<std::string>(),
+                          row["closed"] == 1, row["active"] == 1};
+}
+void admit_run(Database &store, const std::string &id,
+               const ReplayGuard::Run &run, bool new_run) {
+  store.exec("BEGIN IMMEDIATE");
+  try {
+    if (new_run)
+      store.exec("UPDATE v4_runs SET closed=1 WHERE closed=0");
+    store.exec("INSERT INTO v4_runs VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO "
+               "UPDATE SET "
+               "sequence=excluded.sequence,time=excluded.time,metadata="
+               "excluded.metadata,closed=excluded.closed",
+               {id, run.sequence, run.time, run.simulator, run.metadata,
+                int(run.closed), int(run.active)});
+    store.exec("COMMIT");
+  } catch (...) {
+    store.exec("ROLLBACK");
+    throw;
+  }
+}
+std::optional<ReplayGuard::Run> find_run(ReplayGuard &guard,
+                                         const std::string &id) {
+  return guard.find(id);
+}
+void admit_run(ReplayGuard &guard, const std::string &id,
+               const ReplayGuard::Run &run, bool new_run) {
+  guard.admit(id, run, new_run);
+}
 } // namespace
 
 std::string telemetry_key(std::string hex) {
@@ -130,8 +172,10 @@ Json receive_v4(Database &store, const std::string &bytes,
   return receive_v4(store, bytes, key, {});
 }
 
-Json receive_v4(Database &store, const std::string &bytes,
-                const std::string &key, const std::string &peer_namespace) {
+namespace {
+template <class Store>
+Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
+               const std::string &peer_namespace) {
   const auto received_monotonic = monotonic();
   if (key.size() != 32 || bytes.size() < 84 || bytes.size() > 4096)
     throw AuthenticationError(
@@ -256,23 +300,17 @@ Json receive_v4(Database &store, const std::string &bytes,
   }
   // Watermarks survive receiver restarts; retired run IDs cannot reclaim a
   // session.
-  auto rows =
-      store.query("SELECT sequence,time,simulator,metadata,closed,active FROM "
-                  "v4_runs WHERE id=?",
-                  {storage_id});
+  const auto previous = find_run(store, storage_id);
   std::uint64_t gap = 0;
-  if (!rows.empty()) {
-    const auto &previous = rows[0];
-    if (previous["closed"] == 1 ||
-        sequence <= previous["sequence"].get<std::uint64_t>())
+  if (previous) {
+    if (previous->closed || sequence <= previous->sequence)
       throw std::range_error("replayed v4 packet");
-    check(time >= previous["time"].get<std::uint64_t>() &&
-              previous["simulator"] == sim &&
-              previous["active"] == int((flags & 1) != 0),
+    check(time >= previous->time && previous->simulator == int(sim) &&
+              previous->active == ((flags & 1) != 0),
           "v4 run identity/time changed");
-    gap = sequence - previous["sequence"].get<std::uint64_t>() - 1;
+    gap = sequence - previous->sequence - 1;
     if (type != 2)
-      metadata = Json::parse(previous["metadata"].get<std::string>());
+      metadata = Json::parse(previous->metadata);
   } else {
     check(type == 2 || (type == 3 && flags == 0),
           "v4 metadata required before active data");
@@ -285,30 +323,33 @@ Json receive_v4(Database &store, const std::string &bytes,
   // The sequence includes control packets, so gaps are not missing sample
   // counts.
   message["_packet_gap"] = 0;
-  store.exec("BEGIN IMMEDIATE");
-  try {
-    if (rows.empty())
-      store.exec("UPDATE v4_runs SET closed=1 WHERE closed=0");
-    store.exec("INSERT INTO v4_runs VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO "
-               "UPDATE SET "
-               "sequence=excluded.sequence,time=excluded.time,metadata="
-               "excluded.metadata,closed=excluded.closed",
-               {storage_id, sequence, time, sim, metadata.dump(), int(closed),
-                int((flags & 1) != 0)});
-    store.exec("COMMIT");
-  } catch (...) {
-    store.exec("ROLLBACK");
-    throw;
-  }
+  admit_run(store, storage_id,
+            {sequence, time, int(sim), metadata.dump(), closed,
+             (flags & 1) != 0},
+            !previous);
   return message;
 }
-
-Json receive_v4(Database &store, const std::string &bytes,
-                const std::vector<std::string> &keys) {
+template <class Store>
+Json decode_v4(Store &store, const std::string &bytes,
+               const std::vector<std::string> &keys) {
   for (const auto &key : keys) {
-    try { return receive_v4(store, bytes, key, hash_text(key) + ":"); }
+    try { return decode_v4(store, bytes, key, hash_text(key) + ":"); }
     catch (const AuthenticationError &) {}
   }
   throw AuthenticationError("v4 authentication failed for every paired PC");
+}
+} // namespace
+
+Json receive_v4(Database &store, const std::string &bytes,
+                const std::string &key, const std::string &peer_namespace) {
+  return decode_v4(store, bytes, key, peer_namespace);
+}
+Json receive_v4(Database &store, const std::string &bytes,
+                const std::vector<std::string> &keys) {
+  return decode_v4(store, bytes, keys);
+}
+Json receive_v4(ReplayGuard &guard, const std::string &bytes,
+                const std::vector<std::string> &keys) {
+  return decode_v4(guard, bytes, keys);
 }
 } // namespace rapid::native

@@ -94,6 +94,7 @@ Runtime::Runtime(Config config)
           }),
       source_(config_.companion_host), paired_keys_(config_.companion_keys) {
   store_.exec("CREATE TABLE IF NOT EXISTS v4_runs(id TEXT PRIMARY KEY,sequence INTEGER NOT NULL,time INTEGER NOT NULL,simulator INTEGER NOT NULL,metadata TEXT NOT NULL,closed INTEGER NOT NULL,active INTEGER NOT NULL)");
+  replay_ = std::make_unique<ReplayGuard>(config_.database);
   store_.exec(
       "CREATE TABLE IF NOT EXISTS native_acc_packets(id INTEGER PRIMARY "
       "KEY,received_at TEXT,packet_type INTEGER,normalized_json TEXT)");
@@ -193,7 +194,7 @@ void Runtime::sectors(Json &f) {
     current_lap_trace_.emplace_back(position, time);
 }
 bool Runtime::receive(const std::string &payload, const std::string &host) {
-  std::lock_guard lock(mutex_);
+  std::unique_lock lock(mutex_);
   const auto processing_started = monotonic();
   const auto record_metrics = [&](const Json &message) {
     const auto stream = string(message, "session_id");
@@ -237,7 +238,20 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
         : (config_.companion_keys.empty()
                ? std::vector<std::string>{config_.companion_key}
                : config_.companion_keys);
-    auto m = v4 ? receive_v4(store_, payload, keys) : Json::parse(payload);
+    Json m;
+    if (v4) {
+      // Authentication and replay admission need no runtime state, and
+      // admission may wait for the replay writer: keep snapshot() and
+      // events() unblocked meanwhile. udp_loop is the only receiver, so
+      // packets are still applied in arrival order.
+      lock.unlock();
+      struct Relock {
+        std::unique_lock<std::mutex> &lock;
+        ~Relock() { lock.lock(); }
+      } relock{lock};
+      m = receive_v4(*replay_, payload, keys);
+    } else
+      m = Json::parse(payload);
     if (!m.is_object())
       throw std::runtime_error("packet must be an object");
     if (!v4) m.erase("_packet_gap");
@@ -473,6 +487,9 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
   } catch (const std::range_error &) {
     state_["packets_replayed"] = number(state_, "packets_replayed") + 1;
     return false;
+  } catch (const ReplayDeferred &) {
+    state_["packets_deferred"] = number(state_, "packets_deferred") + 1;
+    return false;
   } catch (const std::exception &) {
     state_["packets_invalid"] = number(state_, "packets_invalid") + 1;
     return false;
@@ -534,6 +551,9 @@ void Runtime::finish() {
   recorder_.finish("shutdown");
   last_recording_packet_ = 0;
   last_recording_heartbeat_ = 0;
+  // Shutdown waits for publication (and reports its failure); the receive
+  // path never does.
+  recorder_.wait_idle();
 }
 Json Runtime::snapshot() const {
   std::lock_guard lock(mutex_);
@@ -550,6 +570,8 @@ Json Runtime::snapshot() const {
       result["session_id"].is_string())
     recorder_status.erase("session_id");
   result.update(recorder_status);
+  if (auto replay = replay_->status(); !replay["replay_write_error"].is_null())
+    result["replay_write_error"] = replay["replay_write_error"];
   result["sender_lag_ms"] = {
       {"p50", percentile(sender_lag_ms_, .50)},
       {"p95", percentile(sender_lag_ms_, .95)}};

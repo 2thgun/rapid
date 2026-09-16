@@ -1,15 +1,19 @@
 #pragma once
 #include <atomic>
+#include <condition_variable>
 #include <cstdio>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sqlite3.h>
 #include <string>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 #include "rapid/lap_boundary.hpp"
@@ -55,6 +59,56 @@ Json receive_v4(Database &store, const std::string &payload,
 Json receive_v4(Database &store, const std::string &payload,
                 const std::vector<std::string> &keys);
 
+// Thrown when a packet is authentic but its replay floor could not be made
+// durable in time (slow or failing storage). The packet is rejected.
+struct ReplayDeferred : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+// v4 replay state held in memory and persisted by a writer thread (#17).
+// Invariant: a packet with sequence s is admitted only once the durable row
+// for its run already has sequence >= s (a floor reserved `margin` packets
+// ahead), so no crash can make an admitted packet acceptable again. The
+// v4_runs schema is unchanged; its sequence column holds that floor.
+class ReplayGuard {
+public:
+  struct Run {
+    std::uint64_t sequence = 0, time = 0;
+    int simulator = 0;
+    std::string metadata = "{}";
+    bool closed = false, active = false;
+  };
+  explicit ReplayGuard(const fs::path &database, std::uint64_t margin = 256,
+                       double period_s = 0.25, double wait_s = 1.0);
+  ~ReplayGuard();
+  ReplayGuard(const ReplayGuard &) = delete;
+  std::optional<Run> find(const std::string &id) const;
+  // Blocks only while the durable floor is behind; throws ReplayDeferred.
+  void admit(const std::string &id, const Run &run, bool new_run);
+  Json status() const;
+
+private:
+  struct Entry {
+    Run run;                     // last admitted state
+    std::optional<Run> staged;   // new run waiting for its first durable row
+    bool admitted = false, persisted = false, dirty = false;
+    std::uint64_t durable = 0, target = 0, version = 0;
+  };
+  Database db_;
+  const std::uint64_t margin_;
+  const double period_s_, wait_s_;
+  mutable std::mutex mutex_;
+  std::condition_variable wake_, durable_;
+  std::map<std::string, Entry> entries_;
+  bool stop_ = false, urgent_ = false;
+  std::string error_;
+  std::uint64_t commits_ = 0, deferred_ = 0;
+  std::thread writer_;
+  void loop();
+  bool commit(bool exact);
+};
+Json receive_v4(ReplayGuard &guard, const std::string &payload,
+                const std::vector<std::string> &keys);
+
 struct Config {
   std::string host = "0.0.0.0", pairing_host = "0.0.0.0", companion_host, acc_host = "192.168.1.89",
               acc_password, companion_key;
@@ -78,20 +132,25 @@ struct Config {
   static Config load(const fs::path &path);
 };
 
+// The recorder front (record/finish/status) does CPU work only and is called
+// under the runtime lock. Spool writes, fsync, spool.json checkpoints and
+// bundle publication run on a writer thread in submission order (#17).
 class Recorder {
+  struct Writer;
   fs::path root_, spool_;
-  std::vector<FILE *> streams_;
-  Json checkpoint_, last_frame_, last_bundle_;
+  bool active_ = false;
+  std::vector<float> rows_;
+  Json checkpoint_, last_frame_;
   std::function<void(const fs::path &)> callback_;
   std::string policy_;
   LapBoundary lap_boundary_;
   std::size_t lap_start_ = 0;
   int next_lap_number_ = 1;
   bool upload_ = false;
+  std::unique_ptr<Writer> writer_;
   void start(const Json &message);
   void write_frame(const Json &frame, bool substituted);
   void checkpoint();
-  void close();
   fs::path publish(const fs::path &spool, Json state,
                    const std::string &reason);
 
@@ -100,7 +159,12 @@ public:
            std::function<void(const fs::path &)> callback = {});
   ~Recorder();
   void record(const Json &message);
+  // Queues finalization and returns. With nothing recording, re-queues
+  // publications that failed earlier.
   void finish(const std::string &reason = "ended");
+  // Blocks until queued storage work is done; throws the first storage error
+  // since the previous call.
+  void wait_idle();
   void set_upload(bool enabled);
   Json status() const;
 };
@@ -110,6 +174,7 @@ class Runtime {
   mutable std::mutex mutex_;
   Json state_;
   Database store_;
+  std::unique_ptr<ReplayGuard> replay_;
   Recorder recorder_;
   std::string source_, session_;
   double last_packet_ = 0, last_sample_ = 0, last_recording_packet_ = 0;
