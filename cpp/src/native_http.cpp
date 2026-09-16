@@ -85,6 +85,20 @@ void serve(const std::string &host, int port, Handler handler,
             ws.read_message_max(4096);
             ws.accept(req);
             ws.text(true);
+            // Two viewer shapes share this path. The engineering telemetry
+            // view (cpp/assets/telemetry.html) asks for a rolling batch of
+            // raw per-sample events (?history=<seconds>) so it can chart
+            // arbitrary channels. A display (Qt panel, browser dashboard,
+            // ?mode=state) instead wants only the newest runtime snapshot --
+            // the same JSON shape as GET /api/live -- redrawn at display
+            // rate. Neither branch queues anything for a slow client: each
+            // tick re-reads the current state and sends exactly one message,
+            // so a client that falls behind simply skips the ticks it missed
+            // instead of ever being handed a backlog of stale frames. Per-
+            // client memory is therefore O(1) regardless of connection speed,
+            // and a stalled write is bounded by the socket's SO_SNDTIMEO (set
+            // above) rather than growing a queue.
+            const bool state_mode = target.find("mode=state") != std::string::npos;
             std::uint64_t cursor = 0;
             int history = 30;
             auto pos = target.find("history=");
@@ -93,14 +107,20 @@ void serve(const std::string &host, int port, Handler handler,
                 history = std::stoi(target.substr(pos + 8));
               } catch (...) {
               }
+            // ~30 Hz: fast enough that the push, not the transport, sets the
+            // display's update rate, without redoing work the runtime can't
+            // usefully produce faster than telemetry arrives.
+            constexpr auto tick = std::chrono::milliseconds(33);
             while (!stopping) {
               {
                 std::lock_guard client_lock(clients[i].mutex);
                 clients[i].deadline = monotonic() + 2;
               }
-              auto events = runtime->events(cursor, history);
-              ws.write(asio::buffer(events.dump()));
-              std::this_thread::sleep_for(std::chrono::milliseconds(100));
+              const std::string payload = state_mode
+                  ? runtime->snapshot().dump()
+                  : runtime->events(cursor, history).dump();
+              ws.write(asio::buffer(payload));
+              std::this_thread::sleep_for(tick);
             }
             continue;
           }

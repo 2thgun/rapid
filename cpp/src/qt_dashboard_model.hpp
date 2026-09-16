@@ -12,11 +12,16 @@
 class QNetworkAccessManager;
 class QNetworkReply;
 class QTimer;
+class QWebSocket;
 
 class DashboardModel final : public QObject {
   Q_OBJECT
   Q_PROPERTY(int revision READ revision NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
+  // True once the live WebSocket push (#17) is delivering snapshots; false
+  // while the model relies on its 200 ms HTTP poll fallback (socket never
+  // connected yet, or lost and reconnecting).
+  Q_PROPERTY(bool livePushActive READ livePushActive NOTIFY changed)
   Q_PROPERTY(QString networkMode READ networkMode NOTIFY changed)
   Q_PROPERTY(bool networkAvailable READ networkAvailable NOTIFY changed)
   Q_PROPERTY(QString logNotice READ logNotice NOTIFY changed)
@@ -37,6 +42,7 @@ public:
   explicit DashboardModel(QUrl endpoint, QObject *parent = nullptr);
   int revision() const { return revision_; }
   QString status() const { return status_; }
+  bool livePushActive() const { return live_push_active_; }
   QString networkMode() const { return network_mode_; }
   bool networkAvailable() const { return network_available_; }
   QString logNotice() const { return log_notice_; }
@@ -69,6 +75,10 @@ signals:
 
 private:
   void pollLive();
+  void connectLiveSocket();
+  void liveSocketConnected();
+  void liveSocketDisconnected();
+  void consumeLiveMessage(const QString &message);
   void pollNetworkMode();
   void pollLogStatus();
   void pollSetupStatus();
@@ -80,6 +90,8 @@ private:
   void calibrationTimedOut();
   void finishCalibration(const QString &stage, const QString &message);
   void consumeLive(QNetworkReply *reply);
+  void applyLiveState(QVariantMap state);
+  void applyLiveFailure(const QString &message);
   void consumeNetworkMode(QNetworkReply *reply);
   void consumeLogStatus(QNetworkReply *reply);
   void updateStatus();
@@ -100,6 +112,9 @@ private:
   bool pairing_approval_sent_ = false;
   bool network_available_ = false;
   bool live_request_pending_ = false;
+  QWebSocket *live_socket_ = nullptr;
+  QUrl live_socket_url_;
+  bool live_push_active_ = false;
   qint64 last_log_sequence_ = -1;
   QString last_graph_sample_;
   qint64 last_graph_gap_ms_ = 0;

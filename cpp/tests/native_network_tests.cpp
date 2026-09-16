@@ -278,6 +278,45 @@ int main(int argc, char **argv) {
     require(events["events"].size() == 12, "WebSocket history");
     boost::system::error_code ec;
     ws.next_layer().close(ec);
+    // Display clients (Qt panel, browser dashboard) ask for ?mode=state
+    // instead: the same JSON shape GET /api/live returns, pushed on its own
+    // at ~30 Hz, with no per-client backlog -- the newest snapshot only.
+    beast::websocket::stream<tcp::socket> live_state(io);
+    live_state.next_layer().connect({asio::ip::make_address("127.0.0.1"),
+                                     static_cast<unsigned short>(port)});
+    live_state.handshake("127.0.0.1", "/api/v1/live?mode=state");
+    beast::flat_buffer state_buffer;
+    live_state.read(state_buffer);
+    auto pushed = Json::parse(beast::buffers_to_string(state_buffer.data()));
+    require(pushed["runtime"] == "cpp" && pushed["rpm"] == 5011 &&
+                pushed.contains("sender_lag_ms") && pushed.contains("process_ms"),
+            "WebSocket state push sends the live /api/live snapshot shape");
+    Json fast_packet = {{"version", 3},
+                        {"simulator", "AC"},
+                        {"session_id", "network-test"},
+                        {"sequence", 12},
+                        {"sample_rate_hz", 10},
+                        {"monotonic_us", 12 * 100000},
+                        {"telemetry",
+                         {{"rpm", 9001},
+                          {"steering_angle", .1},
+                          {"g_x", 0},
+                          {"g_y", 1},
+                          {"g_z", 0},
+                          {"lap_number", 2},
+                          {"completed_lap_ms", 1000}}}};
+    sender.send_to(asio::buffer(fast_packet.dump()), endpoint);
+    bool pushed_latest = false;
+    for (int i = 0; i < 60 && !pushed_latest; ++i) {
+      state_buffer.consume(state_buffer.size());
+      live_state.read(state_buffer);
+      auto latest = Json::parse(beast::buffers_to_string(state_buffer.data()));
+      pushed_latest = latest["rpm"] == 9001;
+    }
+    require(pushed_latest,
+            "WebSocket state push coalesces to the newest runtime snapshot");
+    boost::system::error_code state_ec;
+    live_state.next_layer().close(state_ec);
     bool finalized = false;
     for (int i = 0; i < 40; ++i) {
       state =
