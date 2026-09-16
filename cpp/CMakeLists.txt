@@ -41,7 +41,10 @@ target_compile_options(rapid-display-recovery PRIVATE -Wall -Wextra -Wpedantic -
 # The Qt target consumes the local HTTP API; it does not link to or alter the
 # receiver/recorder runtime.
 if(RAPID_BUILD_QT_DISPLAY)
-  find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Network Qml Quick)
+  # WebSockets: the live dashboard push (#17) subscribes to /api/v1/live over
+  # a socket instead of polling; HTTP polling remains the fallback when the
+  # module or the socket is unavailable.
+  find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Network Qml Quick WebSockets)
   qt_standard_project_setup()
   qt_add_executable(rapid-qt-display
     src/qt_dashboard_main.cpp
@@ -56,12 +59,12 @@ if(RAPID_BUILD_QT_DISPLAY)
       assets/steering-wheel-cartoon.png
   )
   target_link_libraries(rapid-qt-display PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick)
+    Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick Qt6::WebSockets)
   target_compile_options(rapid-qt-display PRIVATE -Wall -Wextra -Wpedantic -Werror)
   if(BUILD_TESTING)
     qt_add_executable(rapid-qt-tests tests/qt_dashboard_tests.cpp
       src/qt_dashboard_model.cpp src/qt_dashboard_model.hpp)
-    target_link_libraries(rapid-qt-tests PRIVATE Qt6::Core Qt6::Network)
+    target_link_libraries(rapid-qt-tests PRIVATE Qt6::Core Qt6::Network Qt6::WebSockets)
     target_compile_options(rapid-qt-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME rapid-qt-tests COMMAND rapid-qt-tests)
   endif()
