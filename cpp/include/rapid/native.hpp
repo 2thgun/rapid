@@ -10,7 +10,9 @@
 #include <sqlite3.h>
 #include <string>
 #include <stdexcept>
+#include <utility>
 #include <vector>
+#include "rapid/lap_boundary.hpp"
 
 namespace rapid::native {
 using Json = nlohmann::json;
@@ -82,8 +84,9 @@ class Recorder {
   Json checkpoint_, last_frame_, last_bundle_;
   std::function<void(const fs::path &)> callback_;
   std::string policy_;
-  int last_lap_ = -1;
+  LapBoundary lap_boundary_;
   std::size_t lap_start_ = 0;
+  int next_lap_number_ = 1;
   bool upload_ = false;
   void start(const Json &message);
   void write_frame(const Json &frame, bool substituted);
@@ -123,6 +126,12 @@ class Runtime {
   std::deque<std::pair<std::uint64_t, Json>> events_;
   std::string metrics_session_;
   std::deque<double> sender_lag_ms_, process_ms_;
+  // Lap-position (0..1) -> elapsed lap_time_ms trace for the AC1 delta (#20),
+  // using the same boundary rule as the recorder (#16) so a lap that closes
+  // for recording also closes for timing.
+  LapBoundary lap_boundary_;
+  std::vector<std::pair<double, double>> current_lap_trace_, best_lap_trace_;
+  double best_lap_trace_duration_ = -1;
   std::uint64_t next_event_ = 1;
   void sectors(Json &frame);
 
