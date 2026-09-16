@@ -210,8 +210,12 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
         for (const char *key : {"track_name", "car_model", "driver_name", "session_name"})
           if (m.contains(key)) state_[key] = m[key];
       }
+      // "paused" (#15) is a live run with a gap (pause/menu/alt-tab): the
+      // companion still considers the recording open, so it is accepted like
+      // "driving" below rather than finalizing the session.
       if (version < 2 ||
-          (daemon != "waiting" && daemon != "ready" && daemon != "driving"))
+          (daemon != "waiting" && daemon != "ready" && daemon != "driving" &&
+           daemon != "paused"))
         throw std::runtime_error("invalid heartbeat");
     } else if (type == "telemetry") {
       frame = m.value("telemetry", version == 3 ? Json() : m);
@@ -286,18 +290,28 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     state_["companion_received_at"] = now();
     state_["received_at"] = now();
     state_["simulator"] = sim.empty() ? Json() : Json(sim);
-    state_["connected"] =
-        state_.value("acc_connected", false) || daemon == "driving";
+    state_["connected"] = state_.value("acc_connected", false) ||
+                          daemon == "driving" || daemon == "paused";
     if (type == "status") {
-      if (daemon != "driving") {
+      // A session ends here only on an explicit non-open status (waiting /
+      // ready, e.g. the companion's "ended" or main-menu state). "paused"
+      // (#15) keeps the spool and session open, distinct from "driving" so
+      // the dashboard can show paused rather than idle; it also refreshes the
+      // not-live watchdog below so a pause/menu/alt-tab up to that timeout
+      // does not fragment the recording the way an unrefreshed 10 s telemetry
+      // silence would.
+      if (daemon != "driving" && daemon != "paused") {
         recorder_.finish();
         last_recording_packet_ = 0;
+        last_recording_heartbeat_ = 0;
         recording_legacy_ = false;
         last_sample_ = 0;
         state_["session_active"] = false;
         state_["session_id"] = Json();
         session_.clear();
         sequence_ = -1;
+      } else {
+        last_recording_heartbeat_ = monotonic();
       }
       if (v4 && m.contains("session_id") && m["session_id"].is_string())
         state_["session_id"] = m["session_id"];
@@ -346,6 +360,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     state_["samples_received"] = number(state_, "samples_received") + 1;
     last_sample_ = monotonic();
     last_recording_packet_ = last_sample_;
+    last_recording_heartbeat_ = last_sample_;
     recording_legacy_ = version == 3 && session.empty() && sequence < 0;
     state_["schema_version"] = v4 ? 4 : version;
     if (v4) state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
@@ -401,6 +416,7 @@ void Runtime::expire() {
     if (!recording_legacy_) {
       recorder_.finish("disconnected");
       last_recording_packet_ = 0;
+      last_recording_heartbeat_ = 0;
       sequence_ = -1;
       session_.clear();
     }
@@ -418,18 +434,33 @@ void Runtime::expire() {
       state_["simulator"] = nullptr;
     source_ = config_.companion_host;
   }
-  if (last_recording_packet_ && timestamp - last_recording_packet_ > 10.0) {
-    recorder_.finish("disconnected");
-    last_recording_packet_ = 0;
-    recording_legacy_ = false;
-    sequence_ = -1;
-    session_.clear();
+  // A companion still sending "driving"/"paused" heartbeats (recent within
+  // the 1.5 s connectivity check above) proves the recording is intentionally
+  // open with a gap (#15): a sim pause, menu overlay or alt-tab, not a lost
+  // connection. Only telemetry samples refresh last_recording_packet_, so
+  // without this a pause would otherwise hit the short legacy timeout below
+  // (which exists for the older companion that sends no heartbeat at all) and
+  // fragment the session well before the required not-live timeout.
+  if (last_recording_packet_) {
+    const bool heartbeat_recent =
+        last_recording_heartbeat_ && timestamp - last_recording_heartbeat_ <= 1.5;
+    const double not_live_timeout =
+        heartbeat_recent ? config_.not_live_timeout_seconds : 10.0;
+    if (timestamp - last_recording_packet_ > not_live_timeout) {
+      recorder_.finish("disconnected");
+      last_recording_packet_ = 0;
+      last_recording_heartbeat_ = 0;
+      recording_legacy_ = false;
+      sequence_ = -1;
+      session_.clear();
+    }
   }
 }
 void Runtime::finish() {
   std::lock_guard lock(mutex_);
   recorder_.finish("shutdown");
   last_recording_packet_ = 0;
+  last_recording_heartbeat_ = 0;
 }
 Json Runtime::snapshot() const {
   std::lock_guard lock(mutex_);

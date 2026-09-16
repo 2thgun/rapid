@@ -210,13 +210,17 @@ Json receive_v4(Database &store, const std::string &bytes,
               end - 64 <= 512,
           "invalid v4 status size");
     const auto state = le(bytes, 52, 1);
-    check(state <= 3 &&
+    // state 4 = paused (#15): a live run with a gap (pause/menu/alt-tab), the
+    // recording stays open. It only ever accompanies an active run, so it
+    // carries the same 0x01 flag as driving.
+    check(state <= 4 &&
               ((state < 2 && flags == 0) || (state == 2 && flags == 1) ||
-               (state == 3 && flags == 3)),
+               (state == 3 && flags == 3) || (state == 4 && flags == 1)),
           "invalid v4 status flags");
     (void)Json(bytes.substr(64, end - 64)).dump();
     message["type"] = "status";
     message["state"] = state == 2   ? "driving"
+                       : state == 4 ? "paused"
                        : state == 0 ? "waiting"
                                     : "ready";
     closed = state == 3;

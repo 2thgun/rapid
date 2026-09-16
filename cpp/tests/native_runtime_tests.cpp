@@ -111,6 +111,59 @@ int main(int argc, char **argv) {
               "resumed legacy telemetry continues the existing recording");
       live.finish();
     }
+    {
+      // #15: a "paused" heartbeat (sim pause/menu overlay/alt-tab) keeps the
+      // spool/session open past telemetry going quiet, up to
+      // Config::not_live_timeout_seconds (a small value here for a fast,
+      // deterministic test; production defaults to 10 minutes). Heartbeats
+      // arrive under 1.5s apart, like the real companion's 1 Hz cadence, so
+      // the unrelated full-silence disconnect check never preempts this.
+      Config pause_config = c;
+      pause_config.database = root / "pause.db";
+      pause_config.telemetry = root / "pause-telemetry";
+      pause_config.queue = root / "pause-queue.db";
+      pause_config.not_live_timeout_seconds = 2.5;
+      Runtime live(pause_config);
+      require(live.receive(sample().dump(), "127.0.0.1"), "pause-test telemetry sample");
+      require(live.snapshot()["recording"] == true, "recording starts on telemetry");
+      Json paused_heartbeat = {
+          {"version", 3}, {"type", "status"}, {"state", "paused"}, {"simulator", "ACC"}};
+      for (int second = 0; second < 2; ++second) {
+        require(live.receive(paused_heartbeat.dump(), "127.0.0.1"),
+                "paused heartbeat accepted");
+        require(live.snapshot()["recording"] == true &&
+                    live.snapshot()["session_active"] == true &&
+                    live.snapshot()["companion_daemon_state"] == "paused" &&
+                    live.snapshot()["connected"] == true,
+                "paused heartbeat keeps the session open and reports paused, not idle");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        live.expire();
+        require(live.snapshot()["recording"] == true,
+                "still within the not-live timeout while heartbeats keep arriving");
+      }
+      require(live.receive(paused_heartbeat.dump(), "127.0.0.1"), "final paused heartbeat");
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      live.expire();
+      require(live.snapshot()["recording"] == false,
+              "recording ends once telemetry has been silent past not_live_timeout_seconds, "
+              "even though heartbeats kept arriving (#15)");
+    }
+    {
+      // An explicit non-open status (e.g. the companion's session-ended /
+      // main-menu heartbeat) still finalizes immediately, regardless of the
+      // not-live timeout (#15).
+      Config end_config = c;
+      end_config.database = root / "explicit-end.db";
+      end_config.telemetry = root / "explicit-end-telemetry";
+      end_config.queue = root / "explicit-end-queue.db";
+      Runtime live(end_config);
+      require(live.receive(sample().dump(), "127.0.0.1"), "explicit-end telemetry sample");
+      Json ended_heartbeat = {
+          {"version", 3}, {"type", "status"}, {"state", "ready"}, {"simulator", "ACC"}};
+      require(live.receive(ended_heartbeat.dump(), "127.0.0.1"), "non-open status accepted");
+      require(live.snapshot()["recording"] == false,
+              "an explicit non-open status still finalizes immediately, unlike paused (#15)");
+    }
     require(!runtime.receive("[]", "127.0.0.1"), "non-object rejected");
     auto bad = sample();
     bad["telemetry"]["rpm"] = true;

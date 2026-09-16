@@ -1095,6 +1095,12 @@ public:
     virtual bool connected() = 0;
     virtual const char* kind() const = 0;
     virtual void refresh_metadata() {}
+    // True only when the sim has left the session entirely (its main menu, or
+    // an equivalent "off" state) rather than merely being paused, alt-tabbed
+    // or showing a menu overlay mid-session. The default assumes the sim
+    // exposes no such signal, so a recording ends only via the not-live
+    // timeout, an explicit session/track/car change, or disconnection (#15).
+    virtual bool ended() { return false; }
     Metadata metadata;
 };
 
@@ -1139,6 +1145,11 @@ public:
     }
 
     bool live() override { return graphics_.read<std::int32_t>(4) == 2; }
+
+    // AC's graphics.status is AC_OFF=0, AC_REPLAY=1, AC_LIVE=2, AC_PAUSE=3.
+    // Only AC_OFF means the sim left the session (back at the main menu);
+    // AC_PAUSE/AC_REPLAY are gaps inside the same session (#15).
+    bool ended() override { return graphics_.read<std::int32_t>(4) == 0; }
 
     bool connected() override { return true; }
 
@@ -1208,16 +1219,27 @@ public:
         adapter->metadata.simulator = "ACE";
         adapter->metadata.vehicle = "Assetto Corsa EVO car";
         adapter->metadata.venue = "Assetto Corsa EVO";
-        const int session_type = adapter->static_.read<std::int32_t>(32);
-        static constexpr const char* sessions[] = {
-            "Unknown", "Practice", "Qualifying", "Race", "Hotlap", "Time Attack", "Drift", "Drag"
-        };
-        adapter->metadata.session = session_type >= 0 && session_type < 8
-            ? sessions[session_type] : adapter->static_.ascii(36, 33);
+        adapter->refresh_metadata();
         return adapter;
     }
 
+    // Only the session type is re-readable from the static block today; car
+    // and track names have no known ACE offset yet (hence the placeholders
+    // above), so a car/track change cannot be detected for ACE, only a
+    // session-type change (#15).
+    void refresh_metadata() override {
+        const int session_type = static_.read<std::int32_t>(32);
+        static constexpr const char* sessions[] = {
+            "Unknown", "Practice", "Qualifying", "Race", "Hotlap", "Time Attack", "Drift", "Drag"
+        };
+        metadata.session = session_type >= 0 && session_type < 8
+            ? sessions[session_type] : static_.ascii(36, 33);
+    }
+
     bool live() override { return graphics_.read<std::int32_t>(4) == 2; }
+    // Same graphics.status field and assumed AC_OFF=0 semantics as AC1/ACC
+    // (#15); unverified on real ACE hardware, flagged on the board.
+    bool ended() override { return graphics_.read<std::int32_t>(4) == 0; }
     bool connected() override { return true; }
     const char* kind() const override { return "ACE"; }
 
@@ -1289,19 +1311,26 @@ public:
                 };
             }
         }
-        std::string yaml;
-        const int yaml_length = adapter->mapping_.read<std::int32_t>(16);
-        const int yaml_offset = adapter->mapping_.read<std::int32_t>(20);
-        if (yaml_length > 0 && yaml_length < 10 * 1024 * 1024 && yaml_offset >= 0) {
-            yaml = adapter->mapping_.ascii(static_cast<std::size_t>(yaml_offset), static_cast<std::size_t>(yaml_length));
-        }
         adapter->metadata.simulator = "iRacing";
-        adapter->metadata.driver = yaml_value(yaml, "UserName");
-        adapter->metadata.vehicle = yaml_value(yaml, "CarScreenName");
-        adapter->metadata.venue = yaml_value(yaml, "TrackDisplayName");
-        adapter->metadata.session = yaml_value(yaml, "SessionType");
-        if (adapter->metadata.session.empty()) adapter->metadata.session = "iRacing";
+        adapter->refresh_metadata();
         return adapter;
+    }
+
+    // Re-reads the session info YAML, which iRacing updates in place as the
+    // session type, track or car changes (practice/qualifying/race, a track
+    // swap between sessions, a car change in a test session) (#15).
+    void refresh_metadata() override {
+        std::string yaml;
+        const int yaml_length = mapping_.read<std::int32_t>(16);
+        const int yaml_offset = mapping_.read<std::int32_t>(20);
+        if (yaml_length > 0 && yaml_length < 10 * 1024 * 1024 && yaml_offset >= 0) {
+            yaml = mapping_.ascii(static_cast<std::size_t>(yaml_offset), static_cast<std::size_t>(yaml_length));
+        }
+        metadata.driver = yaml_value(yaml, "UserName");
+        metadata.vehicle = yaml_value(yaml, "CarScreenName");
+        metadata.venue = yaml_value(yaml, "TrackDisplayName");
+        metadata.session = yaml_value(yaml, "SessionType");
+        if (metadata.session.empty()) metadata.session = "iRacing";
     }
 
     bool live() override {
@@ -1524,7 +1553,12 @@ void append_wire_string(std::vector<std::uint8_t>& output, std::string_view valu
 }
 
 enum class V4PacketType : std::uint8_t { telemetry = 1, metadata = 2, status = 3 };
-enum class V4StatusState : std::uint8_t { waiting = 0, ready = 1, driving = 2, ended = 3 };
+// `paused` (#15) reports a live run that has a gap: the sim is paused, in a
+// menu overlay or alt-tabbed, but the recording is still open. It is distinct
+// from `ready` (no run yet) and from `ended` (the run is finalized). It is
+// only ever sent while a run is active, so it carries the same 0x01 "active"
+// flag as `driving` on the wire.
+enum class V4StatusState : std::uint8_t { waiting = 0, ready = 1, driving = 2, ended = 3, paused = 4 };
 
 std::uint8_t wire_simulator(Game game) {
     switch (game) {
@@ -1808,6 +1842,7 @@ public:
     bool recording() const { return recording_; }
     std::uint64_t sample_count() const { return sample_count_; }
     const fs::path& last_path() const { return last_path_; }
+    const Metadata& metadata() const { return metadata_; }
 
     void start(const Metadata& source) {
         metadata_ = source;
@@ -2021,6 +2056,9 @@ private:
 
     void run() {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        // #15: one recording per real sim session; a pause/menu/alt-tab is a
+        // gap inside it, bounded by this timeout rather than ending at once.
+        constexpr auto kNotLiveTimeout = 10min;
         const auto sample_period = std::chrono::nanoseconds(1'000'000'000LL / options_.sample_rate);
         auto next_sample = std::chrono::steady_clock::now();
         auto next_heartbeat = next_sample + 1s;
@@ -2069,13 +2107,18 @@ private:
             }
 
             if (now >= next_heartbeat) {
-                const auto state = recorder_.recording() ? "driving" : adapter_ ? "ready" : "waiting";
+                // A pause/menu/alt-tab keeps recorder_.recording() true (#15), so
+                // "driving" alone no longer means live telemetry is flowing; tell
+                // the Pi apart with "paused" so the dashboard does not read idle.
+                const bool currently_live = adapter_ && adapter_->live();
+                const auto state = !recorder_.recording() ? (adapter_ ? "ready" : "waiting")
+                                  : currently_live ? "driving" : "paused";
                 if (v4_) {
                     if (v4_->active() && adapter_)
                         send(v4_->metadata_packet(running_game_.game(), adapter_->metadata, options_.sample_rate));
-                    send(v4_->status_packet(running_game_.game(),
-                         v4_->active() ? V4StatusState::driving : adapter_ ? V4StatusState::ready : V4StatusState::waiting,
-                         "", packets_, options_.sample_rate));
+                    const auto wire_state = !v4_->active() ? (adapter_ ? V4StatusState::ready : V4StatusState::waiting)
+                                           : currently_live ? V4StatusState::driving : V4StatusState::paused;
+                    send(v4_->status_packet(running_game_.game(), wire_state, "", packets_, options_.sample_rate));
                 } else send(status_json(state, adapter_.get(), options_.sample_rate));
                 next_heartbeat = now + 1s;
                 set_status(current_status_);
@@ -2127,12 +2170,43 @@ private:
                     else send(telemetry_json(frame, *adapter_, options_.sample_rate));
                     set_status(adapter_->metadata.simulator + " recording - " +
                                std::to_string(recorder_.sample_count()) + " samples");
+                } else if (recorder_.recording()) {
+                    // One recording per real sim session (#15): a pause, menu
+                    // overlay or alt-tab is a gap inside the recording, not the
+                    // end of it. The run ends only on a sim session change
+                    // (session type, track or car), a return to the main menu
+                    // / sim status OFF, sim exit (handled above via connected()
+                    // and running_game_.running()), or kNotLiveTimeout with no
+                    // live sample.
+                    adapter_->refresh_metadata();
+                    const auto& active = recorder_.metadata();
+                    const bool session_changed = adapter_->metadata.venue != active.venue ||
+                                                  adapter_->metadata.vehicle != active.vehicle ||
+                                                  adapter_->metadata.session != active.session;
+                    if (session_changed) {
+                        logger_.write("Session changed while not live (" + active.venue + " / " +
+                                      active.vehicle + " / " + active.session + " -> " +
+                                      adapter_->metadata.venue + " / " + adapter_->metadata.vehicle +
+                                      " / " + adapter_->metadata.session + "); ending the recording");
+                        finish_recording();
+                        inactive_since.reset();
+                    } else if (adapter_->ended()) {
+                        logger_.write("Returned to the main menu; ending the recording");
+                        finish_recording();
+                        inactive_since.reset();
+                    } else {
+                        if (!inactive_since) inactive_since = now;
+                        if (now - *inactive_since >= kNotLiveTimeout) {
+                            logger_.write("No live telemetry for 10 minutes; ending the recording");
+                            finish_recording();
+                            inactive_since.reset();
+                        } else {
+                            set_status(adapter_->metadata.simulator + " paused - " +
+                                       std::to_string(recorder_.sample_count()) + " samples");
+                        }
+                    }
                 } else {
                     set_status(adapter_->metadata.simulator + " connected - waiting for driving");
-                    if (recorder_.recording()) {
-                        if (!inactive_since) inactive_since = now;
-                        else if (now - *inactive_since >= 2s) finish_recording();
-                    }
                 }
             }
 
@@ -2394,18 +2468,40 @@ std::pair<Frame, Metadata> run() {
             "original AC corner fields and lap timing offsets");
     const auto wire_frame = frame;
     require(!adapter->read(frame), "unchanged LIVE physics must not become a fresh sample");
+    // AC's graphics.status: AC_OFF=0, AC_REPLAY=1, AC_LIVE=2, AC_PAUSE=3. Only
+    // AC_OFF reports ended() (#15); a pause or replay is a gap, not the end
+    // of the session, matching the run loop's not-live handling.
     p.packet_id = 42; g.status = 1;
-    require(!adapter->live() && !adapter->read(frame), "paused sample rejected");
+    require(!adapter->live() && !adapter->read(frame) && !adapter->ended(),
+            "paused/replay sample rejected but not ended");
     g.status = 3;
-    require(!adapter->live() && !adapter->read(frame), "replay sample rejected");
+    require(!adapter->live() && !adapter->read(frame) && !adapter->ended(),
+            "pause/replay sample rejected but not ended");
     g.status = 0;
-    require(!adapter->read(frame), "off sample rejected");
+    require(!adapter->read(frame) && adapter->ended(), "AC_OFF sample rejected and reports ended");
     g.status = 2; p.gear = 1;
-    require(adapter->read(frame) && frame.value[gear] == 0, "resume and neutral gear");
+    require(adapter->read(frame) && frame.value[gear] == 0 && !adapter->ended(),
+            "resume and neutral gear, no longer ended");
     p.packet_id = 0; p.gear = 0;
     require(adapter->read(frame) && frame.value[gear] == -1, "packet counter restart and reverse gear");
     require(!adapter->read(frame), "resumed sample is accepted only once");
-    std::cout << "AC1/Content Manager adapter self-test passed: controls, metadata, laps, pause, replay, restart\n";
+    // A car/track change mid-session (e.g. a garage visit while paused) must
+    // be visible to a later refresh_metadata() call so the run loop can end
+    // the recording and start a new one (#15) instead of merging two cars.
+    // Restored afterwards so the returned metadata still matches wire_frame,
+    // which every v4 fixture below is generated against.
+    std::wcscpy(info.value().car, L"ks_ferrari_488");
+    std::wcscpy(info.value().track, L"ks_barcelona");
+    std::wcscpy(info.value().layout, L"");
+    adapter->refresh_metadata();
+    require(adapter->metadata.vehicle == "ks_ferrari_488" && adapter->metadata.venue == "ks_barcelona",
+            "refresh_metadata reflects a car/track change while not live");
+    std::wcscpy(info.value().car, L"ks_bmw_m4");
+    std::wcscpy(info.value().track, L"ks_vallelunga");
+    std::wcscpy(info.value().layout, L"club");
+    adapter->refresh_metadata();
+    std::cout << "AC1/Content Manager adapter self-test passed: controls, metadata, laps, pause, replay, "
+                 "restart, ended/menu detection, mid-session car/track change\n";
     return {wire_frame, adapter->metadata};
 }
 } // namespace assetto_self_test
@@ -2448,7 +2544,8 @@ void ace() {
     put<std::int32_t>(info.value(), 32, 3);
     auto adapter = AceAdapter::open((prefix + L"_physics").c_str(), (prefix + L"_graphics").c_str(),
                                     (prefix + L"_static").c_str());
-    require(bool(adapter) && adapter->live(), "ACE opens and enters driving state");
+    require(bool(adapter) && adapter->live() && !adapter->ended() && adapter->metadata.session == "Race",
+            "ACE opens, enters driving state and reads the initial session type");
     Frame frame;
     require(adapter->read(frame), "ACE accepts coherent sample");
     const auto close_enough = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
@@ -2464,7 +2561,14 @@ void ace() {
     require(adapter->read(frame) && frame.value[lap_number] == 2 && frame.completed_lap_ms == 18000,
             "ACE lap rollover");
     put<std::int32_t>(graphics.value(), 4, 1);
-    require(!adapter->live(), "ACE menu state is not driving");
+    require(!adapter->live() && !adapter->ended(), "ACE overlay/replay state is not driving but not ended (#15)");
+    put<std::int32_t>(graphics.value(), 4, 0);
+    require(!adapter->live() && adapter->ended(),
+            "ACE reports ended() on the same graphics.status field/value as AC1/ACC (#15, unverified on real ACE)");
+    put<std::int32_t>(info.value(), 32, 1);
+    adapter->refresh_metadata();
+    require(adapter->metadata.session == "Practice",
+            "ACE refresh_metadata reflects a session-type change while not live (#15)");
 }
 
 void iracing() {
@@ -2501,6 +2605,19 @@ void iracing() {
             close_enough(frame.value[speed_kmh], 180) && close_enough(frame.value[g_x], 1) && close_enough(frame.value[g_y], 2) &&
             close_enough(frame.value[g_z], -1) && frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
             frame.completed_lap_ms == 91250, "iRacing conversions and lap timing");
+    // iRacing updates the session info YAML in place as the session type,
+    // track or car changes (practice/qualifying/race, a car swap); a later
+    // refresh_metadata() call must pick that up without reopening the adapter
+    // so the run loop can detect the change while not live (#15).
+    const std::string yaml = "SessionType: Practice\nCarScreenName: Test Car 2\n"
+                             "TrackDisplayName: Test Track 2\nUserName: Test Driver 2\n";
+    text(data, 5000, yaml, yaml.size() + 1);
+    put<std::int32_t>(data, 16, static_cast<std::int32_t>(yaml.size()));
+    put<std::int32_t>(data, 20, 5000);
+    adapter->refresh_metadata();
+    require(adapter->metadata.session == "Practice" && adapter->metadata.vehicle == "Test Car 2" &&
+                adapter->metadata.venue == "Test Track 2" && adapter->metadata.driver == "Test Driver 2",
+            "iRacing refresh_metadata reflects a session/car/track change while connected (#15)");
     put<std::int32_t>(data, 4, 0);
     require(!adapter->connected() && !adapter->read(frame), "iRacing disconnect rejects samples");
 }
@@ -2699,6 +2816,9 @@ bool run_self_test(const fs::path& directory, int sample_rate) {
     save("metadata.hex", encoder.metadata_packet(Game::acc, wire_metadata, sample_rate));
     save("telemetry.hex", encoder.telemetry_packet(Game::acc, wire_frame, sample_rate, std::chrono::steady_clock::now()));
     save("driving.hex", encoder.status_packet(Game::acc, V4StatusState::driving, "", 2, sample_rate));
+    // #15: a live run with a gap (pause/menu/alt-tab); the Pi must keep the
+    // recording open on this state, unlike "ready"/"waiting".
+    save("paused.hex", encoder.status_packet(Game::acc, V4StatusState::paused, "", 3, sample_rate));
     save("next.hex", encoder.telemetry_packet(Game::acc, wire_frame, sample_rate, std::chrono::steady_clock::now()));
     save("ended.hex", encoder.status_packet(Game::acc, V4StatusState::ended, "", 4, sample_rate));
     encoder.end_run();

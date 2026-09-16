@@ -43,6 +43,7 @@ int main(int argc, char **argv) {
     const auto metadata = fixture(argv[2], "metadata.hex"),
                telemetry = fixture(argv[2], "telemetry.hex"),
                driving = fixture(argv[2], "driving.hex"),
+               paused = fixture(argv[2], "paused.hex"),
                next = fixture(argv[2], "next.hex"),
                ended = fixture(argv[2], "ended.hex"),
                ready = fixture(argv[2], "ready.hex");
@@ -105,9 +106,21 @@ int main(int argc, char **argv) {
               "v4 latency percentiles exposed");
       require(r.receive(driving, "127.0.0.1"),
               "authenticated driving heartbeat");
-      require(r.receive(next, "127.0.0.1"), "telemetry after heartbeat");
+      require(r.receive(paused, "127.0.0.1"),
+              "authenticated paused heartbeat (#15)");
+      require(r.snapshot()["recording"] == true &&
+                  r.snapshot()["session_active"] == true &&
+                  r.snapshot()["companion_daemon_state"] == "paused" &&
+                  r.snapshot()["connected"] == true,
+              "a paused heartbeat keeps the spool/session open and is "
+              "distinguishable from idle (#15)");
+      require(r.receive(next, "127.0.0.1"), "telemetry after paused heartbeat");
+      require(r.snapshot()["recording"] == true &&
+                  r.snapshot()["recorded_samples"] == 2,
+              "live telemetry resuming after a pause continues the same "
+              "recording rather than starting a new one (#15)");
       require(r.snapshot()["packets_lost"] == 0,
-              "metadata/heartbeat do not count as lost telemetry");
+              "metadata/heartbeat/paused do not count as lost telemetry");
       require(!r.receive(telemetry, "127.0.0.1"), "telemetry replay rejected");
       require(r.receive(ended, "127.0.0.1"), "end marker accepted");
       require(r.snapshot()["recording"] == false,
@@ -138,7 +151,9 @@ int main(int argc, char **argv) {
       auto state = r.snapshot();
       require(state["throttle"].is_null() && state["brake"].is_null(),
               "no retained invalid pedals");
-      require(state["packets_lost"] == 1 && state["recorded_samples"] == 2,
+      // This block never receives driving.hex or paused.hex, so "sparse"
+      // (built from next.hex) has a two-packet gap in the wire sequence.
+      require(state["packets_lost"] == 2 && state["recorded_samples"] == 2,
               "wire gap does not synthesize samples");
       require(r.receive(ready, "127.0.0.1"),
               "idle retires active stream even if end packet was lost");
@@ -190,7 +205,7 @@ int main(int argc, char **argv) {
                 "127.0.0.1"),
             "revoked paired mode rejects unauthenticated v3 fallback");
     std::cout << "Windows v4 fixtures: authentication, state, recording, "
-                 "replay persistence passed\n";
+                 "paused/not-live gap (#15), replay persistence passed\n";
     return 0;
   } catch (const std::exception &e) {
     std::cerr << e.what() << '\n';
