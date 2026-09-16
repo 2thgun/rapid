@@ -45,7 +45,9 @@ int main(int argc, char **argv) {
                driving = fixture(argv[2], "driving.hex"),
                next = fixture(argv[2], "next.hex"),
                ended = fixture(argv[2], "ended.hex"),
-               ready = fixture(argv[2], "ready.hex");
+               ready = fixture(argv[2], "ready.hex"),
+               ac_metadata = fixture(argv[2], "ac-metadata.hex"),
+               ac_telemetry = fixture(argv[2], "ac-telemetry.hex");
     {
       Runtime r(c);
       require(!r.receive(
@@ -95,6 +97,10 @@ int main(int argc, char **argv) {
       require(std::abs(number(state, "throttle") - .8) < 1e-6 &&
                   state["car_model"] == "V4 Car",
               "pedals and metadata");
+      require(std::abs(number(state, "steering_angle") - (-.3)) < 1e-6,
+              "steering channel is normalised, not degrees or radians");
+      require(state["steering_lock_deg"] == 900,
+              "known steering lock parsed from v4 metadata");
       require(state["recording"] == true && state["recorded_samples"] == 1,
               "v4 recording active");
       require(state["sender_lag_ms"]["p50"].is_number() &&
@@ -118,6 +124,21 @@ int main(int argc, char **argv) {
       require(manifest["quality"]["recorded_samples"] == 2,
               "v4 samples exported");
       require(r.receive(ready, "127.0.0.1"), "new authenticated idle stream");
+    }
+    // AC1 exposes no static steering-lock field, so its wire metadata carries
+    // no lock text -- the receiver must report that explicitly as unknown
+    // rather than inventing a value or reusing the previous simulator's lock.
+    {
+      Config ac = c;
+      ac.database = root / "ac.db";
+      ac.telemetry = root / "ac";
+      Runtime r(ac);
+      require(r.receive(ac_metadata, "127.0.0.1"), "AC1 metadata accepted");
+      require(r.snapshot()["steering_lock_deg"].is_null(),
+              "unknown steering lock is null, not a guessed default");
+      require(r.receive(ac_telemetry, "127.0.0.1"), "AC1 telemetry accepted");
+      require(std::abs(number(r.snapshot(), "steering_angle") - (-.4)) < 1e-6,
+              "AC1 steering channel is already normalised, unchanged by receipt");
     }
     // Lost control packets must not create invented telemetry samples. Missing
     // optional channels must clear retained readings when their validity

@@ -31,6 +31,16 @@ Window {
     function sector(n) { return time("sector_" + n + "_ms") + (raw("sector_" + n + "_delta_ms") == null ? "" : " (" + delta("sector_" + n + "_delta_ms") + ")") }
     function pair(a, b, suffix) { return numeric(a,1) + " / " + numeric(b,1) + (suffix || "") }
     function gear() { const v = raw("gear"); return v == null ? "—" : v === -1 ? "R" : v === 0 ? "N" : String(v) }
+    // steering_angle is normalised -1..1 for every simulator. Degrees are
+    // derived here for display only, using the sim's own reported lock when
+    // known, else a configurable default (never silently -- see steeringLockKnown).
+    readonly property real defaultLockToLockDeg: 900
+    function steeringLockKnown() {
+        const v = raw("steering_lock_deg")
+        return v !== undefined && v !== null && Number.isFinite(Number(v)) && Number(v) > 0
+    }
+    function steeringLockToLockDeg() { return root.steeringLockKnown() ? Number(raw("steering_lock_deg")) : root.defaultLockToLockDeg }
+    function steeringDegrees() { return root.number("steering_angle") * root.steeringLockToLockDeg() / 2 }
 
     component Label: Text {
         color: root.muted; font.pixelSize: 10; font.bold: true
@@ -137,8 +147,8 @@ Window {
                         }
                     }
                 }
-                Metric { x: 8; y: 129; width: 76; caption: "STEERING"; reading: root.raw("steering_angle") == null ? "—" : (root.number("steering_angle")*180/Math.PI).toFixed(0)+"°" }
-                Image { x: 88; y: 113; width: 86; height: 86; source: "qrc:/assets/steering-wheel-cartoon.png"; fillMode: Image.PreserveAspectFit; rotation: root.number("steering_angle")*180/Math.PI }
+                Metric { x: 8; y: 129; width: 76; caption: "STEERING" + (root.steeringLockKnown() ? "" : "*"); reading: root.raw("steering_angle") == null ? "—" : root.steeringDegrees().toFixed(0)+"°" }
+                Image { x: 88; y: 113; width: 86; height: 86; source: "qrc:/assets/steering-wheel-cartoon.png"; fillMode: Image.PreserveAspectFit; rotation: root.steeringDegrees() }
             }
             Card {
                 width: 134; height: body.height

@@ -7,6 +7,7 @@
     "gear":  null,
     "rpm":  null,
     "steering_angle":  null,
+    "steering_lock_deg":  null,
     "g_x":  null,
     "g_y":  null,
     "g_z":  null,

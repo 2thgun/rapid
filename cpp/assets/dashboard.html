@@ -154,6 +154,19 @@ for (const id of ['status', 'sim', 'gear', 'rpm', 'rpm-fill', 'speed', 'lap', 'l
   fields[id] = document.getElementById(id);
 }
 const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
+// steering_angle is normalised -1..1 for every simulator. Degrees are derived
+// here for display only, using the sim's own reported lock (steering_lock_deg,
+// full lock-to-lock) when known, else a configurable default -- and callers
+// must show that a default was used rather than treat it as a real reading.
+const defaultLockToLockDeg = 900;
+function steeringDegrees(state) {
+  const norm = Number(state.steering_angle);
+  if (state.steering_angle == null || !Number.isFinite(norm)) return { degrees: null, known: false };
+  const lockRaw = Number(state.steering_lock_deg);
+  const known = state.steering_lock_deg != null && Number.isFinite(lockRaw) && lockRaw > 0;
+  const lockToLock = known ? lockRaw : defaultLockToLockDeg;
+  return { degrees: norm * lockToLock / 2, known };
+}
 const formatTime = milliseconds => milliseconds == null ? '—' :
   `${Math.floor(milliseconds / 60000)}:${String(Math.floor(milliseconds / 1000) % 60).padStart(2, '0')}.${String(milliseconds % 1000).padStart(3, '0')}`;
 
@@ -286,9 +299,10 @@ async function tick() {
     fields['throttle-fill'].style.width = `${throttle * 100}%`;
     fields['brake-value'].textContent = state.brake == null ? '—' : `${Math.round(brake * 100)}%`;
     fields['brake-fill'].style.width = `${brake * 100}%`;
-    const steering = Number(state.steering_angle) || 0;
-    fields['steering-value'].textContent = state.steering_angle == null ? '—' : `${steering >= 0 ? '+' : ''}${Math.round(steering * 180 / Math.PI)}°`;
-    fields['steering-wheel'].style.transform = `rotate(${steering * 180 / Math.PI}deg)`;
+    const steering = steeringDegrees(state);
+    fields['steering-value'].textContent = steering.degrees == null ? '—' :
+      `${steering.degrees >= 0 ? '+' : ''}${Math.round(steering.degrees)}°${steering.known ? '' : '*'}`;
+    fields['steering-wheel'].style.transform = `rotate(${steering.degrees || 0}deg)`;
     const gx = Number(state.g_x) || 0;
     const gz = Number(state.g_z) || 0;
     fields['g-dot'].style.left = `${50 + clamp(gx / 2, -1, 1) * 42}%`;

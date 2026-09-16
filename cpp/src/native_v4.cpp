@@ -80,6 +80,30 @@ std::string wire_text(const std::string &bytes, std::size_t &at,
   (void)Json(value).dump();
   return value;
 }
+// A plain non-negative or negative decimal (as produced by the companion's
+// "%.9g" formatter for realistic steering-lock magnitudes). Empty means
+// "unknown". Anything else is a malformed packet, not a silent zero.
+double wire_decimal(const std::string &text) {
+  if (text.empty())
+    return 0.0;
+  std::size_t at = text[0] == '-' ? 1 : 0;
+  bool any_digit = false;
+  double value = 0.0;
+  for (; at < text.size() && text[at] >= '0' && text[at] <= '9'; ++at) {
+    value = value * 10 + (text[at] - '0');
+    any_digit = true;
+  }
+  if (at < text.size() && text[at] == '.') {
+    double scale = 0.1;
+    for (++at; at < text.size() && text[at] >= '0' && text[at] <= '9'; ++at) {
+      value += (text[at] - '0') * scale;
+      scale *= 0.1;
+      any_digit = true;
+    }
+  }
+  check(any_digit && at == text.size(), "invalid v4 decimal field");
+  return text[0] == '-' ? -value : value;
+}
 } // namespace
 
 std::string telemetry_key(std::string hex) {
@@ -202,6 +226,11 @@ Json receive_v4(Database &store, const std::string &bytes,
     for (const char *name :
          {"track_name", "car_model", "driver_name", "session_name"})
       metadata[name] = wire_text(bytes, at, end);
+    // Full lock-to-lock steering range in degrees; empty means the simulator
+    // does not expose one, not a real zero-degree lock.
+    const auto lock_text = wire_text(bytes, at, end);
+    const auto lock_deg = wire_decimal(lock_text);
+    metadata["steering_lock_deg"] = lock_deg > 0 ? Json(lock_deg) : Json(nullptr);
     check(at == end, "trailing v4 metadata");
     message["type"] = "status";
     message["state"] = "driving";
