@@ -130,6 +130,22 @@ if(BUILD_TESTING)
   target_link_libraries(rapid-lap-boundary-tests PRIVATE rapid_native)
   set(RAPID_LAP_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/tests/lap-fixtures" CACHE PATH "Decimated real-recording lap boundary fixtures (#16, #20)")
   add_test(NAME rapid-lap-boundary-tests COMMAND rapid-lap-boundary-tests ${CMAKE_CURRENT_SOURCE_DIR}/assets ${RAPID_LAP_FIXTURES})
+  # #17 step 8: receive-path durability and latency. The executable defines
+  # fsync/fdatasync to simulate slow or failing storage, so its symbols must be
+  # visible to libsqlite3.
+  add_executable(rapid-io-path-tests tests/io_path_tests.cpp)
+  target_link_libraries(rapid-io-path-tests PRIVATE rapid_native)
+  set_target_properties(rapid-io-path-tests PROPERTIES ENABLE_EXPORTS ON)
+  foreach(io_case replay-crash recording-crash write-failure latency)
+    add_test(NAME rapid-io-${io_case} COMMAND rapid-io-path-tests
+             ${CMAKE_CURRENT_SOURCE_DIR}/assets ${io_case})
+    set_tests_properties(rapid-io-${io_case} PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+  endforeach()
+  # Expected red until step 8 phase B moves storage off the receive path: the
+  # test passes only if it fails on its latency requirement (not on setup).
+  # Phase B deletes this line.
+  set_tests_properties(rapid-io-latency PROPERTIES PASS_REGULAR_EXPRESSION
+    "FAIL: (receiver could not keep a 50 Hz schedule|receive\\(\\) waits for storage|snapshot\\(\\) waits for storage)")
   add_executable(rapid-display-recovery-tests tests/display_recovery_tests.cpp)
   target_link_libraries(rapid-display-recovery-tests PRIVATE rapid_native)
   target_compile_options(rapid-display-recovery-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
