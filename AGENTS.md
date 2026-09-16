@@ -2,6 +2,9 @@
 
 Read PROJECT.md (working method) and HANDOFF.md, then initialize the wiki
 submodule and read wiki/Resume-Work.md.
+Before editing anything or touching the Pi, read ../developer/COWORK.md (the
+local coordination board) and add your claim; take its Pi lock for any device
+work. Following it is required.
 The repository and its pinned wiki are sufficient to resume source development.
 
 - Runtime work belongs in C++. Inspect current code and service state; old logs

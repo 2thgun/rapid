@@ -3,10 +3,16 @@
 Read [PROJECT.md](PROJECT.md) for the working method and claim vocabulary.
 History lives in `wiki/Development-Log.md`; this file only describes now.
 
-## Checkpoint — 2026-09-15
+## Checkpoint — 2026-09-16
 
-Source: touchscreen calibration (#9) and owner-confirmed orientation changes
-(#11), as local commits on top of `358f26f` that have not been pushed.
+Source: touchscreen calibration (#9, `55ce378`) and owner-confirmed orientation
+changes (#11, `9910615`), pushed on top of `3f1c69a`. On 2026-09-16 the
+2026-09-15 commits were rewritten to drop co-author trailers; old hashes are
+mapped in the Development-Log. Pull with `git fetch && git reset --hard
+origin/main` (and the same for `wiki` on `master`) in any older clone.
+
+The next ten steps (latency, session/lap saving, MoTeC, hardware contact) and
+who works on what are in `../developer/COWORK.md`. Claim there first.
 
 **Implemented, not hardware-verified:**
 
@@ -27,14 +33,13 @@ Source: touchscreen calibration (#9) and owner-confirmed orientation changes
   `--pairing-url` client decrypts the X25519/HKDF/AES-256-GCM envelope, stores
   the key with DPAPI and checks the pinned Pi identity before reconnecting.
 
-**Tested:** on 2026-09-15 the WSL x86-64 Release build passed 11/11 CTests in
-35.28 s, along with the dashboard graph regression, a setup-page script parse
-and an offscreen QML load. The amd64 package passed `CheckPackage.cmake`. Not
-run locally: Debug, ARM64.
+**Tested:** on 2026-09-16 the local gate at the #11 tree (clean WSL x86-64
+builds) passed Debug 11/11 in 34.93 s and Release 11/11 in 34.83 s, plus the
+graph regression, launcher recovery and the Windows companion build and
+self-test (`.local/sessions/2026-09-16-gate/gate-122546.log`). Not run: ARM64.
 
-**Verified (hosted CI):** `358f26f`, run `35023662989` (Windows companion, Linux
-Debug and Release). The calibration and orientation commits have not been
-through hosted CI.
+**Verified (hosted CI):** `3f1c69a` (formerly `358f26f`), run `35023662989`.
+The pushed calibration and orientation commits' hosted run is pending.
 
 **Deployed:** the development Pi runs the older package from `7b5e910`. None of
 the work above is installed there. No image has been assembled or flashed.
