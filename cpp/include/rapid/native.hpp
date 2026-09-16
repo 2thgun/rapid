@@ -61,6 +61,10 @@ struct Config {
               upload_policy = "races";
   int port = 8000, companion_port = 9001, acc_port = 9000,
       acc_local_port = 9000, pairing_port = 8003, protocol_version = 4, interval_ms = 100;
+  // #15: a recording stays open through a paused/menu/alt-tab gap (kept alive
+  // by "paused"/"driving" heartbeats) until this many seconds without a live
+  // telemetry sample. Default is the owner-decided 10 minutes.
+  double not_live_timeout_seconds = 600.0;
   bool acc_enabled = false, upload_enabled = false, pairing_enabled = false;
   // Set only when the runtime has adopted records from private setup state.
   // In this mode an empty refreshed set means every paired PC was revoked; it
@@ -106,6 +110,10 @@ class Runtime {
   Recorder recorder_;
   std::string source_, session_;
   double last_packet_ = 0, last_sample_ = 0, last_recording_packet_ = 0;
+  // #15: last time a heartbeat proved the companion still considers the
+  // recording open (state "driving" or "paused"), used by expire() to
+  // distinguish a sim pause/menu/alt-tab gap from a lost connection.
+  double last_recording_heartbeat_ = 0;
   bool recording_legacy_ = false;
   std::int64_t sequence_ = -1;
   int timing_lap_ = -1, best_lap_ = 0;
