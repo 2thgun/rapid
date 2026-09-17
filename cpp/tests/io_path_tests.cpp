@@ -152,7 +152,9 @@ struct Stream {
   // Sequence 1 is the metadata packet; telemetry sample i uses sequence i + 1.
   std::string metadata() const {
     std::string text;
-    for (const char *s : {"Test Track", "Test Car", "Test Driver", "Practice"}) {
+    // track, car, driver, session, steering lock in degrees (#18)
+    for (const char *s :
+         {"Test Track", "Test Car", "Test Driver", "Practice", "900"}) {
       text += char(std::strlen(s) & 255);
       text += char(0);
       text += s;
