@@ -168,15 +168,20 @@ std::string telemetry_key(std::string hex) {
 }
 
 Json receive_v4(Database &store, const std::string &bytes,
-                const std::string &key) {
-  return receive_v4(store, bytes, key, {});
+                const std::string &key, double receipt_monotonic) {
+  return receive_v4(store, bytes, key, std::string(), receipt_monotonic);
 }
 
 namespace {
 template <class Store>
 Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
-               const std::string &peer_namespace) {
-  const auto received_monotonic = monotonic();
+               const std::string &peer_namespace, double receipt_monotonic) {
+  // #17: prefer the caller's actual datagram-receipt time (udp_loop's
+  // recvfrom) over one taken here, which would already be after the unlocked
+  // window Runtime::receive spends getting here -- a small but avoidable
+  // addition to the sender-lag estimate below.
+  const auto received_monotonic =
+      receipt_monotonic >= 0 ? receipt_monotonic : monotonic();
   if (key.size() != 32 || bytes.size() < 84 || bytes.size() > 4096)
     throw AuthenticationError(
         "v4 authentication unavailable or invalid packet length");
@@ -331,25 +336,32 @@ Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
 }
 template <class Store>
 Json decode_v4(Store &store, const std::string &bytes,
-               const std::vector<std::string> &keys) {
+               const std::vector<std::string> &keys,
+               double receipt_monotonic) {
   for (const auto &key : keys) {
-    try { return decode_v4(store, bytes, key, hash_text(key) + ":"); }
-    catch (const AuthenticationError &) {}
+    try {
+      return decode_v4(store, bytes, key, hash_text(key) + ":",
+                       receipt_monotonic);
+    } catch (const AuthenticationError &) {
+    }
   }
   throw AuthenticationError("v4 authentication failed for every paired PC");
 }
 } // namespace
 
 Json receive_v4(Database &store, const std::string &bytes,
-                const std::string &key, const std::string &peer_namespace) {
-  return decode_v4(store, bytes, key, peer_namespace);
+                const std::string &key, const std::string &peer_namespace,
+                double receipt_monotonic) {
+  return decode_v4(store, bytes, key, peer_namespace, receipt_monotonic);
 }
 Json receive_v4(Database &store, const std::string &bytes,
-                const std::vector<std::string> &keys) {
-  return decode_v4(store, bytes, keys);
+                const std::vector<std::string> &keys,
+                double receipt_monotonic) {
+  return decode_v4(store, bytes, keys, receipt_monotonic);
 }
 Json receive_v4(ReplayGuard &guard, const std::string &bytes,
-                const std::vector<std::string> &keys) {
-  return decode_v4(guard, bytes, keys);
+                const std::vector<std::string> &keys,
+                double receipt_monotonic) {
+  return decode_v4(guard, bytes, keys, receipt_monotonic);
 }
 } // namespace rapid::native

@@ -108,6 +108,12 @@ if(BUILD_TESTING)
   target_link_libraries(rapid-v4-tests PRIVATE rapid_native)
   set(RAPID_V4_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/tests/v4-fixtures" CACHE PATH "Windows encoder fixtures")
   add_test(NAME rapid-v4-tests COMMAND rapid-v4-tests ${CMAKE_CURRENT_SOURCE_DIR}/assets ${RAPID_V4_FIXTURES})
+  # #17 fix round: sender_lag_ms/process_ms/lock_wait_ms measurement points
+  # (native_runtime.cpp, native_v4.cpp), with injected sender/receipt clocks.
+  add_executable(rapid-latency-tests tests/latency_tests.cpp)
+  target_link_libraries(rapid-latency-tests PRIVATE rapid_native)
+  add_test(NAME rapid-latency-tests COMMAND rapid-latency-tests ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+  set_tests_properties(rapid-latency-tests PROPERTIES TIMEOUT 60)
   add_executable(rapid-pairing-tests tests/pairing_tests.cpp)
   target_link_libraries(rapid-pairing-tests PRIVATE rapid_native)
   add_test(NAME rapid-pairing-tests COMMAND rapid-pairing-tests)

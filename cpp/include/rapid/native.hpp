@@ -5,6 +5,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -52,12 +53,19 @@ std::string telemetry_key(std::string hex);
 struct AuthenticationError : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
+// receipt_monotonic is the Pi-side monotonic time the datagram was actually
+// read from the socket (udp_loop's recvfrom), used to compute _received_monotonic
+// for the sender-lag estimate (#17) with as little added jitter as possible.
+// A negative value (the default) falls back to monotonic() taken here, which
+// only a synthetic caller (tests) should rely on.
 Json receive_v4(Database &store, const std::string &payload,
-                const std::string &key);
+                const std::string &key, double receipt_monotonic = -1);
 Json receive_v4(Database &store, const std::string &payload,
-                const std::string &key, const std::string &peer_namespace);
+                const std::string &key, const std::string &peer_namespace,
+                double receipt_monotonic = -1);
 Json receive_v4(Database &store, const std::string &payload,
-                const std::vector<std::string> &keys);
+                const std::vector<std::string> &keys,
+                double receipt_monotonic = -1);
 
 // Thrown when a packet is authentic but its replay floor could not be made
 // durable in time (slow or failing storage). The packet is rejected.
@@ -107,7 +115,8 @@ private:
   bool commit(bool exact);
 };
 Json receive_v4(ReplayGuard &guard, const std::string &payload,
-                const std::vector<std::string> &keys);
+                const std::vector<std::string> &keys,
+                double receipt_monotonic = -1);
 
 struct Config {
   std::string host = "0.0.0.0", pairing_host = "0.0.0.0", companion_host, acc_host = "192.168.1.89",
@@ -189,8 +198,18 @@ class Runtime {
   std::vector<std::string> paired_keys_;
   int best_sectors_[3]{};
   std::deque<std::pair<std::uint64_t, Json>> events_;
+  // Per-stream (v4 run ID) sender-lag baseline (#17): the minimum observed
+  // (pi_receive_monotonic - sender_monotonic) offset for the current stream,
+  // which folds in the arbitrary clock-epoch difference between the two
+  // monotonic clocks plus the best-case one-way transit. Reported lag is the
+  // current offset above that baseline, so it starts at 0 and only ever
+  // measures excess (queueing) delay -- see the comment on record_lag's
+  // definition in native_runtime.cpp for what this method cannot see.
   std::string metrics_session_;
-  std::deque<double> sender_lag_ms_, process_ms_;
+  double sender_lag_baseline_ = std::numeric_limits<double>::infinity();
+  double last_sender_seconds_ = -std::numeric_limits<double>::infinity();
+  double sender_lag_current_ms_ = 0;
+  std::deque<double> sender_lag_ms_, process_ms_, lock_wait_ms_;
   // Lap-position (0..1) -> elapsed lap_time_ms trace for the AC1 delta (#20),
   // using the same boundary rule as the recorder (#16) so a lap that closes
   // for recording also closes for timing.
@@ -202,7 +221,12 @@ class Runtime {
 
 public:
   explicit Runtime(Config config);
-  bool receive(const std::string &payload, const std::string &host);
+  // receipt_monotonic is the time udp_loop's recvfrom returned (#17); process_ms
+  // and lock_wait_ms are measured from it. Defaults to monotonic() taken here
+  // for callers (tests, other senders) with no better timestamp, which only
+  // omits the negligible call-overhead gap.
+  bool receive(const std::string &payload, const std::string &host,
+               double receipt_monotonic = -1);
   void expire();
   void finish();
   Json snapshot() const;
