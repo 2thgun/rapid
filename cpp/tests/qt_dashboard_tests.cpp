@@ -146,6 +146,27 @@ int main(int argc, char **argv) {
   spin(300);
   require(!model.graphSamples().last().toMap()["throttle"].isNull(), "New session sample was deduplicated");
 
+  // #15: a paused daemon heartbeat keeps the recording open (the Pi side
+  // already reports "paused" distinctly from "driving"/"waiting"); the panel
+  // must show a distinct paused status rather than reading as idle or
+  // "waiting for driving".
+  state["companion_daemon_state"] = "paused";
+  state["simulator"] = "AC1";
+  spin(400);
+  const auto paused_status = model.status();
+  require(paused_status.contains("paused", Qt::CaseInsensitive),
+          "A paused daemon heartbeat shows a status naming 'paused'");
+  require(!paused_status.contains("waiting", Qt::CaseInsensitive) &&
+              !paused_status.contains("idle", Qt::CaseInsensitive),
+          "The paused status must not read as idle/waiting for driving (#15)");
+  state["companion_daemon_state"] = "waiting";
+  spin(400);
+  require(model.status().contains("waiting for driving", Qt::CaseInsensitive),
+          "A genuinely idle daemon (not paused) still shows waiting for driving");
+  state["companion_daemon_state"] = "driving";
+  state.remove("simulator");
+  spin(300);
+
   const auto calls = [&] {
     QFile file(helper_log);
     return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString{};
