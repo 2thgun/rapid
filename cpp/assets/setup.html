@@ -17,10 +17,10 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <p id="message" role="status" aria-live="polite"></p>
 <section id="device-identity" hidden>
 <h2>Confirm this device</h2>
-<p>Setup Wi-Fi network: <strong>rapid</strong> (open, no password). If this
-device's own physical display shows <strong>rapid-####</strong> instead,
-another raPId unit nearby is already using <strong>rapid</strong>; join the
-name shown on that display.</p>
+<p>Setup Wi-Fi network: <strong id="device-ssid">rapid</strong> (open, no
+password). If this device's own physical display shows a different
+<strong>rapid-####</strong> name, another raPId unit nearby is already using
+<strong>rapid</strong>; join the name shown on that display.</p>
 <p>Address: <strong id="device-address"></strong></p>
 <p>TLS fingerprint: <strong id="device-fingerprint">unavailable</strong></p>
 <p>More than one raPId device in range broadcasts the same Wi-Fi name.
@@ -450,6 +450,9 @@ document.getElementById('sign-out').addEventListener('click', async () => {
     const status = await api('/api/v1/setup');
     if (!status.owner_configured) {
       document.getElementById('device-address').textContent = location.host;
+      // #22/#23: the provisioner publishes the name actually in use, which is
+      // "rapid" unless another unit in range already had it.
+      if (status.network_ssid) document.getElementById('device-ssid').textContent = status.network_ssid;
       if (status.certificate_fingerprint) {
         const fp = status.certificate_fingerprint;
         document.getElementById('device-fingerprint').textContent =
