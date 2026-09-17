@@ -59,24 +59,29 @@ int main(int argc, char **argv) {
     require(activation.size() == 64 &&
                 activation.find_first_not_of("0123456789abcdef") == std::string::npos,
             "first boot creates a 256-bit activation token");
-    const auto ap_password = bootstrap["bootstrap"]["access_point_password"].get<std::string>();
     require(bootstrap["bootstrap"]["certificate_fingerprint"].get<std::string>().size() == 64 &&
                 bootstrap["bootstrap"]["certificate_fingerprint"].get<std::string>().find_first_not_of("0123456789abcdef") == std::string::npos,
             "first boot publishes the TLS certificate fingerprint");
-    require(bootstrap["bootstrap"]["ssid"].get<std::string>().starts_with("rapid-") &&
-                ap_password.size() == 16 &&
-                ap_password.find_first_not_of("0123456789abcdef") == std::string::npos,
-            "first boot creates device-specific AP credentials");
+    // #22: the open setup AP has no per-device passphrase, and its SSID is
+    // resolved later by the privileged provisioner (it alone can scan for a
+    // collision), not by first boot.
+    require(bootstrap["bootstrap"].size() == 5 && !bootstrap["bootstrap"].contains("ssid") &&
+                !bootstrap["bootstrap"].contains("access_point_password"),
+            "first boot no longer generates a device-specific SSID or AP passphrase");
     require((fs::status(token_file).permissions() & fs::perms::group_all) == fs::perms::none &&
                 (fs::status(token_file).permissions() & fs::perms::others_all) == fs::perms::none,
             "activation token stays private");
+    const auto legacy_ap_password = firstboot_directory / "ap-password";
+    atomic_file(legacy_ap_password, "0123456789abcdef\n");
+    require(fs::exists(legacy_ap_password), "legacy AP password fixture is in place before re-running first boot");
     run_firstboot();
+    require(!fs::exists(legacy_ap_password),
+            "first boot removes a leftover passphrase from the old device-specific scheme");
     const auto resumed = Json::parse(read_file(firstboot_status))["bootstrap"];
     require(resumed["activation_token"] == activation &&
-                resumed["access_point_password"] == ap_password &&
                 read_file(certificate_file) == certificate_bytes &&
                 resumed["certificate_fingerprint"] == bootstrap["bootstrap"]["certificate_fingerprint"],
-            "interrupted onboarding preserves AP credentials, activation token and device identity");
+            "interrupted onboarding preserves the activation token and device identity");
     const auto fake_nmcli = root.path / "nmcli";
     const auto nmcli_log = root.path / "nmcli.log";
     {
@@ -84,15 +89,17 @@ int main(int argc, char **argv) {
       script << "#!/bin/sh\n"
                 "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_NMCLI_LOG\"\n"
                 "if [ \"$1 $2 $3\" = \"connection show rapid-setup\" ]; then exit 1; fi\n"
+                "if [ \"$1 $2 $3\" = \"-t -f SSID\" ]; then printf 'some-other-network\\n'; exit 0; fi\n"
                 "exit 0\n";
     }
     fs::permissions(fake_nmcli, fs::perms::owner_all);
     setenv("RAPID_TEST_NMCLI_LOG", nmcli_log.c_str(), 1);
+    const auto ssid_file = root.path / "network-ssid";
     const auto provision = fork();
     require(provision >= 0, "fork AP provisioner");
     if (provision == 0) {
-      execl(argv[2], argv[2], "--status-file", firstboot_status.c_str(), "--nmcli",
-            fake_nmcli.c_str(), nullptr);
+      execl(argv[2], argv[2], "--status-file", firstboot_status.c_str(), "--ssid-file",
+            ssid_file.c_str(), "--nmcli", fake_nmcli.c_str(), nullptr);
       _exit(127);
     }
     int provision_status = 0;
@@ -101,12 +108,74 @@ int main(int argc, char **argv) {
             "AP provisioner configures NetworkManager");
     unsetenv("RAPID_TEST_NMCLI_LOG");
     const auto nmcli_calls = read_file(nmcli_log);
-    require(nmcli_calls.find("connection add type wifi ifname wlan0 con-name rapid-setup") !=
+    require(nmcli_calls.find("connection add type wifi ifname wlan0 con-name rapid-setup autoconnect yes ssid rapid") !=
                 std::string::npos &&
-                nmcli_calls.find("wifi-sec.psk " + ap_password) != std::string::npos &&
+                nmcli_calls.find("wifi-sec") == std::string::npos &&
+                nmcli_calls.find("psk") == std::string::npos &&
                 nmcli_calls.find("ipv4.addresses 192.168.50.1/24") != std::string::npos &&
                 nmcli_calls.find("connection up rapid-setup ifname wlan0") != std::string::npos,
-            "AP provisioner passes only the generated profile values to NetworkManager");
+            "AP provisioner creates an open profile (no key management or PSK) with no collision seen");
+    require(read_file(ssid_file) == "rapid\n",
+            "AP provisioner publishes the resolved SSID for the panel/card to display");
+    // #22 edge case: two Pis in range would both try "rapid". A one-shot scan
+    // picks a disambiguating suffix only when a collision is actually seen,
+    // and holds that choice for the rest of the boot/setup session instead of
+    // re-scanning (and possibly landing on a different answer) each time the
+    // provisioner runs again within the same boot.
+    const auto collision_ssid_file = root.path / "network-ssid-collision";
+    const auto fake_nmcli_collision = root.path / "nmcli-collision";
+    const auto nmcli_collision_log = root.path / "nmcli-collision.log";
+    {
+      std::ofstream script(fake_nmcli_collision);
+      script << "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_NMCLI_LOG\"\n"
+                "if [ \"$1 $2 $3\" = \"connection show rapid-setup\" ]; then exit 1; fi\n"
+                "if [ \"$1 $2 $3\" = \"-t -f SSID\" ]; then printf 'some-other-network\\nrapid\\n'; exit 0; fi\n"
+                "exit 0\n";
+    }
+    fs::permissions(fake_nmcli_collision, fs::perms::owner_all);
+    setenv("RAPID_TEST_NMCLI_LOG", nmcli_collision_log.c_str(), 1);
+    const auto run_provision = [&](const fs::path &ssid_path, const fs::path &nmcli_path) {
+      const auto child = fork();
+      require(child >= 0, "fork AP provisioner");
+      if (child == 0) {
+        execl(argv[2], argv[2], "--status-file", firstboot_status.c_str(), "--ssid-file",
+              ssid_path.c_str(), "--nmcli", nmcli_path.c_str(), nullptr);
+        _exit(127);
+      }
+      int status = 0;
+      return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    };
+    require(run_provision(collision_ssid_file, fake_nmcli_collision),
+            "AP provisioner still succeeds when a collision is seen");
+    unsetenv("RAPID_TEST_NMCLI_LOG");
+    const auto collision_ssid = read_file(collision_ssid_file);
+    require(collision_ssid.size() == 11 && collision_ssid.rfind("rapid-", 0) == 0 &&
+                collision_ssid.substr(6, 4).find_first_not_of("0123456789") == std::string::npos &&
+                collision_ssid.back() == '\n',
+            "a seen collision picks a 4-digit disambiguated SSID");
+    require(read_file(nmcli_collision_log).find("ssid " + collision_ssid.substr(0, 10)) != std::string::npos,
+            "the disambiguated SSID is the one actually configured");
+    const auto fake_nmcli_no_rescan = root.path / "nmcli-no-rescan";
+    const auto nmcli_no_rescan_log = root.path / "nmcli-no-rescan.log";
+    {
+      std::ofstream script(fake_nmcli_no_rescan);
+      script << "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_NMCLI_LOG\"\n"
+                "if [ \"$1 $2 $3\" = \"connection show rapid-setup\" ]; then exit 0; fi\n"
+                "if [ \"$1 $2 $3\" = \"-t -f SSID\" ]; then echo 'scan must not run again this session' >&2; exit 1; fi\n"
+                "exit 0\n";
+    }
+    fs::permissions(fake_nmcli_no_rescan, fs::perms::owner_all);
+    setenv("RAPID_TEST_NMCLI_LOG", nmcli_no_rescan_log.c_str(), 1);
+    require(run_provision(collision_ssid_file, fake_nmcli_no_rescan),
+            "a later provisioner run this session succeeds without re-scanning");
+    unsetenv("RAPID_TEST_NMCLI_LOG");
+    require(read_file(collision_ssid_file) == collision_ssid,
+            "the disambiguated SSID stays stable across the rest of the session");
+    require(read_file(nmcli_no_rescan_log).find("-t -f SSID") == std::string::npos &&
+                read_file(nmcli_no_rescan_log).find("connection add") == std::string::npos,
+            "an already-provisioned session neither re-scans nor re-creates the connection");
     const auto apply_request = root.path / "apply-request.json";
     const auto apply_result = root.path / "apply-result.json";
     const auto fake_hostnamectl = root.path / "hostnamectl";

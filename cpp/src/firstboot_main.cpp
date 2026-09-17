@@ -170,6 +170,14 @@ int main(int argc, char **argv) {
       else throw std::invalid_argument("unknown or incomplete argument; use --help");
     }
     SetupStore store(directory);
+    // #22: the setup AP is now the fixed open network "rapid" with no
+    // per-device passphrase; a device upgraded from the old scheme may still
+    // carry its generated AP password on disk. Drop it rather than leave a
+    // stale secret sitting unused in private state.
+    {
+      std::error_code error;
+      fs::remove(directory / "ap-password", error);
+    }
     if (tls_certificate.empty()) tls_certificate = directory / "device.crt";
     if (tls_private_key.empty()) tls_private_key = directory / "device.key";
     provision_certificate(tls_private_key, tls_certificate,
@@ -180,12 +188,13 @@ int main(int argc, char **argv) {
     // panel. It is never an HTTP response or journal entry.
     if (!owner_configured) {
       if (token_file.empty()) token_file = directory / "enrollment.token";
-      const auto id = store.snapshot().at("device_id").get<std::string>();
+      // #22: the AP's SSID (fixed "rapid", or a disambiguated "rapid-NNNN" if
+      // another one is already in range) is resolved by the privileged
+      // provisioner, which alone can scan for it; it is published to the
+      // panel from its own file, not from this status document.
       status["bootstrap"] = {{"setup_address", address}, {"setup_port", port},
                              {"setup_url", "https://" + address + ":" + std::to_string(port) + "/setup"},
                              {"certificate_fingerprint", certificate_fingerprint(tls_certificate)},
-                             {"ssid", "rapid-" + id.substr(0, 6)},
-                             {"access_point_password", private_hex_secret(directory / "ap-password", 16, "access-point password")},
                              {"activation_token", private_hex_secret(token_file, 64, "activation token")}};
     }
     if (!status_file.empty()) {

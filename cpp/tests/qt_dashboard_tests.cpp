@@ -22,9 +22,18 @@ int main(int argc, char **argv) {
   if (!server.listen(QHostAddress::LocalHost, serve ? 18080 : 0)) return 2;
   QTemporaryFile setup_status;
   if (!setup_status.open()) return 2;
-  setup_status.write("{\"bootstrap\":{\"setup_address\":\"192.168.1.64\",\"setup_port\":8002,\"setup_url\":\"http://192.168.1.64:8002/setup\",\"ssid\":\"rapid-123abc\",\"access_point_password\":\"1234567890abcdef\",\"activation_token\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}");
+  // #22: SSID is no longer part of the first-boot bootstrap document (it is
+  // resolved and published separately by the privileged provisioner, since
+  // only it can scan for a same-name AP already in range); no AP passphrase
+  // is generated at all for the now-open network.
+  setup_status.write("{\"bootstrap\":{\"setup_address\":\"192.168.1.64\",\"setup_port\":8002,\"setup_url\":\"http://192.168.1.64:8002/setup\",\"certificate_fingerprint\":\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\"activation_token\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}");
   setup_status.flush();
   qputenv("RAPID_FIRSTBOOT_STATUS", setup_status.fileName().toUtf8());
+  QTemporaryFile network_ssid;
+  if (!network_ssid.open()) return 2;
+  network_ssid.write("rapid\n");
+  network_ssid.flush();
+  qputenv("RAPID_NETWORK_SSID", network_ssid.fileName().toUtf8());
   QTemporaryFile pairing_panel;
   if (!pairing_panel.open()) return 2;
   const auto pairing_approval = pairing_panel.fileName() + ".approval";
@@ -108,9 +117,12 @@ int main(int argc, char **argv) {
     if (!ok) { std::cerr << message << '\n'; std::exit(1); }
   };
   spin(500);
-  require(model.setupNotice().contains("rapid-123abc") &&
-              model.setupNotice().contains("0123456789abcdef 0123456789abcdef"),
-          "First-boot credentials are rendered from the local status file");
+  require(model.setupNotice().contains("SETUP AP  rapid  (open network)") &&
+              model.setupNotice().contains("fedcba9876543210 fedcba9876543210") &&
+              model.setupNotice().contains("0123456789abcdef 0123456789abcdef") &&
+              !model.setupNotice().contains("PASSWORD"),
+          "Setup card/panel shows the open network's SSID, address, TLS fingerprint and "
+          "activation token, with no passphrase");
   require(model.pairingPending() && model.pairingLabel() == "Test PC" &&
               model.pairingCode() == "12345678" && model.approvePairing(),
           "Pairing panel metadata and approval action are exposed");
