@@ -141,13 +141,13 @@ if(NOT setup_exec MATCHES " --ssid-file /run/rapid/network-ssid( |$)")
   message(FATAL_ERROR "The setup service must publish the setup AP name chosen by rapid-provision")
 endif()
 # #26: the Home Wi-Fi passphrase reaches NetworkManager as a private keyfile
-# rapid-wifi writes itself, never as an nmcli argument; it needs write access
-# to NetworkManager's connection directory (and, pre-existing, to its own
-# request/result queue) under ProtectSystem=strict.
-if(NOT wifi_service MATCHES "${nl}ReadWritePaths=/etc/NetworkManager/system-connections /run/rapid-apply${nl}" OR
-   NOT wifi_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
-   NOT wifi_service MATCHES "${nl}User=root${nl}")
-  message(FATAL_ERROR "rapid-wifi.service must sandbox the Wi-Fi applicator and let it write only its own NetworkManager keyfile and request/result queue")
+# rapid-wifi writes itself, never as an nmcli argument; under
+# ProtectSystem=strict it needs its own explicit write access to
+# NetworkManager's connection directory for that (a separate, additive grant;
+# see g2-sandbox's own #25 check below for this service's request/result
+# queue and its ProtectSystem=strict/User=root wiring).
+if(NOT wifi_service MATCHES "${nl}ReadWritePaths=[^${nl}]*/etc/NetworkManager/system-connections")
+  message(FATAL_ERROR "rapid-wifi.service must grant write access to NetworkManager's connection directory for its own keyfile")
 endif()
 execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)
