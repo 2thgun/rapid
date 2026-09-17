@@ -193,31 +193,73 @@ void Runtime::sectors(Json &f) {
   if (has_position)
     current_lap_trace_.emplace_back(position, time);
 }
-bool Runtime::receive(const std::string &payload, const std::string &host) {
+bool Runtime::receive(const std::string &payload, const std::string &host,
+                      double receipt_monotonic) {
+  // #17: process_ms/lock_wait_ms are measured from datagram receipt (udp_loop's
+  // recvfrom, passed in as receipt_monotonic) to the moment the sample is
+  // visible to snapshot() -- i.e. once this call returns and releases
+  // mutex_ for the last time. That total therefore includes any wait to
+  // acquire the lock and the handoff into the recorder, which the previous
+  // measurement (started only after the lock was already held, and read out
+  // before the recorder ran) both missed. A caller with no better timestamp
+  // (tests, synthetic callers) falls back to monotonic() taken here, which
+  // only loses the negligible gap between recvfrom and this call.
+  const double receipt =
+      receipt_monotonic >= 0 ? receipt_monotonic : monotonic();
+  const auto lock_wait_from = monotonic();
   std::unique_lock lock(mutex_);
-  const auto processing_started = monotonic();
-  const auto record_metrics = [&](const Json &message) {
+  // Accumulates every interval this call spent waiting to (re)acquire
+  // mutex_: the initial acquisition here, plus the v4 path's reacquisition
+  // below (authentication/replay admission run with the lock released, #17
+  // step 8, and can itself wait on the replay writer).
+  double lock_wait_ms = (monotonic() - lock_wait_from) * 1000;
+  const auto record_lag = [&](const Json &message) {
     const auto stream = string(message, "session_id");
     if (!stream.empty() && stream != metrics_session_) {
+      // New v4 run: an old baseline refers to a sender clock epoch that no
+      // longer applies.
       metrics_session_ = stream;
       sender_lag_ms_.clear();
-      process_ms_.clear();
+      sender_lag_baseline_ = std::numeric_limits<double>::infinity();
+      last_sender_seconds_ = -std::numeric_limits<double>::infinity();
     }
-    if (message.contains("_received_monotonic") &&
-        message.contains("monotonic_us")) {
-      const auto lag =
-          (number(message, "_received_monotonic") -
-           number(message, "monotonic_us") / 1000000.0) *
-          1000;
-      if (std::isfinite(lag))
-        sender_lag_ms_.push_back(lag);
-    }
-    process_ms_.push_back((monotonic() - processing_started) * 1000);
+    if (!message.contains("_received_monotonic") ||
+        !message.contains("monotonic_us"))
+      return;
+    const double sender_seconds = number(message, "monotonic_us") / 1000000.0;
+    const double received = number(message, "_received_monotonic");
+    if (!std::isfinite(sender_seconds) || !std::isfinite(received))
+      return;
+    if (sender_seconds < last_sender_seconds_)
+      // The sender's monotonic clock moved backwards inside one stream (a
+      // companion restart or a clock source change): the accumulated
+      // baseline no longer describes this epoch, so start a fresh one
+      // instead of reporting a stale or negative lag.
+      sender_lag_baseline_ = std::numeric_limits<double>::infinity();
+    last_sender_seconds_ = sender_seconds;
+    // One-way delay estimate: the minimum-ever offset between the two clocks
+    // is taken as "no queueing", so lag is whatever is above that. This
+    // cannot see a constant base delay common to every packet (a fixed
+    // extra hop, for example) -- that delay is absorbed into the baseline
+    // and reported as zero lag, same as ordinary one-way min-filter latency
+    // estimation everywhere else.
+    const double offset = received - sender_seconds;
+    sender_lag_baseline_ = std::min(sender_lag_baseline_, offset);
+    sender_lag_current_ms_ =
+        std::max(0.0, (offset - sender_lag_baseline_) * 1000);
+    sender_lag_ms_.push_back(sender_lag_current_ms_);
     constexpr std::size_t max_samples = 256;
     if (sender_lag_ms_.size() > max_samples)
       sender_lag_ms_.pop_front();
+  };
+  const auto record_timing = [&] {
+    process_ms_.push_back((monotonic() - receipt) * 1000);
+    lock_wait_ms_.push_back(lock_wait_ms);
+    constexpr std::size_t max_samples = 256;
     if (process_ms_.size() > max_samples)
       process_ms_.pop_front();
+    if (lock_wait_ms_.size() > max_samples)
+      lock_wait_ms_.pop_front();
   };
   try {
     if (!source_.empty() && source_ != host)
@@ -243,13 +285,22 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
       // Authentication and replay admission need no runtime state, and
       // admission may wait for the replay writer: keep snapshot() and
       // events() unblocked meanwhile. udp_loop is the only receiver, so
-      // packets are still applied in arrival order.
+      // packets are still applied in arrival order. The wait to reacquire
+      // the lock afterwards still counts towards lock_wait_ms (#17): it can
+      // matter as much as the initial acquisition above when a concurrent
+      // snapshot()/events() call is holding mutex_.
       lock.unlock();
+      const auto unlock_at = monotonic();
       struct Relock {
         std::unique_lock<std::mutex> &lock;
-        ~Relock() { lock.lock(); }
-      } relock{lock};
-      m = receive_v4(*replay_, payload, keys);
+        double &lock_wait_ms;
+        double unlock_at;
+        ~Relock() {
+          lock.lock();
+          lock_wait_ms += (monotonic() - unlock_at) * 1000;
+        }
+      } relock{lock, lock_wait_ms, unlock_at};
+      m = receive_v4(*replay_, payload, keys, receipt);
     } else
       m = Json::parse(payload);
     if (!m.is_object())
@@ -394,7 +445,8 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
       }
       if (v4 && m.contains("session_id") && m["session_id"].is_string())
         state_["session_id"] = m["session_id"];
-      record_metrics(m);
+      record_lag(m);
+      record_timing();
       return true;
     }
     if (identity != session_ && version == 3)
@@ -456,11 +508,15 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
     state_["session_id"] = m.value("session_id", Json());
     state_["session_active"] = true;
     state_["session_name"] = m.value("session_name", Json());
-    record_metrics(m);
+    record_lag(m);
     m.erase("_received_monotonic");
     if (version == 3) {
       m["telemetry"] = frame;
       try {
+        // CPU work and the handoff to the recorder's writer thread only
+        // (#17 step 8): the actual spool write, fsync and checkpoint run off
+        // this lock. record_timing() below still counts this handoff as
+        // part of process_ms, since it happens before the sample is visible.
         recorder_.record(m);
       } catch (const std::exception &e) {
         log(std::string("ERROR recording: ") + e.what());
@@ -480,6 +536,10 @@ bool Runtime::receive(const std::string &payload, const std::string &host) {
       if (events_.size() > 12256)
         events_.pop_front();
     }
+    // Everything above that can affect what a concurrent snapshot() reads is
+    // done: process_ms/lock_wait_ms now cover receipt-to-visible in full,
+    // including the recorder handoff just above (#17).
+    record_timing();
     return true;
   } catch (const AuthenticationError &) {
     state_["packets_auth_failed"] = number(state_, "packets_auth_failed") + 1;
@@ -572,11 +632,26 @@ Json Runtime::snapshot() const {
   result.update(recorder_status);
   if (auto replay = replay_->status(); !replay["replay_write_error"].is_null())
     result["replay_write_error"] = replay["replay_write_error"];
+  // sender_lag_ms is the excess (above the best-observed transit) one-way
+  // delay for the current v4 stream; see record_lag's comment in receive()
+  // for what the baseline method cannot see. "current" is the latest sample
+  // even when the p50/p95 window (last 256 packets) holds fewer/older ones.
   result["sender_lag_ms"] = {
+      {"current", sender_lag_ms_.empty() ? Json()
+                                         : Json(sender_lag_current_ms_)},
       {"p50", percentile(sender_lag_ms_, .50)},
       {"p95", percentile(sender_lag_ms_, .95)}};
+  // process_ms: datagram receipt (udp_loop's recvfrom) to visible-in-snapshot,
+  // including lock wait and the recorder handoff (#17). lock_wait_ms is the
+  // subset of that spent waiting for mutex_, broken out separately because
+  // it is cheap to track and answers whether lock contention (rather than
+  // the recorder or storage) is the bottleneck (o8-io, step 10b).
   result["process_ms"] = {{"p50", percentile(process_ms_, .50)},
-                          {"p95", percentile(process_ms_, .95)}};
+                          {"p95", percentile(process_ms_, .95)},
+                          {"max", percentile(process_ms_, 1.0)}};
+  result["lock_wait_ms"] = {{"p50", percentile(lock_wait_ms_, .50)},
+                            {"p95", percentile(lock_wait_ms_, .95)},
+                            {"max", percentile(lock_wait_ms_, 1.0)}};
   result["upload_enabled"] = config_.upload_enabled;
   result["runtime"] = "cpp";
   return result;
@@ -706,10 +781,15 @@ void udp_loop(Runtime &runtime, const Config &config) {
       socklen_t length = sizeof source;
       auto size = recvfrom(fd, buffer, sizeof buffer, 0,
                            reinterpret_cast<sockaddr *>(&source), &length);
+      // Captured immediately after the datagram is actually read, so
+      // process_ms/lock_wait_ms (#17) measure from the true receipt time
+      // rather than from whenever Runtime::receive happens to acquire its
+      // lock.
+      const auto receipt = monotonic();
       char host[INET_ADDRSTRLEN];
       inet_ntop(AF_INET, &source.sin_addr, host, sizeof host);
       if (size > 0 && size <= 8192)
-        runtime.receive(std::string(buffer, size), host);
+        runtime.receive(std::string(buffer, size), host, receipt);
     }
     try {
       runtime.expire();
