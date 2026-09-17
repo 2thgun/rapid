@@ -65,9 +65,7 @@ int main(int argc, char **argv) {
       }
     }
     Runtime runtime(settings);
-    auto dashboard = read_file(settings.assets / "dashboard.html"),
-         telemetry = read_file(settings.assets / "telemetry.html"),
-         steering_wheel = read_file(settings.assets / "steering-wheel-cartoon.png");
+    auto telemetry = read_file(settings.assets / "telemetry.html");
     std::signal(SIGINT, [](int) { stopping = true; });
     std::signal(SIGTERM, [](int) { stopping = true; });
     std::signal(SIGPIPE, SIG_IGN);
@@ -131,12 +129,14 @@ int main(int argc, char **argv) {
           settings.host, settings.port,
           [&](const Request &req) -> Response {
             auto path = req.target.substr(0, req.target.find('?'));
+            // The Qt panel is the only live dashboard (#24); the browser
+            // dashboard is gone, so a bare "/" no longer has a page of its
+            // own to serve. Send browsers on to the engineering telemetry
+            // page instead of a 404.
             if (req.method == "GET" && path == "/")
-              return {200, dashboard, "text/html; charset=utf-8"};
+              return {302, "", "text/plain", {{"Location", "/telemetry"}}};
             if (req.method == "GET" && path == "/telemetry")
               return {200, telemetry, "text/html; charset=utf-8"};
-            if (req.method == "GET" && path == "/steering-wheel-cartoon.png")
-              return {200, steering_wheel, "image/png"};
             if (req.method == "GET" &&
                 (path == "/api/live" || path == "/api/v1/status"))
               return {200, runtime.snapshot().dump()};

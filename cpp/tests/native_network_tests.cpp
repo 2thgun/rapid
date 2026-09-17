@@ -218,18 +218,14 @@ int main(int argc, char **argv) {
     require(network_status.result_int() == 200 &&
                 Json::parse(network_status.body())["available"] == true,
             "network status is available");
-    require(request(port, http::verb::get, "/")
-                    .body()
-                    .find("id=\"network-mode\"") != std::string::npos,
-            "dashboard assets");
+    const auto root_reply = request(port, http::verb::get, "/");
+    require(root_reply.result_int() == 302 &&
+                root_reply[http::field::location] == "/telemetry",
+            "root redirects to the live telemetry page (#24, no browser dashboard)");
     require(request(port, http::verb::get, "/telemetry")
                     .body()
                     .find("new WebSocket") != std::string::npos,
             "engineering assets");
-    const auto wheel = request(port, http::verb::get, "/steering-wheel-cartoon.png");
-    require(wheel.result_int() == 200 && wheel[http::field::content_type] == "image/png" &&
-                wheel.body() == read_file(fs::path(argv[2]) / "steering-wheel-cartoon.png"),
-            "steering wheel asset served intact with PNG content type");
     require(request(port, http::verb::put, "/api/v1/session/upload",
                     "{\"enabled\":\"false\"}")
                     .result_int() == 400,

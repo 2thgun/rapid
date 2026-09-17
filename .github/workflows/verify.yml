@@ -70,7 +70,7 @@ jobs:
           path: build/pi-seals-pairing-fixture
       - shell: pwsh
         run: ./companion/build-native-daemon.ps1 -Compiler MSVC
-      - run: node cpp/tests/dashboard_graph_tests.js
+      - run: node cpp/tests/qt_display_tests.js
       - shell: pwsh
         run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test" --pairing-pi-seals-fixtures "$env:GITHUB_WORKSPACE/build/pi-seals-pairing-fixture"
       - shell: pwsh
