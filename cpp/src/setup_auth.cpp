@@ -413,7 +413,15 @@ Response SetupAuth::handle(const Request &request) {
     if (body["revision"] != state.at("revision"))
       return reply(409, {{"detail", "settings changed; reload and try again"}, {"revision", state.at("revision")}});
     if (wifi_request_file_.empty()) return reply(503, {{"detail", "Wi-Fi application is unavailable"}});
-    try { atomic_file(wifi_request_file_, Json{{"revision", state.at("revision")}, {"ssid", ssid}, {"password", password}}.dump()); }
+    // #26: this file carries the plaintext passphrase until rapid-wifi
+    // consumes and deletes it; keep it owner-only so no other local process
+    // can read it off disk in that window (rapid-wifi itself runs as root
+    // and can read it regardless of group/other bits).
+    try {
+      atomic_file(wifi_request_file_, Json{{"revision", state.at("revision")}, {"ssid", ssid}, {"password", password}}.dump());
+      fs::permissions(wifi_request_file_, fs::perms::owner_read | fs::perms::owner_write,
+                      fs::perm_options::replace);
+    }
     catch (const std::exception &) { return reply(503, {{"detail", "Wi-Fi application queue is unavailable"}}); }
     return reply(202, {{"revision", state.at("revision")}, {"queued", true}});
   }

@@ -71,6 +71,7 @@ read_service("./usr/lib/systemd/system/rapid.service" runtime_service)
 read_service("./usr/lib/systemd/system/rapid-apply.service" apply_service)
 read_service("./usr/lib/systemd/system/rapid-account.service" account_service)
 read_service("./usr/lib/systemd/system/rapid-account.path" account_path)
+read_service("./usr/lib/systemd/system/rapid-wifi.service" wifi_service)
 read_service("./usr/lib/rapid/rapid-panel" panel_script)
 file(REMOVE "${data_tar}")
 if(NOT firstboot_service MATCHES "User=rapid" OR
@@ -138,6 +139,15 @@ if(NOT setup_exec MATCHES " --account-request-file /run/rapid-apply/account-requ
 endif()
 if(NOT setup_exec MATCHES " --ssid-file /run/rapid/network-ssid( |$)")
   message(FATAL_ERROR "The setup service must publish the setup AP name chosen by rapid-provision")
+endif()
+# #26: the Home Wi-Fi passphrase reaches NetworkManager as a private keyfile
+# rapid-wifi writes itself, never as an nmcli argument; it needs write access
+# to NetworkManager's connection directory (and, pre-existing, to its own
+# request/result queue) under ProtectSystem=strict.
+if(NOT wifi_service MATCHES "${nl}ReadWritePaths=/etc/NetworkManager/system-connections /run/rapid-apply${nl}" OR
+   NOT wifi_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
+   NOT wifi_service MATCHES "${nl}User=root${nl}")
+  message(FATAL_ERROR "rapid-wifi.service must sandbox the Wi-Fi applicator and let it write only its own NetworkManager keyfile and request/result queue")
 endif()
 execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)

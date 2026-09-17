@@ -140,4 +140,12 @@ stage_package
 depends="libargon2-1 (>= 0), libcrypt1 (>= 1:4.4), libqt6core6t64, systemd, network-manager, sudo, xinput"
 expect_fail "a package without the SSH server" "Missing generated runtime library dependencies"
 
+stage_package
+replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/etc/NetworkManager/system-connections /run/rapid-apply$' ''
+expect_fail "a Wi-Fi applicator that cannot write its NetworkManager keyfile" "write only its own NetworkManager keyfile"
+
+stage_package
+replace_in "$units/rapid-wifi.service" '^ProtectSystem=strict$' 'ProtectSystem=false'
+expect_fail "a Wi-Fi applicator without filesystem sandboxing" "write only its own NetworkManager keyfile"
+
 echo "package verifier tests passed"

@@ -265,20 +265,39 @@ int main(int argc, char **argv) {
     const auto wifi_request = root.path / "wifi-request.json";
     const auto wifi_result = root.path / "wifi-result.json";
     const auto wifi_log = root.path / "wifi.log";
-    atomic_file(wifi_request, Json{{"revision", 2}, {"ssid", "test-network"}, {"password", std::string(64, 'a')}}.dump());
+    const auto wifi_connections = root.path / "nm-connections";
+    const std::string wifi_password(64, 'a');
+    atomic_file(wifi_request, Json{{"revision", 2}, {"ssid", "test-network"}, {"password", wifi_password}}.dump());
     setenv("RAPID_TEST_HOSTNAME_LOG", wifi_log.c_str(), 1);
     const auto wifi = fork();
     require(wifi >= 0, "fork Wi-Fi applicator");
     if (wifi == 0) {
-      execl(argv[4], argv[4], "--request-file", wifi_request.c_str(), "--result-file", wifi_result.c_str(), "--nmcli", fake_hostnamectl.c_str(), nullptr);
+      execl(argv[4], argv[4], "--request-file", wifi_request.c_str(), "--result-file", wifi_result.c_str(),
+            "--nmcli", fake_hostnamectl.c_str(), "--connection-directory", wifi_connections.c_str(), nullptr);
       _exit(127);
     }
     int wifi_status = 0;
     require(waitpid(wifi, &wifi_status, 0) == wifi && WIFEXITED(wifi_status) && WEXITSTATUS(wifi_status) == 0 && !fs::exists(wifi_request),
             "Wi-Fi applicator consumes a valid request");
     unsetenv("RAPID_TEST_HOSTNAME_LOG");
-    require(Json::parse(read_file(wifi_result))["connected"] == true && read_file(wifi_log).find("connection add type wifi ifname wlan0 con-name rapid-home ssid test-network") != std::string::npos,
+    const auto wifi_calls = read_file(wifi_log);
+    const auto wifi_connection_file = wifi_connections / "rapid-home.nmconnection";
+    require(Json::parse(read_file(wifi_result))["connected"] == true &&
+                wifi_calls.find("connection delete rapid-home") != std::string::npos &&
+                wifi_calls.find("connection load " + wifi_connection_file.string()) != std::string::npos &&
+                wifi_calls.find("connection up rapid-home ifname wlan0") != std::string::npos,
             "Wi-Fi applicator uses the fixed Home profile and no browser command");
+    // #26: the passphrase must never appear on nmcli's command line -- the
+    // fake nmcli above logs argv only, so any occurrence here would be one.
+    require(wifi_calls.find(wifi_password) == std::string::npos && wifi_calls.find("psk") == std::string::npos &&
+                wifi_calls.find("wifi-sec") == std::string::npos,
+            "Wi-Fi applicator never passes the passphrase to nmcli");
+    require(fs::is_regular_file(wifi_connection_file) &&
+                (fs::status(wifi_connection_file).permissions() &
+                 (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none,
+            "the installed NetworkManager keyfile is private");
+    require(read_file(wifi_connection_file).find("psk=" + wifi_password) != std::string::npos,
+            "the installed NetworkManager keyfile carries the passphrase NetworkManager needs");
     atomic_file(apply_request, Json{{"revision", 3}, {"settings",
         {{"hostname", "rapid.bad"}, {"rotation", 0},
          {"boot_network", "home_then_ap"}}}}.dump());
