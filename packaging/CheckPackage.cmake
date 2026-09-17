@@ -71,7 +71,9 @@ if(NOT firstboot_service MATCHES "User=rapid" OR
 endif()
 if(NOT provision_service MATCHES "User=root" OR
    NOT provision_service MATCHES "Requires=rapid-firstboot[.]service" OR
-   NOT provision_service MATCHES "--status-file /run/rapid/firstboot[.]json")
+   NOT provision_service MATCHES "--status-file /run/rapid/firstboot[.]json" OR
+   NOT provision_service MATCHES "--ssid-file /run/rapid/network-ssid" OR
+   NOT provision_service MATCHES "RuntimeDirectory=rapid")
   message(FATAL_ERROR "Only the provisioner may run as root for the generated setup-AP state")
 endif()
 if(NOT setup_service MATCHES "User=rapid" OR

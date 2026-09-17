@@ -15,6 +15,18 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 <h1>raPId setup</h1>
 <p>Manage your device.</p>
 <p id="message" role="status" aria-live="polite"></p>
+<section id="device-identity" hidden>
+<h2>Confirm this device</h2>
+<p>Setup Wi-Fi network: <strong>rapid</strong> (open, no password). If this
+device's own physical display shows <strong>rapid-####</strong> instead,
+another raPId unit nearby is already using <strong>rapid</strong>; join the
+name shown on that display.</p>
+<p>Address: <strong id="device-address"></strong></p>
+<p>TLS fingerprint: <strong id="device-fingerprint">unavailable</strong></p>
+<p>More than one raPId device in range broadcasts the same Wi-Fi name.
+Before entering an activation token, match the fingerprint above against the
+one shown on this device's own physical display.</p>
+</section>
 <section id="enrollment" hidden>
 <h2>Create the owner account</h2>
 <form id="enrollment-form">
@@ -347,6 +359,13 @@ document.getElementById('sign-out').addEventListener('click', async () => {
   try {
     const status = await api('/api/v1/setup');
     if (!status.owner_configured) {
+      document.getElementById('device-address').textContent = location.host;
+      if (status.certificate_fingerprint) {
+        const fp = status.certificate_fingerprint;
+        document.getElementById('device-fingerprint').textContent =
+            (fp.match(/.{1,16}/g) || [fp]).join(' ');
+      }
+      document.getElementById('device-identity').hidden = false;
       if (status.capabilities.browser_owner_enrollment) {
         document.getElementById('enrollment').hidden = false;
       } else {

@@ -46,21 +46,31 @@ QUrl live_socket_endpoint(QUrl endpoint) {
   return endpoint;
 }
 
-QString setup_notice(const QByteArray &contents) {
-  const auto document = QJsonDocument::fromJson(contents);
+// #22: the setup AP is the open network "rapid" (or a disambiguated
+// "rapid-NNNN" when another one is already in range, chosen once by the
+// provisioner for this boot). It carries no passphrase, so the card/panel no
+// longer shows one. Two Pis can broadcast the same SSID, so the panel must
+// show enough to tell them apart: the address (in the URL) and the TLS
+// certificate fingerprint the client's browser should match.
+QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_contents) {
+  const auto document = QJsonDocument::fromJson(status_contents);
   if (!document.isObject()) return {};
   const auto bootstrap = document.object().value("bootstrap");
   if (!bootstrap.isObject()) return {};
   const auto values = bootstrap.toObject();
-  const auto ssid = values.value("ssid").toString();
-  const auto password = values.value("access_point_password").toString();
   const auto url = values.value("setup_url").toString();
+  const auto fingerprint = values.value("certificate_fingerprint").toString();
   const auto token = values.value("activation_token").toString();
-  if (ssid.isEmpty() || password.isEmpty() || url.isEmpty() || token.size() != 64)
+  const auto ssid = QString::fromUtf8(ssid_contents).trimmed();
+  if (ssid.isEmpty() || url.isEmpty() || fingerprint.size() != 64 || token.size() != 64)
     return {};
-  return QStringLiteral("SETUP AP  %1\nPASSWORD  %2\n%3\nTOKEN  %4 %5\n       %6 %7")
-      .arg(ssid, password, url, token.sliced(0, 16), token.sliced(16, 16),
-           token.sliced(32, 16), token.sliced(48, 16));
+  auto grouped = [](const QString &value, const QString &indent) {
+    return QStringLiteral("%1 %2\n%3%4 %5")
+        .arg(value.sliced(0, 16), value.sliced(16, 16), indent, value.sliced(32, 16), value.sliced(48, 16));
+  };
+  return QStringLiteral("SETUP AP  %1  (open network)\n%2\nFINGERPRINT  %3\nTOKEN  %4")
+      .arg(ssid, url, grouped(fingerprint, QStringLiteral("             ")),
+           grouped(token, QStringLiteral("       ")));
 }
 
 // Inset targets avoid the bezel, where resistive panels are least linear.
@@ -180,7 +190,11 @@ void DashboardModel::pollLive() {
 void DashboardModel::pollSetupStatus() {
   QFile file(qEnvironmentVariable("RAPID_FIRSTBOOT_STATUS",
                                   "/run/rapid/firstboot.json"));
-  const QString next = file.open(QIODevice::ReadOnly) ? setup_notice(file.readAll()) : QString{};
+  QFile ssid_file(qEnvironmentVariable("RAPID_NETWORK_SSID",
+                                       "/run/rapid/network-ssid"));
+  const auto status_contents = file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+  const auto ssid_contents = ssid_file.open(QIODevice::ReadOnly) ? ssid_file.readAll() : QByteArray{};
+  const QString next = setup_notice(status_contents, ssid_contents);
   if (setup_notice_ != next) {
     setup_notice_ = next;
     bump();
