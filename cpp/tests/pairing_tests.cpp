@@ -26,6 +26,27 @@ std::string derive_public_key(const std::string &private_hex) {
 }
 int main() {
   try {
+    // RFC 7748 Section 6.1 X25519 known-answer test, independent of
+    // OpenSSL/Windows-CNG interop (#14): pins this Pi-side implementation's
+    // byte order against the published test vector, so a regression here is
+    // caught even if the Windows self-test's own RFC KAT and the cross-
+    // platform fixtures were somehow both broken the same way. Values are
+    // the RFC's own Alice/Bob keys, never a real device identity.
+    const std::string rfc_alice_private =
+        "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+    const std::string rfc_alice_public =
+        "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
+    const std::string rfc_bob_private =
+        "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb";
+    const std::string rfc_bob_public =
+        "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
+    const std::string rfc_shared_secret =
+        "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
+    require(x25519_shared_secret(rfc_alice_private, rfc_bob_public) == rfc_shared_secret,
+            "RFC 7748 6.1 X25519 known-answer vector (Alice private x Bob public)");
+    require(x25519_shared_secret(rfc_bob_private, rfc_alice_public) == rfc_shared_secret,
+            "RFC 7748 6.1 X25519 known-answer vector (Bob private x Alice public)");
+
     const std::string device(32, 'a'), certificate(64, 'b'), public_key(64, 'c');
     const auto code = PairingWindow::verification_code(device, certificate,
         std::string(32, 'd'), std::string(32, 'e'), public_key);

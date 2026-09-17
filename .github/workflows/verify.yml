@@ -9,6 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  # #14 production direction (the reverse of windows-pairing-fixtures below):
+  # the Pi seals a credential envelope with the real rapid-pi code and a
+  # fixed test companion key; windows-companion decrypts it with the real
+  # decrypt_pairing_envelope() and checks the plaintext, catching a
+  # regression in the direction an actual pairing exchange uses.
+  pairing-pi-seals-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev
+      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/cpp --target rapid-pairing-pi-seals-fixture-tests
+      - run: ctest --test-dir build/cpp -R rapid-pairing-pi-seals-fixture-tests --output-on-failure
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pi-seals-pairing-fixture
+          path: build/cpp/pairing-fixtures-pi-seals/*
+          if-no-files-found: error
+          retention-days: 7
   cpp-native:
     needs: windows-companion
     runs-on: ubuntu-latest
@@ -41,14 +60,19 @@ jobs:
           path: build/packages/*.deb
           if-no-files-found: error
   windows-companion:
+    needs: pairing-pi-seals-fixture
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pi-seals-pairing-fixture
+          path: build/pi-seals-pairing-fixture
       - shell: pwsh
         run: ./companion/build-native-daemon.ps1 -Compiler MSVC
       - run: node cpp/tests/dashboard_graph_tests.js
       - shell: pwsh
-        run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test"
+        run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test" --pairing-pi-seals-fixtures "$env:GITHUB_WORKSPACE/build/pi-seals-pairing-fixture"
       - shell: pwsh
         run: dotnet tool install --global wix --version 4.0.6
       - shell: pwsh
