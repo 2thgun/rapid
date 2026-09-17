@@ -407,6 +407,13 @@ struct Options {
     bool no_forward = false;
     bool headless = false;
     bool self_test = false;
+    // #14: the reverse cross-platform pairing fixture direction (a Linux job
+    // seals with the real Pi code; this self-test decrypts with the real
+    // decrypt_pairing_envelope()). Optional so an invocation that predates
+    // this flag still runs the rest of --self-test; run_self_test() prints a
+    // clear skip notice rather than silently reporting a pass when it is
+    // absent or the directory has no fixture in it.
+    fs::path pairing_pi_seals_fixtures;
     std::wstring verify_setup_url;
     std::string pinned_certificate_fingerprint;
     bool pairing = false;
@@ -456,14 +463,25 @@ std::vector<std::uint8_t> hex_bytes(std::string_view value, std::size_t expected
     return output;
 }
 
+// #14: CRYPT_STRING_NOCRLF, combined with CRYPT_STRING_BASE64, makes
+// CryptStringToBinaryA reject well-formed base64 outright on decode (probed
+// empirically against real crypt32.dll: "SGVsbG8=" fails with
+// BASE64|NOCRLF and decodes fine with BASE64 alone; NOCRLF only ever
+// affects CryptBinaryToString's *encoding* output, not decoding). This was
+// unreachable until now: base64_decode() is only ever called from
+// decrypt_pairing_envelope(), the real --pairing-url client's envelope
+// decrypt, which no self-test exercised end-to-end before the pi-seals
+// interop fixture (pairing_pi_seals_interop_self_test()) called it with a
+// real Pi-sealed envelope -- every real pairing would have failed here,
+// after the byte-order fix, on every single field.
 std::vector<std::uint8_t> base64_decode(std::string_view value) {
     DWORD size = 0;
     if (value.empty() || !CryptStringToBinaryA(std::string(value).c_str(), 0,
-            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &size, nullptr, nullptr))
+            CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr))
         throw std::runtime_error("invalid pairing base64 value");
     std::vector<std::uint8_t> output(size);
     if (!CryptStringToBinaryA(std::string(value).c_str(), 0,
-            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, output.data(), &size, nullptr, nullptr))
+            CRYPT_STRING_BASE64, output.data(), &size, nullptr, nullptr))
         throw std::runtime_error("invalid pairing base64 value");
     output.resize(size);
     return output;
@@ -580,6 +598,39 @@ int verify_setup_certificate(const std::wstring& url, const std::string& expecte
     return 0;
 }
 
+// The X25519 ECDH primitive decrypt_pairing_envelope() derives its HKDF key
+// from: import a CNG private key from an already-exported ECCPRIVATE_BLOB,
+// import the peer's raw 32-byte public key as an ECCPUBLIC_BLOB (built by
+// patching a template exported from the same local key, exactly as CNG
+// expects), agree, then pull the raw secret with BCRYPT_KDF_RAW_SECRET.
+//
+// CNG's BCRYPT_KDF_RAW_SECRET returns the Curve25519 ECDH output in the
+// reverse byte order from RFC 7748/OpenSSL's little-endian convention
+// (verified against the Pi's OpenSSL-derived secret for the same keys via
+// the #14 pairing interop fixtures); without the std::reverse below the
+// companion derives a different HKDF key than the Pi used to seal the
+// envelope and every real pairing fails even though both sides' self-tests
+// passed in isolation. pairing_crypto_self_test() calls this exact function
+// with the RFC 7748 Section 6.1 known-answer vectors so that regression is
+// caught independently of any Windows<->Pi fixture.
+std::array<std::uint8_t, 32> cng_x25519_shared_secret_reversed(
+        std::span<const std::uint8_t> private_blob, std::span<const std::uint8_t, 32> peer_public) {
+    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_KEY_HANDLE local = nullptr, peer_key = nullptr; BCRYPT_SECRET_HANDLE secret = nullptr;
+    auto close = [&] { if (secret) BCryptDestroySecret(secret); if (peer_key) BCryptDestroyKey(peer_key); if (local) BCryptDestroyKey(local); if (alg) BCryptCloseAlgorithmProvider(alg, 0); };
+    try {
+        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0) throw std::runtime_error("CNG ECDH unavailable");
+        const wchar_t curve[] = L"Curve25519"; if (BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME, (PUCHAR)curve, sizeof(curve), 0) < 0 || BCryptImportKeyPair(alg, nullptr, BCRYPT_ECCPRIVATE_BLOB, &local, const_cast<PUCHAR>(private_blob.data()), static_cast<ULONG>(private_blob.size()), 0) < 0) throw std::runtime_error("CNG Curve25519 private-key import failed");
+        ULONG blob_size = 0; if (BCryptExportKey(local, nullptr, BCRYPT_ECCPUBLIC_BLOB, nullptr, 0, &blob_size, 0) < 0 || blob_size != 72) throw std::runtime_error("CNG public blob export failed");
+        std::vector<std::uint8_t> blob(blob_size); if (BCryptExportKey(local, nullptr, BCRYPT_ECCPUBLIC_BLOB, blob.data(), blob_size, &blob_size, 0) < 0) throw std::runtime_error("CNG public blob export failed");
+        std::copy(peer_public.begin(), peer_public.end(), blob.begin() + 8);
+        if (BCryptImportKeyPair(alg, nullptr, BCRYPT_ECCPUBLIC_BLOB, &peer_key, blob.data(), blob_size, 0) < 0 || BCryptSecretAgreement(local, peer_key, &secret, 0) < 0) throw std::runtime_error("CNG Curve25519 agreement failed");
+        std::array<std::uint8_t, 32> shared{}; ULONG shared_size = 0; if (BCryptDeriveKey(secret, BCRYPT_KDF_RAW_SECRET, nullptr, shared.data(), shared.size(), &shared_size, 0) < 0 || shared_size != shared.size()) throw std::runtime_error("CNG shared secret derivation failed");
+        std::reverse(shared.begin(), shared.end());
+        close();
+        return shared;
+    } catch (...) { close(); throw; }
+}
+
 std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std::string_view tx, std::string_view nonce,
                                                     std::string_view companion, std::string_view ephemeral,
                                                     std::string_view envelope_nonce64, std::string_view ciphertext64,
@@ -589,29 +640,14 @@ std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std:
     auto envelope_nonce = base64_decode(envelope_nonce64);
     if (envelope_nonce.size() != 12 || cipher.size() != 32 || tagv.size() != 16)
         throw std::runtime_error("invalid pairing envelope sizes");
-    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_KEY_HANDLE local = nullptr, peer_key = nullptr; BCRYPT_SECRET_HANDLE secret = nullptr;
-    try {
-        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0) throw std::runtime_error("CNG ECDH unavailable");
-        const wchar_t curve[] = L"Curve25519"; if (BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME, (PUCHAR)curve, sizeof(curve), 0) < 0 || BCryptImportKeyPair(alg, nullptr, BCRYPT_ECCPRIVATE_BLOB, &local, const_cast<PUCHAR>(private_blob.data()), static_cast<ULONG>(private_blob.size()), 0) < 0) throw std::runtime_error("CNG Curve25519 private-key import failed");
-        ULONG blob_size = 0; if (BCryptExportKey(local, nullptr, BCRYPT_ECCPUBLIC_BLOB, nullptr, 0, &blob_size, 0) < 0 || blob_size != 72) throw std::runtime_error("CNG public blob export failed");
-        std::vector<std::uint8_t> blob(blob_size); if (BCryptExportKey(local, nullptr, BCRYPT_ECCPUBLIC_BLOB, blob.data(), blob_size, &blob_size, 0) < 0) throw std::runtime_error("CNG public blob export failed");
-        std::copy(peer.begin(), peer.end(), blob.begin() + 8);
-        if (BCryptImportKeyPair(alg, nullptr, BCRYPT_ECCPUBLIC_BLOB, &peer_key, blob.data(), blob_size, 0) < 0 || BCryptSecretAgreement(local, peer_key, &secret, 0) < 0) throw std::runtime_error("CNG Curve25519 agreement failed");
-        std::array<std::uint8_t, 32> shared{}; ULONG shared_size = 0; if (BCryptDeriveKey(secret, BCRYPT_KDF_RAW_SECRET, nullptr, shared.data(), shared.size(), &shared_size, 0) < 0 || shared_size != shared.size()) throw std::runtime_error("CNG shared secret derivation failed");
-        // CNG's BCRYPT_KDF_RAW_SECRET returns the Curve25519 ECDH output in the
-        // reverse byte order from RFC 7748/OpenSSL's little-endian convention
-        // (verified against the Pi's OpenSSL-derived secret for the same keys
-        // via the #14 pairing interop fixtures); without this the companion
-        // derives a different HKDF key than the Pi used to seal the envelope
-        // and every real pairing fails even though both sides' self-tests
-        // passed in isolation.
-        std::reverse(shared.begin(), shared.end());
-        const std::string salt = "rapid-pairing-salt-v1|" + std::string(tx) + "|" + std::string(nonce); const std::string info = "rapid-pairing-envelope-v1";
-        const std::string aad = "rapid-pairing-envelope-v1|" + std::string(device) + "|" + std::string(tx) + "|" + std::string(nonce) + "|" + std::string(companion) + "|" + std::string(ephemeral);
-        auto key = cng_hkdf_sha256(shared, std::span<const std::uint8_t>((const std::uint8_t*)salt.data(), salt.size()), std::span<const std::uint8_t>((const std::uint8_t*)info.data(), info.size()));
-        std::array<std::uint8_t, 16> tag{}; std::copy(tagv.begin(), tagv.end(), tag.begin()); auto plain = cng_aes256_gcm(false, key, envelope_nonce, std::span<const std::uint8_t>((const std::uint8_t*)aad.data(), aad.size()), cipher, &tag);
-        BCryptDestroySecret(secret); BCryptDestroyKey(peer_key); BCryptDestroyKey(local); BCryptCloseAlgorithmProvider(alg, 0); SecureZeroMemory(shared.data(), shared.size()); SecureZeroMemory(key.data(), key.size()); return plain;
-    } catch (...) { if (secret) BCryptDestroySecret(secret); if (peer_key) BCryptDestroyKey(peer_key); if (local) BCryptDestroyKey(local); if (alg) BCryptCloseAlgorithmProvider(alg, 0); throw; }
+    auto shared = cng_x25519_shared_secret_reversed(private_blob, std::span<const std::uint8_t, 32>(peer.data(), 32));
+    const std::string salt = "rapid-pairing-salt-v1|" + std::string(tx) + "|" + std::string(nonce); const std::string info = "rapid-pairing-envelope-v1";
+    const std::string aad = "rapid-pairing-envelope-v1|" + std::string(device) + "|" + std::string(tx) + "|" + std::string(nonce) + "|" + std::string(companion) + "|" + std::string(ephemeral);
+    auto key = cng_hkdf_sha256(shared, std::span<const std::uint8_t>((const std::uint8_t*)salt.data(), salt.size()), std::span<const std::uint8_t>((const std::uint8_t*)info.data(), info.size()));
+    std::array<std::uint8_t, 16> tag{}; std::copy(tagv.begin(), tagv.end(), tag.begin());
+    auto plain = cng_aes256_gcm(false, key, envelope_nonce, std::span<const std::uint8_t>((const std::uint8_t*)aad.data(), aad.size()), cipher, &tag);
+    SecureZeroMemory(shared.data(), shared.size()); SecureZeroMemory(key.data(), key.size());
+    return plain;
 }
 
 int run_pairing(const Options& options) {
@@ -867,6 +903,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.headless = true;
         } else if (raw == L"--self-test" || raw == L"-selftest") {
             options.self_test = true;
+        } else if (raw == L"--pairing-pi-seals-fixtures") {
+            options.pairing_pi_seals_fixtures = option_value(i, argc, argv, L"--pairing-pi-seals-fixtures");
         } else if (raw == L"--verify-setup-url") {
             options.verify_setup_url = option_value(i, argc, argv, L"--verify-setup-url");
         } else if (raw == L"--certificate-fingerprint") {
@@ -893,6 +931,8 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --output-directory PATH   Local fallback/log directory\n"
                       "  --no-forward              Disable Pi forwarding\n"
                       "  --headless --self-test\n"
+                      "  --pairing-pi-seals-fixtures PATH  With --self-test: decrypt the real\n"
+                      "                              Pi-sealed pairing fixture at PATH (#14)\n"
                       "  --verify-setup-url URL       Verify an HTTPS setup certificate fingerprint and exit\n"
                       "  --certificate-fingerprint HEX64  Expected SHA-256 setup certificate fingerprint\n"
                       "  --pairing-url URL          Pair this companion with the Pi and store its credential\n"
@@ -2754,7 +2794,201 @@ std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key) {
     return wire;
 }
 
+// Builds a CNG ECCPRIVATE_BLOB for an arbitrary raw X25519 (public, private)
+// pair. This is never part of production wire handling -- decrypt_pairing_
+// envelope() always imports a blob CNG itself exported from a key it
+// generated (run_pairing()'s BCryptGenerateKeyPair()) -- but it lets two
+// kinds of externally-supplied raw test material go through that exact same
+// production CNG code path: an RFC 7748 known-answer vector
+// (cng_rfc7748_known_answer_test(), below), and a Pi-sealed pairing
+// fixture's fixed test companion key (pairing_pi_seals_interop_self_test()).
+//
+// Unlike a CNG-generated key (already in this form when exported), a raw
+// externally-supplied private scalar is not yet clamped: X25519 (RFC 7748
+// Section 5's decodeScalar25519) clears the low 3 bits and the top bit and
+// sets bit 254 before use, and CNG's private-key import rejects an
+// unclamped D outright (probed empirically: an untouched CNG-generated blob
+// and one with this exact clamping both import; the same D left unclamped
+// fails with STATUS_INVALID_PARAMETER regardless of X/Y). Clamping is
+// idempotent, so this never changes the RFC-defined X25519 result:
+// decodeScalar25519(raw) == decodeScalar25519(clamp(raw)) for every input.
+std::vector<std::uint8_t> cng_synthetic_private_blob(std::span<const std::uint8_t, 32> public_key,
+                                                      std::span<const std::uint8_t, 32> raw_private_key) {
+    std::array<std::uint8_t, 32> scalar{};
+    std::copy(raw_private_key.begin(), raw_private_key.end(), scalar.begin());
+    scalar[0] &= 0xF8;
+    scalar[31] &= 0x7F;
+    scalar[31] |= 0x40;
+
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_KEY_HANDLE seed = nullptr;
+    auto close = [&] {
+        if (seed) BCryptDestroyKey(seed);
+        if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    };
+    try {
+        const wchar_t curve[] = L"Curve25519";
+        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0 ||
+            BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME,
+                              reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(curve)), sizeof(curve), 0) < 0 ||
+            BCryptGenerateKeyPair(alg, &seed, 255, 0) < 0 || BCryptFinalizeKeyPair(seed, 0) < 0)
+            throw std::runtime_error("CNG Curve25519 template key generation failed");
+        ULONG blob_size = 0;
+        if (BCryptExportKey(seed, nullptr, BCRYPT_ECCPRIVATE_BLOB, nullptr, 0, &blob_size, 0) < 0 || blob_size < 40)
+            throw std::runtime_error("CNG private blob template export failed");
+        std::vector<std::uint8_t> blob(blob_size);
+        if (BCryptExportKey(seed, nullptr, BCRYPT_ECCPRIVATE_BLOB, blob.data(), blob_size, &blob_size, 0) < 0)
+            throw std::runtime_error("CNG private blob template export failed");
+        // Splice into the header/layout the template just proved CNG
+        // accepts: offset 8 holds X (the raw public u-coordinate -- the same
+        // convention export_curve25519_wire_public() reads), and the last 32
+        // bytes hold D (the clamped private scalar). Y (offset 40) is left
+        // as the template's own value; production code already relies on Y
+        // being unused for Curve25519 agreement (see the peer-public-key
+        // patch in cng_x25519_shared_secret_reversed()).
+        std::copy(public_key.begin(), public_key.end(), blob.begin() + 8);
+        std::copy(scalar.begin(), scalar.end(), blob.end() - 32);
+        close();
+        return blob;
+    } catch (...) {
+        close();
+        throw;
+    }
+}
+
+// RFC 7748 Section 6.1 X25519 known-answer test (#14), run through
+// cng_x25519_shared_secret_reversed() -- the exact CNG code path
+// decrypt_pairing_envelope() uses in production, after the byte reversal --
+// so the companion's byte order is pinned independently of the cross-
+// platform pairing interop fixtures: a regression here is caught even if a
+// fixture happened to still round-trip. The Pi/OpenSSL side has its own
+// independent RFC 7748 KAT in cpp/tests/pairing_tests.cpp
+// (x25519_shared_secret(), which applies no reversal). Keys and expected
+// secret are the RFC's own published Alice/Bob test vectors, never a real
+// device identity.
+void cng_rfc7748_known_answer_test() {
+    const auto hex32 = [](std::string_view text) {
+        if (text.size() != 64 || text.find_first_not_of("0123456789abcdef") != std::string_view::npos)
+            throw std::runtime_error("invalid RFC 7748 test vector");
+        std::array<std::uint8_t, 32> value{};
+        for (std::size_t i = 0; i != 32; ++i)
+            value[i] = static_cast<std::uint8_t>(std::stoi(std::string(text.substr(i * 2, 2)), nullptr, 16));
+        return value;
+    };
+    const auto alice_private = hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    const auto alice_public  = hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+    const auto bob_private   = hex32("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+    const auto bob_public    = hex32("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f");
+    const auto expected      = hex32("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
+
+    const auto alice_blob = cng_synthetic_private_blob(alice_public, alice_private);
+    const auto bob_blob = cng_synthetic_private_blob(bob_public, bob_private);
+    if (cng_x25519_shared_secret_reversed(alice_blob, bob_public) != expected ||
+        cng_x25519_shared_secret_reversed(bob_blob, alice_public) != expected)
+        throw std::runtime_error("RFC 7748 Section 6.1 X25519 known-answer vector mismatch");
+    std::cout << "Windows CNG X25519 RFC 7748 known-answer test passed (post-reversal shared "
+                 "secret matches the published vector)\n";
+}
+
+struct PairingPiSealsFixture {
+    std::string device_id, transaction_id, nonce, companion_private_key, companion_public_key,
+                ephemeral, envelope_nonce64, envelope_ciphertext64, tampered_ciphertext64,
+                envelope_tag64, expected_plaintext;
+};
+
+// A snapshot of cpp/tests/pairing-fixtures-pi-seals/, embedded so this check
+// runs -- and can fail a build -- with no directory argument at all: every
+// existing --self-test invocation (the synchronous local gate script most of
+// all; developer/Test-LocalCandidate.ps1 is a shared file this wave's rules
+// do not have a claim to edit) predates --pairing-pi-seals-fixtures and will
+// never pass it. The embedded values are exactly that fixture's real files,
+// produced once by the real Pi sealing code (seal_pairing_key(), via
+// cpp/tests/pairing_pi_seals_fixture_tests.cpp) with a fixed, obviously-
+// synthetic test companion key -- never a real device identity or key.
+// --pairing-pi-seals-fixtures overrides this with a directory holding a
+// freshly-produced fixture instead (verify.yml's Linux job produces one
+// every CI run and passes it to the Windows job).
+const PairingPiSealsFixture& embedded_pairing_pi_seals_fixture() {
+    static const PairingPiSealsFixture fixture{
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "cccccccccccccccccccccccccccccccc",
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "b2599e860bbe532e4955cca4dbd20d3b7f6805d81bb505ddbe69276a170c4d74",
+        "d43a929369f193a7210668d2ec2ccb05186cf8493ec32426278c280c8a23f45a",
+        "fx1hfB4oKJIpvhXl",
+        "WMU7MWx2pfGxN81T9qsAZnTPv1+V7r8aOA2hJ2cASm4=",
+        "WcU7MWx2pfGxN81T9qsAZnTPv1+V7r8aOA2hJ2cASm4=",
+        "PWHNX2dYX99UpyP3RoniGw==",
+        "3c8eef9645c8e5e0af6719f94a93b5cebca91166ab76a3b8e58f176d28704ea8",
+    };
+    return fixture;
+}
+
+// #14 production direction: the Pi seals the credential envelope
+// (seal_pairing_key(), which PairingCoordinator::consume_impl() calls after
+// panel/setup-page approval) and the Windows companion decrypts it
+// (decrypt_pairing_envelope(), the real --pairing-url client code). The
+// existing pairing-fixtures/ direction above only proves the reverse
+// (Windows-sealed material opened by the Pi's OpenSSL reference); this is
+// the direction a real pairing exchange actually uses, and the one the #14
+// byte-order bug originally broke. An empty fixtures path uses the embedded
+// snapshot above; otherwise fixtures/ holds the same files, freshly written
+// by the real Pi sealing code (cpp/tests/pairing_pi_seals_fixture_tests.cpp).
+void pairing_pi_seals_interop_self_test(const fs::path& fixtures) {
+    PairingPiSealsFixture loaded;
+    const PairingPiSealsFixture* data = &embedded_pairing_pi_seals_fixture();
+    if (!fixtures.empty()) {
+        auto read_text = [&](const char* name) {
+            std::ifstream input(fixtures / name);
+            if (!input) throw std::runtime_error(std::string("cannot read pi-seals fixture file: ") + name);
+            std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+            return text;
+        };
+        loaded = {read_text("device-id.hex"), read_text("transaction-id.hex"), read_text("nonce.hex"),
+                 read_text("companion-private-key.hex"), read_text("companion-public-key.hex"),
+                 read_text("pi-ephemeral-public-key.hex"), read_text("envelope-nonce.b64"),
+                 read_text("envelope-ciphertext.b64"), read_text("tampered-envelope-ciphertext.b64"),
+                 read_text("envelope-tag.b64"), read_text("expected-plaintext.hex")};
+        data = &loaded;
+    }
+    const auto &device_id = data->device_id, &transaction_id = data->transaction_id, &nonce = data->nonce,
+              &companion_private_key = data->companion_private_key, &companion_public_key = data->companion_public_key,
+              &ephemeral = data->ephemeral, &envelope_nonce64 = data->envelope_nonce64,
+              &envelope_ciphertext64 = data->envelope_ciphertext64, &tampered_ciphertext64 = data->tampered_ciphertext64,
+              &envelope_tag64 = data->envelope_tag64, &expected_plaintext = data->expected_plaintext;
+    if (companion_private_key.size() != 64 || companion_public_key.size() != 64)
+        throw std::runtime_error("invalid pi-seals fixture key size");
+
+    std::array<std::uint8_t, 32> raw_private{}, raw_public{};
+    for (std::size_t i = 0; i != 32; ++i) {
+        raw_private[i] = static_cast<std::uint8_t>(std::stoi(companion_private_key.substr(i * 2, 2), nullptr, 16));
+        raw_public[i] = static_cast<std::uint8_t>(std::stoi(companion_public_key.substr(i * 2, 2), nullptr, 16));
+    }
+    const auto private_blob = cng_synthetic_private_blob(raw_public, raw_private);
+
+    const auto plain = decrypt_pairing_envelope(device_id, transaction_id, nonce, companion_public_key,
+                                                ephemeral, envelope_nonce64, envelope_ciphertext64,
+                                                envelope_tag64, private_blob);
+    if (hex_text(plain) != expected_plaintext)
+        throw std::runtime_error("decrypt_pairing_envelope() did not recover the real Pi-sealed credential");
+
+    bool rejected = false;
+    try {
+        (void)decrypt_pairing_envelope(device_id, transaction_id, nonce, companion_public_key,
+                                       ephemeral, envelope_nonce64, tampered_ciphertext64,
+                                       envelope_tag64, private_blob);
+    } catch (const std::exception&) { rejected = true; }
+    if (!rejected)
+        throw std::runtime_error("decrypt_pairing_envelope() accepted a tampered Pi-sealed envelope");
+
+    std::cout << "Pi-seals pairing interop: decrypt_pairing_envelope() recovered the real Pi-sealed "
+                 "credential and rejected the tampered envelope\n";
+}
+
 void pairing_crypto_self_test() {
+    cng_rfc7748_known_answer_test();
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_KEY_HANDLE first = nullptr, second = nullptr;
     BCRYPT_SECRET_HANDLE first_secret = nullptr, second_secret = nullptr;
@@ -3048,7 +3282,8 @@ void write_pairing_interop_fixtures(const fs::path& pairing_fixtures) {
     std::cout << "Windows pairing interop fixtures written: " << pairing_fixtures.string() << '\n';
 }
 
-bool run_self_test(const fs::path& directory, int sample_rate) {
+bool run_self_test(const fs::path& directory, int sample_rate,
+                    const fs::path& pairing_pi_seals_fixtures = {}) {
     pairing_crypto_self_test();
     const auto [ac_frame, ac_metadata] = assetto_self_test::run();
     additional_adapter_self_test::ace();
@@ -3095,6 +3330,19 @@ bool run_self_test(const fs::path& directory, int sample_rate) {
     save("ac-ended.hex", encoder.status_packet(Game::ac, V4StatusState::ended, "", 2, sample_rate));
     encoder.end_run();
     write_pairing_interop_fixtures(directory / "pairing-fixtures");
+    // #14 production direction: the Pi seals, Windows decrypts (the reverse
+    // of the fixture above, which plays the Pi's role with real CNG crypto
+    // so Linux CI can consume it). Always runs -- against the embedded
+    // fixture snapshot when no directory is supplied or found, so a
+    // --self-test invocation that predates this flag (the synchronous local
+    // gate script, which this wave cannot edit) still gets real coverage;
+    // --pairing-pi-seals-fixtures substitutes a freshly-produced one instead
+    // (verify.yml's Linux job produces one every CI run).
+    if (!pairing_pi_seals_fixtures.empty() && !fs::exists(pairing_pi_seals_fixtures))
+        throw std::runtime_error("--pairing-pi-seals-fixtures directory does not exist: " +
+                                 pairing_pi_seals_fixtures.string());
+    pairing_pi_seals_interop_self_test(
+        fs::exists(pairing_pi_seals_fixtures) ? pairing_pi_seals_fixtures : fs::path{});
     const auto test_config = directory / "portable-self-test.conf";
     {
         std::ofstream output(test_config);
@@ -3194,7 +3442,9 @@ int wmain(int argc, wchar_t** argv) {
         if (options.pairing) return run_pairing(options);
         if (!options.auth_key_dpapi_file.empty())
             verify_paired_identity(options.auth_key_dpapi_file);
-        if (options.self_test) return run_self_test(options.output_directory, options.sample_rate) ? 0 : 1;
+        if (options.self_test)
+            return run_self_test(options.output_directory, options.sample_rate,
+                                 options.pairing_pi_seals_fixtures) ? 0 : 1;
         if (!options.headless && GetConsoleWindow()) ShowWindow(GetConsoleWindow(), SW_HIDE);
         std::error_code directory_error;
         fs::create_directories(options.output_directory, directory_error);

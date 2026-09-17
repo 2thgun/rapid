@@ -137,6 +137,11 @@ void valid_label(const std::string &label) {
 }
 } // namespace
 
+std::string x25519_shared_secret(const std::string &private_key,
+                                 const std::string &public_key) {
+  return hex_text(shared_secret(hex_bytes(private_key, 32), hex_bytes(public_key, 32)));
+}
+
 void PairingWindow::clear_pending() {
   if (!pending_) return;
   for (auto *value : {&pending_->transaction_id, &pending_->nonce,

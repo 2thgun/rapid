@@ -115,6 +115,21 @@ if(BUILD_TESTING)
   target_link_libraries(rapid-pairing-interop-tests PRIVATE rapid_native)
   set(RAPID_PAIRING_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/tests/pairing-fixtures" CACHE PATH "Windows pairing interop fixtures")
   add_test(NAME rapid-pairing-interop-tests COMMAND rapid-pairing-interop-tests ${RAPID_PAIRING_FIXTURES})
+  # #14 production direction (the reverse of the fixture above): the Pi seals
+  # with the real code, and the Windows self-test decrypts with the real
+  # decrypt_pairing_envelope(). This target generates and self-checks a fresh
+  # fixture on every run, written to the build tree (never the source tree,
+  # so a local ctest run never leaves the committed snapshot dirty); a
+  # deliberately-committed snapshot for local/offline Windows runs lives at
+  # RAPID_PAIRING_PI_SEALS_FIXTURES below.
+  add_executable(rapid-pairing-pi-seals-fixture-tests tests/pairing_pi_seals_fixture_tests.cpp)
+  target_link_libraries(rapid-pairing-pi-seals-fixture-tests PRIVATE rapid_native)
+  set(RAPID_PAIRING_PI_SEALS_FIXTURES_OUT "${CMAKE_BINARY_DIR}/pairing-fixtures-pi-seals" CACHE PATH
+      "Where each test run writes a fresh Pi-sealed pairing fixture for CI to pass to the Windows job")
+  add_test(NAME rapid-pairing-pi-seals-fixture-tests COMMAND rapid-pairing-pi-seals-fixture-tests
+           ${RAPID_PAIRING_PI_SEALS_FIXTURES_OUT})
+  set(RAPID_PAIRING_PI_SEALS_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/tests/pairing-fixtures-pi-seals" CACHE PATH
+      "Committed snapshot of a Pi-sealed pairing fixture, for the Windows self-test")
   add_executable(rapid-network-tests tests/native_network_tests.cpp)
   target_link_libraries(rapid-network-tests PRIVATE rapid_setup_auth)
   add_test(NAME rapid-network-tests COMMAND rapid-network-tests $<TARGET_FILE:rapid-pi> ${CMAKE_CURRENT_SOURCE_DIR}/assets $<TARGET_FILE:rapid-archive> $<TARGET_FILE:rapid-setup-server>)

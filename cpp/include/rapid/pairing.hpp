@@ -32,6 +32,16 @@ std::string open_pairing_key(const std::string &device_id,
                              const std::string &companion_private_key,
                              const PairingEnvelope &envelope);
 
+// Raw X25519 ECDH, no HKDF/AEAD framing on top: the exact primitive
+// seal_pairing_key()/open_pairing_key() use internally to derive their
+// shared secret. Exposed only so an RFC 7748 Section 6.1 known-answer test
+// (#14) can pin this Pi/OpenSSL implementation's byte order independently of
+// the Windows CNG side, which needs a byte-reversal OpenSSL does not
+// (rapid-telemetry-daemon.cpp's decrypt_pairing_envelope()). Never call this
+// from wire-handling code; it has none of seal/open's input validation.
+std::string x25519_shared_secret(const std::string &private_key,
+                                 const std::string &public_key);
+
 class PairingWindow {
   std::string device_id_, certificate_fingerprint_;
   double window_expires_at_ = 0;
