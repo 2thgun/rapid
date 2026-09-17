@@ -112,8 +112,18 @@ void DashboardModel::connectLiveSocket() {
     connect(live_socket_, &QWebSocket::connected, this, &DashboardModel::liveSocketConnected);
     connect(live_socket_, &QWebSocket::disconnected, this, &DashboardModel::liveSocketDisconnected);
     connect(live_socket_, &QWebSocket::textMessageReceived, this, &DashboardModel::consumeLiveMessage);
+    // QWebSocket::error is deprecated in favour of errorOccurred since Qt
+    // 6.5; the Pi build (Debian 13, Qt 6.8) compiles with -Werror and would
+    // fail on -Wdeprecated-declarations, while WSL (Qt 6.4.2) predates
+    // errorOccurred's deprecation of the old signal. Pick whichever compiles
+    // warning-free on both.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    connect(live_socket_, &QWebSocket::errorOccurred, this,
+            [this](QAbstractSocket::SocketError) { liveSocketDisconnected(); });
+#else
     connect(live_socket_, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error), this,
             [this](QAbstractSocket::SocketError) { liveSocketDisconnected(); });
+#endif
   }
   if (live_socket_->state() == QAbstractSocket::UnconnectedState)
     live_socket_->open(live_socket_url_);
@@ -509,6 +519,15 @@ void DashboardModel::updateStatus() {
     status_ = state_.value("telemetry_fresh").toBool()
         ? (simulator.isEmpty() ? "Simulator connected" : simulator + " connected")
         : "Waiting for fresh telemetry";
+    return;
+  }
+  if (daemon_state == "paused") {
+    // #15: the companion still reports the recording open during a
+    // pause/menu/alt-tab (native_runtime.cpp keeps "recording" true), so this
+    // must read as a distinct paused state rather than falling into the idle
+    // "waiting for driving" text below. "REC" is driven separately by the
+    // "recording" state value and is unaffected by this status text.
+    status_ = simulator.isEmpty() ? "Paused" : simulator + " paused";
     return;
   }
   status_ = simulator.isEmpty() ? "Daemon connected — waiting for simulator"
