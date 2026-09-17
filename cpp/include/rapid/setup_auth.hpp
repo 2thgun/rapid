@@ -30,6 +30,8 @@ class SetupAuth {
   fs::path account_request_file_;
   fs::path account_result_file_;
   std::deque<double> account_attempts_;
+  // Setup AP name chosen by rapid-provision for this boot (#22).
+  fs::path network_ssid_file_;
   void expire(double time);
   Response handle_account(const Request &request, const std::string &path,
                           const std::string &csrf, double time);
@@ -49,6 +51,9 @@ public:
   // Enables /api/v1/account. The request carries only a password hash and is
   // consumed by the root rapid-account helper; the result carries only status.
   void set_account_files(fs::path request_file, fs::path result_file);
+  // Publishes the setup AP SSID in use ("rapid" or "rapid-NNNN") as
+  // network_ssid in GET /api/v1/setup when the file holds a valid name.
+  void set_network_ssid_file(fs::path ssid_file);
   Response handle(const Request &request);
 };
 } // namespace rapid::native

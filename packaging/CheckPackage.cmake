@@ -134,6 +134,9 @@ if(NOT setup_exec MATCHES " --account-request-file /run/rapid-apply/account-requ
    NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply${nl}")
   message(FATAL_ERROR "The setup service must queue device access through rapid-account without secrets on a command line or in core dumps")
 endif()
+if(NOT setup_exec MATCHES " --ssid-file /run/rapid/network-ssid( |$)")
+  message(FATAL_ERROR "The setup service must publish the setup AP name chosen by rapid-provision")
+endif()
 execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0 OR NOT dependencies MATCHES "libargon2" OR NOT dependencies MATCHES "libqt6core" OR

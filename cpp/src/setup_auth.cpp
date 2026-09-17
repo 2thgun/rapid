@@ -36,7 +36,28 @@ std::string cookie_token(const Request &request) {
   }
   return token;
 }
+// The SSID rapid-provision chose ("rapid", or "rapid-NNNN" when another
+// "rapid" was in range). Anything else, or a missing file, is omitted.
+std::string network_ssid(const fs::path &path) {
+  if (path.empty()) return {};
+  try {
+    std::error_code error;
+    if (!fs::is_regular_file(path, error) || fs::file_size(path, error) > 64) return {};
+    auto value = read_file(path);
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) value.pop_back();
+    const bool suffixed = value.size() == 10 && value.starts_with("rapid-") &&
+                          value.find_first_not_of("0123456789", 6) == std::string::npos;
+    return value == "rapid" || suffixed ? value : std::string{};
+  } catch (const std::exception &) {
+    return {};
+  }
+}
 } // namespace
+
+void SetupAuth::set_network_ssid_file(fs::path ssid_file) {
+  std::lock_guard lock(mutex_);
+  network_ssid_file_ = std::move(ssid_file);
+}
 
 SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      std::string enrollment_token, std::string host,
@@ -125,6 +146,8 @@ Response SetupAuth::handle(const Request &request) {
     status["capabilities"]["pairing"] = pairing_ != nullptr;
     if (secure_transport_ && !certificate_fingerprint_.empty())
       status["certificate_fingerprint"] = certificate_fingerprint_;
+    if (const auto ssid = network_ssid(network_ssid_file_); !ssid.empty())
+      status["network_ssid"] = ssid;
     return reply(200, status);
   }
   if (path == "/api/v1/auth/enroll" && request.method == "POST") {

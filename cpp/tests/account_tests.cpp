@@ -540,6 +540,29 @@ void helper_tests(const fs::path &base, const std::string &helper) {
           "a symlinked request is refused without following it");
 }
 
+// #22 follow-up for f5-open-ap: the public setup status names the AP in use.
+void network_ssid_tests(const fs::path &base) {
+  SetupStore store(base / "ssid-state");
+  const auto ssid_file = base / "network-ssid";
+  SetupAuth auth(store, 8002, monotonic, {}, "127.0.0.1", {}, {}, {}, {}, {}, nullptr, true);
+  const auto status = [&] { return Json::parse(auth.handle(request("/api/v1/setup")).body); };
+  require(!status().contains("network_ssid"), "no SSID without a configured file");
+  auth.set_network_ssid_file(ssid_file);
+  require(!status().contains("network_ssid"), "no SSID before rapid-provision chose one");
+  for (const auto *valid : {"rapid", "rapid-0427"}) {
+    write_text(ssid_file, std::string(valid) + "\n");
+    require(status()["network_ssid"] == valid, std::string("setup status publishes SSID ") + valid);
+  }
+  for (const auto *invalid : {"", "rapid-12", "rapid-abcd", "evil<script>", "rapid-04271"}) {
+    write_text(ssid_file, std::string(invalid) + "\n");
+    require(!status().contains("network_ssid"), std::string("invalid SSID omitted: ") + invalid);
+  }
+  write_text(ssid_file, "rapid\n");
+  const auto response = auth.handle(request("/api/v1/setup"));
+  require(response.status == 200 && Json::parse(response.body)["network_ssid"] == "rapid",
+          "the SSID is public setup status (no session needed)");
+}
+
 // The complete flow: browser → setup server → request → helper → result.
 void secret_tests(const fs::path &base, const std::string &helper) {
   const auto flow = base / "flow";
@@ -601,6 +624,8 @@ int main(int argc, char **argv) {
     std::cout << "ok: password, SSH key and hash validation\n";
     api_tests(root.path);
     std::cout << "ok: setup API auth, TLS, CSRF, validation and rate limit\n";
+    network_ssid_tests(root.path);
+    std::cout << "ok: setup status publishes the setup AP name in use\n";
     helper_tests(root.path / "helper", fs::absolute(argv[1]).string());
     std::cout << "ok: rapid-account helper against a fake root\n";
     secret_tests(root.path / "secret", fs::absolute(argv[1]).string());

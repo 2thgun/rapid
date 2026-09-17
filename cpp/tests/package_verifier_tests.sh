@@ -123,6 +123,10 @@ replace_in "$units/rapid-setup.service" '^LimitCORE=0$' ''
 expect_fail "setup server core dumps" "without secrets on a command line"
 
 stage_package
+replace_in "$units/rapid-setup.service" ' --ssid-file /run/rapid/network-ssid' ''
+expect_fail "a setup server that cannot show the AP name" "publish the setup AP name"
+
+stage_package
 mkdir -p "$work/stage/etc/ssh/sshd_config.d"
 printf 'PasswordAuthentication yes\n' > "$work/stage/etc/ssh/sshd_config.d/10-rapid-owner.conf"
 expect_fail "a packaged SSH configuration" "must not contain account credentials"
