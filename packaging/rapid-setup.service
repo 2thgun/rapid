@@ -10,11 +10,15 @@ Group=rapid
 StateDirectory=rapid-setup
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/rapid-setup
-ExecStart=/usr/lib/rapid/rapid-setup-server --state-directory /var/lib/rapid-setup --assets /usr/share/rapid --listen 192.168.1.64 --enrollment-token-file /var/lib/rapid-setup/enrollment.token --tls-certificate /var/lib/rapid-setup/device.crt --tls-private-key /var/lib/rapid-setup/device.key --apply-request-file /run/rapid-apply/request.json --apply-result-file /run/rapid-apply/result.json --wifi-request-file /run/rapid-apply/wifi-request.json --wifi-result-file /run/rapid-apply/wifi-result.json --firstboot-status-file /run/rapid/firstboot.json --calibration-file /var/lib/rapid-setup/touch-calibration.conf --calibration-request-file /run/rapid/calibration-request.json --display-confirm-file /run/rapid-apply/display-confirm.json
+ExecStart=/usr/lib/rapid/rapid-setup-server --state-directory /var/lib/rapid-setup --assets /usr/share/rapid --listen 192.168.1.64 --enrollment-token-file /var/lib/rapid-setup/enrollment.token --tls-certificate /var/lib/rapid-setup/device.crt --tls-private-key /var/lib/rapid-setup/device.key --apply-request-file /run/rapid-apply/request.json --apply-result-file /run/rapid-apply/result.json --wifi-request-file /run/rapid-apply/wifi-request.json --wifi-result-file /run/rapid-apply/wifi-result.json --firstboot-status-file /run/rapid/firstboot.json --calibration-file /var/lib/rapid-setup/touch-calibration.conf --calibration-request-file /run/rapid/calibration-request.json --display-confirm-file /run/rapid-apply/display-confirm.json --account-request-file /run/rapid-apply/account-request.json --account-result-file /run/rapid-apply/account-result.json --ssid-file /run/rapid/network-ssid
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal
 StandardError=journal
+# The setup server briefly holds the owner-chosen device password in memory.
+LimitCORE=0
+# ProtectSystem=strict makes /run read-only; the setup queues live here.
+ReadWritePaths=/run/rapid-apply
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

@@ -36,7 +36,28 @@ std::string cookie_token(const Request &request) {
   }
   return token;
 }
+// The SSID rapid-provision chose ("rapid", or "rapid-NNNN" when another
+// "rapid" was in range). Anything else, or a missing file, is omitted.
+std::string network_ssid(const fs::path &path) {
+  if (path.empty()) return {};
+  try {
+    std::error_code error;
+    if (!fs::is_regular_file(path, error) || fs::file_size(path, error) > 64) return {};
+    auto value = read_file(path);
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) value.pop_back();
+    const bool suffixed = value.size() == 10 && value.starts_with("rapid-") &&
+                          value.find_first_not_of("0123456789", 6) == std::string::npos;
+    return value == "rapid" || suffixed ? value : std::string{};
+  } catch (const std::exception &) {
+    return {};
+  }
+}
 } // namespace
+
+void SetupAuth::set_network_ssid_file(fs::path ssid_file) {
+  std::lock_guard lock(mutex_);
+  network_ssid_file_ = std::move(ssid_file);
+}
 
 SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
                      std::string enrollment_token, std::string host,
@@ -99,7 +120,8 @@ Response SetupAuth::handle(const Request &request) {
   if ((!origin.empty() && origin != origin_) || fetch_site == "cross-site")
     return reply(403, {{"detail", "cross-origin request rejected"}});
   const auto path = request.target.substr(0, request.target.find('?'));
-  if (request.body.size() > 1024)
+  // A pasted RSA public key plus a password needs more than the default limit.
+  if (request.body.size() > (path == "/api/v1/account" ? std::size_t{4096} : std::size_t{1024}))
     return reply(413, {{"detail", "request too large"}});
   if (request.method != "GET" && request.method != "POST")
     return {405, "{\"detail\":\"method not allowed\"}", "application/json", {{"Allow", "GET, POST"}}};
@@ -124,6 +146,8 @@ Response SetupAuth::handle(const Request &request) {
     status["capabilities"]["pairing"] = pairing_ != nullptr;
     if (secure_transport_ && !certificate_fingerprint_.empty())
       status["certificate_fingerprint"] = certificate_fingerprint_;
+    if (const auto ssid = network_ssid(network_ssid_file_); !ssid.empty())
+      status["network_ssid"] = ssid;
     return reply(200, status);
   }
   if (path == "/api/v1/auth/enroll" && request.method == "POST") {
@@ -195,6 +219,8 @@ Response SetupAuth::handle(const Request &request) {
   const auto session = sessions_.find(hash_text(token));
   if (token.empty() || session == sessions_.end())
     return reply(401, {{"detail", "sign in required"}});
+  if (path == "/api/v1/account")
+    return handle_account(request, path, session->second.csrf, time);
   if (pairing_ && secure_transport_ && path == "/api/v1/pairing/window" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});
