@@ -99,7 +99,8 @@ Response SetupAuth::handle(const Request &request) {
   if ((!origin.empty() && origin != origin_) || fetch_site == "cross-site")
     return reply(403, {{"detail", "cross-origin request rejected"}});
   const auto path = request.target.substr(0, request.target.find('?'));
-  if (request.body.size() > 1024)
+  // A pasted RSA public key plus a password needs more than the default limit.
+  if (request.body.size() > (path == "/api/v1/account" ? std::size_t{4096} : std::size_t{1024}))
     return reply(413, {{"detail", "request too large"}});
   if (request.method != "GET" && request.method != "POST")
     return {405, "{\"detail\":\"method not allowed\"}", "application/json", {{"Allow", "GET, POST"}}};
@@ -195,6 +196,8 @@ Response SetupAuth::handle(const Request &request) {
   const auto session = sessions_.find(hash_text(token));
   if (token.empty() || session == sessions_.end())
     return reply(401, {{"detail", "sign in required"}});
+  if (path == "/api/v1/account")
+    return handle_account(request, path, session->second.csrf, time);
   if (pairing_ && secure_transport_ && path == "/api/v1/pairing/window" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});

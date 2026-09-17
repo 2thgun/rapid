@@ -60,6 +60,23 @@ may return to the setup access point if it fails.</p>
 <div id="pairing-pending" hidden><p>Compare this code with the requesting PC, then approve it on the Pi:</p><strong id="pairing-code"></strong><p id="pairing-label"></p><button id="pairing-approve" type="button">Approve displayed PC</button></div>
 <button id="sign-out" type="button">Sign out</button>
 </section>
+<section id="device-access" hidden>
+<h2>Device access (SSH and sudo)</h2>
+<p>Choose the password for the <code>rapid</code> account on the Pi. It is used to sign in over SSH and for
+<code>sudo</code>. The device ships without one, and SSH stays off until you set a password or add a key.
+The password is hashed on the Pi before it is stored and is never shown again.</p>
+<p id="access-state">Checking device access…</p>
+<form id="access-form">
+<label for="access-password">New device password (at least 12 characters; mix letters with digits or symbols, or use 20+ characters)</label>
+<input id="access-password" type="password" autocomplete="new-password" minlength="12" maxlength="128">
+<label for="access-confirm">Confirm device password</label>
+<input id="access-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128">
+<label for="access-key">SSH public key (optional, one line such as <code>ssh-ed25519 AAAA… name</code>)</label>
+<input id="access-key" autocomplete="off" spellcheck="false" maxlength="3072">
+<label id="access-replace-label" hidden><input id="access-replace" type="checkbox" style="width:auto;min-height:0"> Replace the password this account already has</label>
+<button id="access-save" type="submit">Set device access</button>
+</form>
+</section>
 <script>
 'use strict';
 let csrf = '';
@@ -83,6 +100,7 @@ function showLogin() {
   csrf = '';
   document.getElementById('enrollment').hidden = true;
   document.getElementById('profile').hidden = true;
+  document.getElementById('device-access').hidden = true;
   document.getElementById('login').hidden = false;
 }
 document.getElementById('enrollment-form').addEventListener('submit', async event => {
@@ -124,8 +142,80 @@ async function showProfile() {
   document.getElementById('confirm-rotation').hidden = application.rotation !== 'awaiting_confirmation';
   await showPeers();
   await showPairing();
+  await showAccess();
   return data;
 }
+
+// Device access (#23): the rapid account's SSH/sudo password and an optional SSH key.
+function describeAccess(result) {
+  if (!result) return 'No device password has been set from this page yet. SSH is off until one is set.';
+  if (result.status === 'confirmation_required')
+    return 'This account already has a password. Tick "Replace the password" to change it.';
+  const parts = [];
+  if (result.password_changed) parts.push('Password set.');
+  else if (result.password_set) parts.push('A password is set.');
+  if (result.ssh_key === 'installed') parts.push('SSH key added.');
+  if (result.ssh_key === 'already_present') parts.push('SSH key was already present.');
+  if (result.ssh === 'enabled') parts.push(result.ssh_password_login ? 'SSH is on (password and key sign-in).' : 'SSH is on (key sign-in only).');
+  if (result.ssh === 'unavailable') parts.push('SSH is not installed on this device.');
+  if (result.status === 'failed') parts.push(result.error ? result.error + '.' : 'Device access could not be applied.');
+  return parts.join(' ') || 'Device access unchanged.';
+}
+async function showAccess() {
+  const section = document.getElementById('device-access');
+  try {
+    const data = await api('/api/v1/account');
+    section.hidden = false;
+    const result = data.result;
+    document.getElementById('access-state').textContent = data.queued ? 'Applying device access…' : describeAccess(result);
+    if (result && (result.password_set || result.status === 'confirmation_required'))
+      document.getElementById('access-replace-label').hidden = false;
+    return data;
+  } catch (error) {
+    // Unavailable (for example without HTTPS): keep the section hidden.
+    section.hidden = true;
+    return null;
+  }
+}
+async function waitForAccessResult(requestId) {
+  for (let attempt = 0; attempt < 60; ++attempt) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const data = await showAccess();
+    if (data && !data.queued && data.result && data.result.request_id === requestId) return data.result;
+  }
+  return null;
+}
+document.getElementById('access-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const password = document.getElementById('access-password');
+  const confirmation = document.getElementById('access-confirm');
+  const key = document.getElementById('access-key');
+  const replace = document.getElementById('access-replace');
+  const button = document.getElementById('access-save');
+  if (!password.value && !key.value.trim()) { message.textContent = 'Enter a device password or an SSH public key.'; return; }
+  if (password.value !== confirmation.value) { message.textContent = 'The device passwords do not match.'; return; }
+  const body = {};
+  if (password.value) { body.password = password.value; body.replace_existing_password = replace.checked; }
+  if (key.value.trim()) body.ssh_public_key = key.value.trim();
+  button.disabled = true;
+  message.textContent = '';
+  try {
+    const queued = await api('/api/v1/account', 'POST', body);
+    password.value = ''; confirmation.value = '';
+    message.textContent = 'Applying device access…';
+    const result = await waitForAccessResult(queued.request_id);
+    if (!result) { message.textContent = 'Device access is still being applied.'; return; }
+    if (result.status === 'confirmation_required') {
+      document.getElementById('access-replace-label').hidden = false;
+      message.textContent = 'This account already has a password. Nothing was changed. Tick "Replace the password" and enter it again to change it.';
+      return;
+    }
+    if (result.status === 'applied') key.value = '';
+    replace.checked = false;
+    message.textContent = describeAccess(result);
+  } catch (error) { message.textContent = error.message; }
+  finally { password.value = ''; confirmation.value = ''; body.password = ''; button.disabled = false; }
+});
 document.getElementById('retry-settings').addEventListener('click', async event => {
   const button = event.currentTarget;
   button.disabled = true;

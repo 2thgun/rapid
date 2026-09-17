@@ -20,6 +20,7 @@ foreach(path IN ITEMS
     "./usr/lib/rapid/rapid-apply"
     "./usr/lib/rapid/rapid-display-recovery"
     "./usr/lib/rapid/rapid-wifi"
+    "./usr/lib/rapid/rapid-account"
     "./usr/lib/rapid/rapid-network-mode"
     "./usr/share/rapid/setup.html"
     "./usr/lib/systemd/system/rapid.service"
@@ -32,6 +33,8 @@ foreach(path IN ITEMS
     "./usr/lib/systemd/system/rapid-apply.path"
     "./usr/lib/systemd/system/rapid-wifi.service"
     "./usr/lib/systemd/system/rapid-wifi.path"
+    "./usr/lib/systemd/system/rapid-account.service"
+    "./usr/lib/systemd/system/rapid-account.path"
     "./usr/lib/systemd/system/rapid-network-mode.service")
   string(FIND "${contents}" " ${path}\n" position)
   if(position EQUAL -1)
@@ -41,6 +44,11 @@ endforeach()
 string(TOLOWER "${contents}" normalized_contents)
 if(normalized_contents MATCHES "[.]key\n|[.]dpapi\n|[.]pem\n|[.]crt\n|[.]p12\n|[.]db\n|runtime[.]env\n|pairing[.]json\n|pairing-approval[.]json\n|/home/rapid/|/usr/etc/")
   message(FATAL_ERROR "Package contains private state or invalid installation paths")
+endif()
+# #23: no credential, sudo rule or SSH configuration ships in the package; the
+# owner chooses them during setup and rapid-account applies them.
+if(normalized_contents MATCHES "[.]/etc/sudoers|[.]/etc/ssh/|[.]/etc/shadow|[.]/etc/passwd|authorized_keys")
+  message(FATAL_ERROR "Package must not contain account credentials, sudo rules or SSH configuration")
 endif()
 set(data_tar "${PACKAGE}.data.tar")
 execute_process(COMMAND "${DPKG_DEB}" --fsys-tarfile "${PACKAGE}" OUTPUT_FILE "${data_tar}"
@@ -61,6 +69,8 @@ read_service("./usr/lib/systemd/system/rapid-provision.service" provision_servic
 read_service("./usr/lib/systemd/system/rapid-setup.service" setup_service)
 read_service("./usr/lib/systemd/system/rapid.service" runtime_service)
 read_service("./usr/lib/systemd/system/rapid-apply.service" apply_service)
+read_service("./usr/lib/systemd/system/rapid-account.service" account_service)
+read_service("./usr/lib/systemd/system/rapid-account.path" account_path)
 read_service("./usr/lib/rapid/rapid-panel" panel_script)
 file(REMOVE "${data_tar}")
 if(NOT firstboot_service MATCHES "User=rapid" OR
@@ -100,10 +110,36 @@ if(NOT apply_service MATCHES "--display-confirm-file /run/rapid-apply/display-co
    NOT panel_script MATCHES "--calibration-file /var/lib/rapid-setup/touch-calibration[.]conf --rollback-calibration --record-input-baseline")
   message(FATAL_ERROR "Orientation must await bounded owner confirmation; touch must follow rotation and roll back unconfirmed calibration")
 endif()
+# #23: the device password reaches root only as a hash in a request file that
+# the setup service queues and a sandboxed, path-activated helper consumes.
+set(nl "\n")
+string(REGEX MATCH "ExecStart=[^${nl}]*" account_exec "${account_service}")
+string(REGEX MATCH "ExecStart=[^${nl}]*" setup_exec "${setup_service}")
+foreach(line IN ITEMS "User=root" "NoNewPrivileges=true" "ProtectSystem=strict" "ProtectHome=read-only"
+                      "LimitCORE=0" "ReadWritePaths=/etc /run/rapid-apply -/home/rapid")
+  string(FIND "${account_service}" "${nl}${line}${nl}" position)
+  if(position EQUAL -1)
+    message(FATAL_ERROR "rapid-account.service must keep '${line}'")
+  endif()
+endforeach()
+if(NOT account_exec STREQUAL "ExecStart=/usr/lib/rapid/rapid-account --request-file /run/rapid-apply/account-request.json --result-file /run/rapid-apply/account-result.json --user rapid" OR
+   account_service MATCHES "${nl}User=rapid" OR
+   NOT account_path MATCHES "${nl}PathExists=/run/rapid-apply/account-request[.]json${nl}" OR
+   NOT account_path MATCHES "${nl}Unit=rapid-account[.]service${nl}")
+  message(FATAL_ERROR "Device access must be applied by the sandboxed root rapid-account helper from its fixed request file")
+endif()
+if(NOT setup_exec MATCHES " --account-request-file /run/rapid-apply/account-request[.]json --account-result-file /run/rapid-apply/account-result[.]json" OR
+   setup_exec MATCHES "password" OR account_exec MATCHES "password" OR
+   NOT setup_service MATCHES "${nl}LimitCORE=0${nl}" OR
+   NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply${nl}")
+  message(FATAL_ERROR "The setup service must queue device access through rapid-account without secrets on a command line or in core dumps")
+endif()
 execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0 OR NOT dependencies MATCHES "libargon2" OR NOT dependencies MATCHES "libqt6core" OR
-   NOT dependencies MATCHES "xinput")
+   NOT dependencies MATCHES "xinput" OR
+   NOT dependencies MATCHES "openssh-server" OR NOT dependencies MATCHES "sudo" OR
+   NOT dependencies MATCHES "libcrypt")
   message(FATAL_ERROR "Missing generated runtime library dependencies")
 endif()
 execute_process(COMMAND "${DPKG_DEB}" --ctrl-tarfile "${PACKAGE}" OUTPUT_FILE "${PACKAGE}.control.tar"

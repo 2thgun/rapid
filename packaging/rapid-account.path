@@ -1,0 +1,9 @@
+[Unit]
+Description=raPId device access request watcher
+
+[Path]
+PathExists=/run/rapid-apply/account-request.json
+Unit=rapid-account.service
+
+[Install]
+WantedBy=multi-user.target

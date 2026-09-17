@@ -4,7 +4,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
   message(FATAL_ERROR "Pi packaging requires Linux, RAPID_BUILD_QT_DISPLAY=ON and RAPID_BUILD_LOG_STATUS=ON")
 endif()
 
-install(TARGETS rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot rapid-provision rapid-apply rapid-display-recovery rapid-wifi
+install(TARGETS rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot rapid-provision rapid-apply rapid-display-recovery rapid-wifi rapid-account
         RUNTIME DESTINATION lib/rapid)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/" DESTINATION share/rapid)
 install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/../systemd/rapid-network-mode"
@@ -20,6 +20,8 @@ install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.service"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-apply.path"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-wifi.service"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-wifi.path"
+              "${CMAKE_CURRENT_LIST_DIR}/rapid-account.service"
+              "${CMAKE_CURRENT_LIST_DIR}/rapid-account.path"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-network-mode.service"
               "${CMAKE_CURRENT_LIST_DIR}/rapid-log-status.service"
         DESTINATION lib/systemd/system)
@@ -38,6 +40,6 @@ set(CPACK_SET_DESTDIR ON)
 set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Installation prefix" FORCE)
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "systemd, network-manager, xinit, xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-evdev, x11-xserver-utils, xinput,qml6-module-qtquick, qml6-module-qtquick-window, qml6-module-qtqml-workerscript")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "systemd, network-manager, openssh-server, sudo, xinit, xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-evdev, x11-xserver-utils, xinput,qml6-module-qtquick, qml6-module-qtquick-window, qml6-module-qtqml-workerscript")
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_LIST_DIR}/conffiles")
 include(CPack)

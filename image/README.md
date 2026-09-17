@@ -53,7 +53,11 @@ fresh card safe and usable without a terminal:
 - retain a keyboardless recovery route after failed Wi-Fi, rotation or touch
   changes; and
 - leave no owner password, telemetry key, database, recording or runtime
-  environment file in the image artifact.
+  environment file in the image artifact; and
+- ship no login password (the `rapid` account is locked), no SSH host keys and
+  SSH off with password login disabled. The owner chooses the SSH/sudo password
+  (and optionally an SSH key) on the setup page; `rapid-account` applies it and
+  only then enables SSH ([issue #23](https://github.com/2thgun/rapid/issues/23)).
 
 The image layer checks the last condition during assembly. First-boot AP and
 owner enrollment are tracked in [issue #8](https://github.com/2thgun/rapid/issues/8);

@@ -1,0 +1,24 @@
+[Unit]
+Description=raPId constrained device access (account password, SSH key, SSH enablement)
+
+[Service]
+Type=oneshot
+User=root
+# The request holds only a yescrypt hash and is consumed on start. No password
+# or hash is ever passed on a command line.
+ExecStart=/usr/lib/rapid/rapid-account --request-file /run/rapid-apply/account-request.json --result-file /run/rapid-apply/account-result.json --user rapid
+TimeoutStartSec=60
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# chpasswd replaces /etc/shadow by rename, and SSH enablement writes the sshd
+# drop-in, host keys and unit links, so /etc is writable. The home directory is
+# written only by a child process that has dropped to the account's own uid.
+ProtectHome=read-only
+ReadWritePaths=/etc /run/rapid-apply -/home/rapid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# AF_NETLINK: chpasswd may report to the audit subsystem.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

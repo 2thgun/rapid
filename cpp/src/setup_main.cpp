@@ -51,13 +51,14 @@ int main(int argc, char **argv) {
              tls_private_key, calibration_file, calibration_request_file, display_confirm_file;
     std::string pairing_device_id, pairing_certificate_fingerprint;
     fs::path wifi_request_file, wifi_result_file;
+    fs::path account_request_file, account_result_file;
     int port = 8002;
     bool enroll = false;
     std::string listen_host = "127.0.0.1";
     for (int i = 1; i < argc; ++i) {
       const std::string option = argv[i];
       if (option == "--help") {
-        std::cout << "rapid-setup-server --state-directory PATH [--assets PATH] [--port PORT] [--set-owner] [--enrollment-token-file PATH] [--apply-request-file PATH] [--apply-result-file PATH] [--firstboot-status-file PATH] [--calibration-file PATH] [--calibration-request-file PATH] [--display-confirm-file PATH] [--listen IPV4] [--tls-certificate PATH --tls-private-key PATH] [--device-id HEX32 --certificate-fingerprint HEX64]\n"
+        std::cout << "rapid-setup-server --state-directory PATH [--assets PATH] [--port PORT] [--set-owner] [--enrollment-token-file PATH] [--apply-request-file PATH] [--apply-result-file PATH] [--firstboot-status-file PATH] [--calibration-file PATH] [--calibration-request-file PATH] [--display-confirm-file PATH] [--account-request-file PATH --account-result-file PATH] [--listen IPV4] [--tls-certificate PATH --tls-private-key PATH] [--device-id HEX32 --certificate-fingerprint HEX64]\n"
                      "Defaults to loopback. A non-loopback listener requires an enrollment token. "
                      "--set-owner reads a new owner password from standard input.\n";
         return 0;
@@ -69,6 +70,8 @@ int main(int argc, char **argv) {
       else if (option == "--apply-result-file" && i + 1 < argc) apply_result_file = argv[++i];
       else if (option == "--wifi-request-file" && i + 1 < argc) wifi_request_file = argv[++i];
       else if (option == "--wifi-result-file" && i + 1 < argc) wifi_result_file = argv[++i];
+      else if (option == "--account-request-file" && i + 1 < argc) account_request_file = argv[++i];
+      else if (option == "--account-result-file" && i + 1 < argc) account_result_file = argv[++i];
       else if (option == "--firstboot-status-file" && i + 1 < argc) firstboot_status_file = argv[++i];
       else if (option == "--calibration-file" && i + 1 < argc) calibration_file = argv[++i];
       else if (option == "--calibration-request-file" && i + 1 < argc) calibration_request_file = argv[++i];
@@ -124,6 +127,9 @@ int main(int argc, char **argv) {
                    wifi_result_file, pairing.get(), !tls_certificate.empty(),
                    pairing_certificate_fingerprint, false, calibration_file,
                    calibration_request_file, display_confirm_file);
+    if (account_request_file.empty() != account_result_file.empty())
+      throw std::invalid_argument("device access requires both account request and result files");
+    if (!account_request_file.empty()) auth.set_account_files(account_request_file, account_result_file);
     if (enroll) {
       std::string password;
       if (!std::getline(std::cin, password) || !auth.enroll(password))

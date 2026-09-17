@@ -22,6 +22,12 @@ for path in "$builder" "$package" "$output" "$source_root"; do
     echo 'Build paths must not contain shell expansion characters or newlines.' >&2; exit 1;
   }
 done
+# No default device credential (#23): the owner chooses the SSH/sudo password
+# during setup, so the image profile must not set one or grant password-free sudo.
+if grep -Eq '^[[:space:]]*(user1pass|user1passhash)[[:space:]]*:|nopasswd' "$source_root/config/rapid-pi4.yaml"; then
+  echo 'The image profile must not set a default password or passwordless sudo.' >&2
+  exit 1
+fi
 if [[ -e "$output" && ! -d "$output" ]]; then
   echo 'Output path must be a directory.' >&2
   exit 1

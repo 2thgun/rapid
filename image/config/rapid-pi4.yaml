@@ -3,7 +3,10 @@ device:
   hostname: rapid
   user1: rapid
   user1uid: 1000
-  user1sudo: none
+  # No user1pass/user1passhash: rpi-image-gen then locks the account. The owner
+  # chooses the SSH/sudo password during setup (#23). "passwd" keeps sudo
+  # installed (none purges it) and requires that password for sudo.
+  user1sudo: passwd
   user1groups: video,input,render,spi,gpio
 
 image:
