@@ -9,3 +9,5 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+# ProtectSystem=strict makes /run read-only; the request/result queue lives here (#25).
+ReadWritePaths=/run/rapid-apply
