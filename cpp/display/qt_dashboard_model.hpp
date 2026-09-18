@@ -17,6 +17,10 @@ class QWebSocket;
 class DashboardModel final : public QObject {
   Q_OBJECT
   Q_PROPERTY(int revision READ revision NOTIFY changed)
+  // #13: physical display rotation in degrees (0 or 180), read from the same
+  // state file rapid-display-recovery writes. The panel rotates its scene by
+  // this value; rotation is no longer an X/xrandr transform.
+  Q_PROPERTY(int displayRotation READ displayRotation NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
   // True once the live WebSocket push (#17) is delivering snapshots; false
   // while the model relies on its 200 ms HTTP poll fallback (socket never
@@ -41,6 +45,7 @@ class DashboardModel final : public QObject {
 public:
   explicit DashboardModel(QUrl endpoint, QObject *parent = nullptr);
   int revision() const { return revision_; }
+  int displayRotation() const { return display_rotation_; }
   QString status() const { return status_; }
   bool livePushActive() const { return live_push_active_; }
   QString networkMode() const { return network_mode_; }
@@ -85,6 +90,10 @@ private:
   void pollPairingPanel();
   void pollCalibrationFile();
   void pollDisplayConfirmation();
+  void pollDisplayRotation();
+  // Maps a normalized tap from the rotated scene's local coordinates to the
+  // unrotated screen frame the calibration helper works in (#13).
+  QPointF screenPoint(double x, double y) const;
   void runDisplayRecovery(const QStringList &arguments,
                           std::function<void(bool, const QString &)> done);
   void calibrationTimedOut();
@@ -119,6 +128,7 @@ private:
   QString last_graph_sample_;
   qint64 last_graph_gap_ms_ = 0;
   QVariantList graph_samples_;
+  int display_rotation_ = 0;
   bool display_confirm_pending_ = false;
   bool display_confirm_sent_ = false;
   qint64 display_confirm_revision_ = -1;

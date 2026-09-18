@@ -83,9 +83,14 @@ QString calibration_file() {
   return qEnvironmentVariable("RAPID_TOUCH_CALIBRATION", "/var/lib/rapid-setup/touch-calibration.conf");
 }
 
+// The one rotation state file rapid-display-recovery writes; the panel reads
+// the same file and path (PROJECT.md: do not invent a second one).
+QString display_state_file() {
+  return qEnvironmentVariable("RAPID_DISPLAY_STATE", "/var/lib/rapid/display-recovery.json");
+}
+
 QStringList display_recovery_files() {
-  return {"--state-file", qEnvironmentVariable("RAPID_DISPLAY_STATE", "/var/lib/rapid/display-recovery.json"),
-          "--calibration-file", calibration_file()};
+  return {"--state-file", display_state_file(), "--calibration-file", calibration_file()};
 }
 
 QString file_signature(const QString &path) {
@@ -105,6 +110,7 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   connect(calibration_timeout_, &QTimer::timeout, this, &DashboardModel::calibrationTimedOut);
   QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
+  QTimer::singleShot(0, this, &DashboardModel::pollDisplayRotation);
   // The HTTP poll loop keeps running underneath the socket (it is a no-op
   // fetch while the push is active, see pollLive()) so that losing the
   // socket at any moment falls straight back to it without a gap.
@@ -286,6 +292,32 @@ void DashboardModel::pollDisplayConfirmation() {
   QTimer::singleShot(500, this, &DashboardModel::pollDisplayConfirmation);
 }
 
+void DashboardModel::pollDisplayRotation() {
+  int rotation = 0;
+  QFile file(display_state_file());
+  if (file.open(QIODevice::ReadOnly)) {
+    const auto object = QJsonDocument::fromJson(file.readAll()).object();
+    const auto value = object.value("rotation");
+    if (value.isDouble()) {
+      const int candidate = value.toInt();
+      if (candidate == 0 || candidate == 180) rotation = candidate;
+    }
+  }
+  if (rotation != display_rotation_) {
+    display_rotation_ = rotation;
+    bump();
+  }
+  QTimer::singleShot(500, this, &DashboardModel::pollDisplayRotation);
+}
+
+QPointF DashboardModel::screenPoint(double x, double y) const {
+  // Qt hit-tests a rotated scene back into the item's local frame, so a touch
+  // arrives already unwound. The calibration helper speaks screen coordinates
+  // and the X matrix carries no rotation (#13), so a 180-degree scene rotates
+  // the reported point the same way the picture is rotated.
+  return display_rotation_ == 180 ? QPointF(1.0 - x, 1.0 - y) : QPointF(x, y);
+}
+
 bool DashboardModel::confirmDisplay() {
   if (!display_confirm_pending_ || display_confirm_sent_) return false;
   // The root applicator accepts only a confirmation naming the previewed revision.
@@ -326,12 +358,15 @@ void DashboardModel::startCalibration() {
 }
 
 void DashboardModel::calibrationTap(double x, double y) {
+  // The MouseArea lives inside the rotated scene, so this is a local
+  // coordinate; the helper wants the unrotated screen coordinate.
+  const QPointF tap = screenPoint(x, y);
   if (calibration_stage_ == "done" || calibration_stage_ == "failed") {
     calibration_stage_.clear();
     calibration_message_.clear();
     bump();
   } else if (calibration_stage_ == "capture") {
-    calibration_taps_.append({x, y});
+    calibration_taps_.append(tap);
     if (calibration_taps_.size() < calibration_point_count) {
       calibration_message_ = QStringLiteral("Tap the centre of each target (%1 of %2)")
                                  .arg(calibration_taps_.size() + 1).arg(calibration_point_count);
@@ -341,12 +376,14 @@ void DashboardModel::calibrationTap(double x, double y) {
     }
     auto arguments = display_recovery_files();
     arguments << "--calibrate";
-    for (qsizetype i = 0; i < calibration_point_count; ++i)
+    for (qsizetype i = 0; i < calibration_point_count; ++i) {
+      const QPointF target = screenPoint(calibration_points[i].x(), calibration_points[i].y());
       arguments << "--sample" << QStringLiteral("%1,%2,%3,%4")
                                      .arg(calibration_taps_[i].x(), 0, 'f', 6)
                                      .arg(calibration_taps_[i].y(), 0, 'f', 6)
-                                     .arg(calibration_points[i].x(), 0, 'f', 6)
-                                     .arg(calibration_points[i].y(), 0, 'f', 6);
+                                     .arg(target.x(), 0, 'f', 6)
+                                     .arg(target.y(), 0, 'f', 6);
+    }
     calibration_timeout_->stop();
     calibration_stage_ = "applying";
     calibration_message_ = "Applying calibration…";
@@ -363,7 +400,8 @@ void DashboardModel::calibrationTap(double x, double y) {
     });
   } else if (calibration_stage_ == "verify") {
     calibration_timeout_->stop();
-    const bool accurate = std::hypot(x - verification_point.x(), y - verification_point.y()) <=
+    const QPointF expected = screenPoint(verification_point.x(), verification_point.y());
+    const bool accurate = std::hypot(tap.x() - expected.x(), tap.y() - expected.y()) <=
                           verification_tolerance;
     calibration_stage_ = "applying";
     bump();

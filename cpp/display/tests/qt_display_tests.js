@@ -27,4 +27,15 @@ if (!qmlSource.includes('steering_lock_deg')) {
   throw new Error('Main.qml steering wheel must derive degrees from the steering lock channel');
 }
 
-console.log('Main.qml wheel-speed unit and steering-lock degrees checks passed');
+// #13: the physical orientation is a Qt scene rotation driven by the value the
+// panel reads from the display-recovery state file, not an xrandr call.
+if (!qmlSource.includes('dashboard.displayRotation') ||
+    !qmlSource.includes('rotation: root.displayRotation') ||
+    !qmlSource.includes('anchors.fill: parent')) {
+  throw new Error('Main.qml must rotate its root scene from dashboard.displayRotation (#13)');
+}
+if (/xrandr/i.test(qmlSource)) {
+  throw new Error('Main.qml must not invoke or reference xrandr for rotation (#13)');
+}
+
+console.log('Main.qml wheel-speed unit, steering-lock degrees and scene-rotation checks passed');

@@ -71,11 +71,6 @@ std::string output_of(const fs::path &program, const std::vector<std::string> &a
   return output;
 }
 
-void rotate(const fs::path &xrandr, const std::string &output, int degrees) {
-  run(xrandr, {"--output", output, "--rotate", degrees == 180 ? "inverted" : "normal"},
-      "display rotation failed");
-}
-
 Json load(const fs::path &path) {
   if (!fs::exists(path)) return Json{{"rotation", 0}, {"pending", false}};
   const auto state = Json::parse(read_file(path));
@@ -91,11 +86,6 @@ Matrix multiply(const Matrix &left, const Matrix &right) {
     for (int column = 0; column < 3; ++column)
       for (int k = 0; k < 3; ++k) result[row * 3 + column] += left[row * 3 + k] * right[k * 3 + column];
   return result;
-}
-
-// xrandr "inverted" maps (x, y) to (1 - x, 1 - y). The transform is its own inverse.
-Matrix rotation_matrix(int degrees) {
-  return degrees == 180 ? Matrix{-1, 0, 1, 0, -1, 1, 0, 0, 1} : identity;
 }
 
 void require_plausible(const Matrix &matrix) {
@@ -217,7 +207,7 @@ Matrix stored_baseline(const Json &devices, const std::string &device) {
   return affine(matrix) ? matrix : identity;
 }
 
-void apply_input(const fs::path &xinput, const std::string &touch_device, int rotation,
+void apply_input(const fs::path &xinput, const std::string &touch_device,
                  const fs::path &calibration_file, bool required, bool record_baseline = false) {
   std::vector<std::string> devices;
   if (!touch_device.empty()) {
@@ -260,7 +250,11 @@ void apply_input(const fs::path &xinput, const std::string &touch_device, int ro
   try {
     if (fs::exists(baselines)) stored = Json::parse(read_file(baselines)).at("devices");
   } catch (const std::exception &) {}
-  const auto calibrated = multiply(rotation_matrix(rotation), load_calibration(calibration_file).matrix);
+  // #13: rotation is a Qt scene transform now, so it is deliberately absent
+  // here. The X matrix is the touch calibration over the session baseline and
+  // is identical at 0 and 180 degrees; Qt's own hit-testing unwinds the scene
+  // rotation before the panel sees a tap.
+  const auto calibrated = load_calibration(calibration_file).matrix;
   for (const auto &device : devices) {
     std::vector<std::string> arguments{"set-prop", device, "Coordinate Transformation Matrix"};
     for (const double value : multiply(calibrated, stored_baseline(stored, device))) {
@@ -336,8 +330,8 @@ Matrix fit_correction(const std::vector<std::array<double, 4>> &samples) {
 } // namespace
 
 int main(int argc, char **argv) {
-  fs::path state_file, xrandr = "/usr/bin/xrandr", xinput = "/usr/bin/xinput", calibration_file;
-  std::string output = "default", action, touch_device;
+  fs::path state_file, xinput = "/usr/bin/xinput", calibration_file;
+  std::string action, touch_device;
   std::vector<std::array<double, 4>> samples;
   bool record_baseline = false;
   int rotation = -1;
@@ -345,10 +339,13 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
       const std::string option = argv[i];
       if (option == "--state-file" && i + 1 < argc) state_file = argv[++i];
-      else if (option == "--xrandr" && i + 1 < argc) xrandr = argv[++i];
+      // Accepted and ignored: rotation is rendered by the Qt panel from the
+      // state file, so no X output is touched. Kept so existing callers
+      // (rapid-apply) do not have to change their argument list.
+      else if (option == "--xrandr" && i + 1 < argc) ++i;
       else if (option == "--xinput" && i + 1 < argc) xinput = argv[++i];
       else if (option == "--touch-device" && i + 1 < argc) touch_device = argv[++i];
-      else if (option == "--output" && i + 1 < argc) output = argv[++i];
+      else if (option == "--output" && i + 1 < argc) ++i;
       else if (option == "--rotation" && i + 1 < argc) rotation = std::stoi(argv[++i]);
       else if (option == "--preview") action = "preview";
       else if (option == "--confirm") action = "confirm";
@@ -363,11 +360,13 @@ int main(int argc, char **argv) {
       else if (option == "--calibration-file" && i + 1 < argc) calibration_file = argv[++i];
       else if (option == "--help") {
         std::cout << "rapid-display-recovery --state-file PATH [--calibration-file PATH]\n"
-                     "  [--xrandr PATH --output NAME] [--xinput PATH --touch-device NAME]\n"
+                     "  [--xinput PATH --touch-device NAME]\n"
                      "  --preview --rotation 0|180 | --confirm | --rollback | --recover\n"
                      "  | --calibrate --sample OX,OY,TX,TY... | --confirm-calibration\n"
                      "  | --rollback-calibration | --apply-input | --reset-calibration\n"
                      "  [--record-input-baseline]  keep the X server's own touch matrix (session start)\n"
+                     "Rotation is rendered by the Qt panel from the state file, not by xrandr\n"
+                     "(--xrandr/--output are still accepted and ignored for that reason).\n"
                      "Samples and targets are normalized screen coordinates (0 to 1).\n";
         return 0;
       } else throw std::invalid_argument("unknown or incomplete option");
@@ -379,13 +378,15 @@ int main(int argc, char **argv) {
     require(!calibration_action || !calibration_file.empty(), "calibration file is required");
     if (action == "preview") {
       require(rotation == 0 || rotation == 180, "preview requires rotation 0 or 180");
-      require(fs::is_regular_file(xrandr), "xrandr is unavailable");
       const int previous = state.value("rotation", 0);
-      rotate(xrandr, output, rotation);
+      // #13: persist the requested rotation for the Qt panel to render instead
+      // of touching the X output. xrandr cannot rotate this fbdev panel (step 1
+      // probe: --rotate inverted exits 1), and the panel picks the value up on
+      // its next state-file poll, so preview and rollback stay instant.
       atomic_file(state_file, Json{{"rotation", rotation}, {"previous_rotation", previous},
                                    {"pending", true},
                                    {"deadline", monotonic() + 30}}.dump() + "\n");
-      if (!calibration_file.empty()) apply_input(xinput, touch_device, rotation, calibration_file, false);
+      if (!calibration_file.empty()) apply_input(xinput, touch_device, calibration_file, false);
     } else if (action == "confirm") {
       state["pending"] = false;
       state.erase("deadline");
@@ -394,8 +395,6 @@ int main(int argc, char **argv) {
     } else if (action == "rollback") {
       if (state.value("pending", false)) {
         const int previous = state.value("previous_rotation", 0);
-        require(fs::is_regular_file(xrandr), "xrandr is unavailable");
-        rotate(xrandr, output, previous);
         state["rotation"] = previous;
       }
       state["pending"] = false;
@@ -403,22 +402,22 @@ int main(int argc, char **argv) {
       state.erase("previous_rotation");
       atomic_file(state_file, state.dump() + "\n");
       if (!calibration_file.empty())
-        apply_input(xinput, touch_device, state.value("rotation", 0), calibration_file, false);
+        apply_input(xinput, touch_device, calibration_file, false);
     } else if (action == "calibrate") {
-      const int current_rotation = state.value("rotation", 0);
       const auto current = load_calibration(calibration_file);
-      const auto rotated = rotation_matrix(current_rotation);
-      const auto applied = multiply(rotated, current.matrix);
+      // #13: the panel submits observed and target taps in the unrotated screen
+      // frame, so the stored correction never contains the scene rotation and
+      // one calibration is reused at both orientations.
+      const auto applied = current.matrix;
       const auto correction = fit_correction(samples);
-      // Stored calibration excludes rotation so a later orientation change reuses it.
-      const auto next = multiply(rotated, multiply(correction, applied));
+      const auto next = multiply(correction, applied);
       require_plausible(next);
       const auto previous = current.pending ? current.previous
                             : current.present ? std::optional<Matrix>(current.matrix)
                                               : std::nullopt;
       save_calibration(calibration_file, Calibration{true, next, true, previous});
       try {
-        apply_input(xinput, touch_device, current_rotation, calibration_file, true);
+        apply_input(xinput, touch_device, calibration_file, true);
       } catch (...) {
         roll_back_calibration(calibration_file);
         throw;
@@ -432,9 +431,9 @@ int main(int argc, char **argv) {
       save_calibration(calibration_file, calibration);
     } else if (action == "rollback-calibration") {
       roll_back_calibration(calibration_file);
-      apply_input(xinput, touch_device, state.value("rotation", 0), calibration_file, false, record_baseline);
+      apply_input(xinput, touch_device, calibration_file, false, record_baseline);
     } else if (action == "apply-input") {
-      apply_input(xinput, touch_device, state.value("rotation", 0), calibration_file, false, record_baseline);
+      apply_input(xinput, touch_device, calibration_file, false, record_baseline);
     } else {
       require(!calibration_file.empty(), "calibration file is required");
       std::error_code error;
