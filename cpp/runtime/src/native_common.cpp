@@ -260,9 +260,11 @@ Config Config::load(const fs::path &path) {
   }
   if (c.companion_keys.size() > 16)
     throw std::runtime_error("at most 16 paired companion keys are supported");
-  if (boolean("app", "require_v4", "RAPID_REQUIRE_V4", false) && c.companion_key.empty() && c.companion_keys.empty() &&
-      !(c.pairing_enabled && !c.setup_directory.empty()))
-    throw std::runtime_error("authenticated v4 key required before runtime activation");
+  // v4 is the only transport now, so require_v4 has no meaning. An existing
+  // config that still sets it is accepted and ignored with a one-line
+  // deprecation notice rather than failing to parse.
+  if (t["app"]["require_v4"].value_or(false) || !env("RAPID_REQUIRE_V4", "").empty())
+    log("config: require_v4 is deprecated and ignored; authenticated v4 is the only protocol");
   c.database =
       text("app", "database_path", "RAPID_DATABASE_PATH", c.database.string());
   c.telemetry = text("app", "telemetry_directory", "RAPID_TELEMETRY_DIRECTORY",

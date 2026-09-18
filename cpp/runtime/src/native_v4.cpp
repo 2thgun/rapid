@@ -223,8 +223,7 @@ Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
   // fingerprint or change when a PC is paired.
   const auto storage_id = peer_namespace + session_id;
   const char *simulators[] = {"", "ACC", "AC", "ACE", "iRacing"};
-  Json message = {{"version", 3},
-                  {"_wire_version", 4},
+  Json message = {{"version", 4},
                   {"simulator", simulators[sim]},
                   {"session_id", session_id},
                   {"sequence", sequence},

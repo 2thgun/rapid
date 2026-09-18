@@ -449,10 +449,14 @@ int main(int argc, char **argv) {
     fs::create_symlink(directory / "setup.db", root.path / "linked-db" / "setup.db");
     rejects([&] { SetupStore store(root.path / "linked-db"); }, "symlink database rejected");
     const auto config = root.path / "package.toml";
+    // The retired require_v4 key is accepted and ignored so an existing
+    // config still parses; v4 is the only transport and an empty key simply
+    // authenticates nothing rather than enabling an unauthenticated path.
     atomic_file(config, "[app]\nrequire_v4 = true\n");
     setenv("RAPID_REQUIRE_V4", "true", 1);
     setenv("RAPID_COMPANION_KEY", "", 1);
-    rejects([&] { (void)Config::load(config); }, "packaged runtime refuses missing authentication key");
+    require(Config::load(config).companion_key.empty(),
+            "retired require_v4 no longer fails an empty-key config");
     setenv("RAPID_COMPANION_KEY", std::string(64, '1').c_str(), 1);
     require(Config::load(config).companion_key.size() == 32, "packaged runtime accepts configured v4 key");
     unsetenv("RAPID_COMPANION_KEY");

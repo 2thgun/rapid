@@ -392,8 +392,6 @@ struct Metadata {
     double steering_lock_deg = 0.0;
 };
 
-enum class Protocol { v4, legacy_v3 };
-
 struct Options {
     std::string pi_host = "rapid";
     unsigned short pi_port = 9001;
@@ -403,7 +401,6 @@ struct Options {
     std::vector<std::uint8_t> auth_key;
     fs::path auth_key_dpapi_file;
     fs::path store_auth_key_dpapi_file;
-    Protocol protocol = Protocol::v4;
     bool local_recording = false;
     bool no_forward = false;
     bool headless = false;
@@ -808,11 +805,16 @@ bool parse_bool(std::string value, std::string_view name) {
     throw std::runtime_error(std::string(name) + " must be true or false");
 }
 
-Protocol parse_protocol(std::string value, std::string_view source) {
+// Authenticated v4 is the only transport since the legacy JSON v3 path was
+// retired. The option is still recognised so an old command line or config
+// file that names v3 fails with a clear, actionable message instead of being
+// silently ignored or falling back to something unauthenticated.
+void require_v4_protocol(std::string value, std::string_view source) {
     value = lower_ascii(trim_ascii(std::move(value)));
-    if (value == "v4" || value == "4") return Protocol::v4;
-    if (value == "v3" || value == "legacy-v3" || value == "legacy_v3") return Protocol::legacy_v3;
-    throw std::runtime_error(std::string(source) + " must be v4 or v3");
+    if (value == "v4" || value == "4") return;
+    throw std::runtime_error(std::string(source) +
+        " select a transport that is not authenticated v4; the legacy JSON implementation has been removed. "
+        "Pair this companion with the Pi (run --pair) to obtain an authenticated v4 key.");
 }
 
 void apply_config_file(Options& options, const fs::path& path, bool required) {
@@ -843,7 +845,7 @@ void apply_config_file(Options& options, const fs::path& path, bool required) {
             options.sample_rate = std::stoi(value);
             if (options.sample_rate < 1 || options.sample_rate > 100) throw std::runtime_error("sample_rate must be 1-100");
         } else if (name == "protocol") {
-            options.protocol = parse_protocol(value, "protocol");
+            require_v4_protocol(value, "protocol");
         } else if (name == "auth_key") {
             options.auth_key = decode_auth_key(value, "auth_key");
         } else if (name == "auth_key_file") {
@@ -925,7 +927,7 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (raw == L"--output-directory" || raw == L"-outputdirectory") {
             options.output_directory = option_value(i, argc, argv, L"--output-directory");
         } else if (raw == L"--protocol") {
-            options.protocol = parse_protocol(wide_to_utf8(option_value(i, argc, argv, L"--protocol")), "--protocol");
+            require_v4_protocol(wide_to_utf8(option_value(i, argc, argv, L"--protocol")), "--protocol");
         } else if (raw == L"--auth-key") {
             options.auth_key = decode_auth_key(wide_to_utf8(option_value(i, argc, argv, L"--auth-key")), "--auth-key");
         } else if (raw == L"--auth-key-file") {
@@ -972,7 +974,7 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --pi-host HOST            Pi hostname/address (default: rapid)\n"
                       "  --pi-port PORT            Pi UDP port (default: 9001)\n"
                       "  --sample-rate HZ          Capture rate 1-100 (default: 50)\n"
-                      "  --protocol v4|v3          Authenticated binary v4 (default) or legacy JSON v3\n"
+                      "  --protocol v4             Authenticated v4 is the only transport\n"
                       "  --auth-key HEX            64-hex-character v4 HMAC key\n"
                       "  --auth-key-file PATH      Read the v4 HMAC key from a file\n"
                       "  --auth-key-dpapi-file PATH  Read a per-user DPAPI-protected pairing key\n"
@@ -1015,11 +1017,12 @@ Options parse_options(int argc, wchar_t** argv) {
             } else options.pairing_credential_file = fs::current_path() / L"pairing.key.dpapi";
         }
     }
-    if (options.protocol == Protocol::v4 && !options.no_forward && options.auth_key.empty() &&
+    if (!options.no_forward && options.auth_key.empty() &&
         !options.self_test && options.verify_setup_url.empty() && !options.pairing) {
         throw std::runtime_error(
             "Protocol v4 requires a 256-bit HMAC key. Set --auth-key, --auth-key-file, "
-            "RAPID_TELEMETRY_KEY, or auth_key in the daemon config.");
+            "RAPID_TELEMETRY_KEY, or auth_key in the daemon config. New installations "
+            "should pair with the Pi (run --pair) instead of configuring a key by hand.");
     }
     return options;
 }
@@ -1604,74 +1607,6 @@ std::unique_ptr<Adapter> open_adapter(Game game) {
     }
 }
 
-void append_json_string(std::string& output, std::string_view value) {
-    output.push_back('"');
-    static constexpr char hex[] = "0123456789abcdef";
-    for (const unsigned char character : value) {
-        switch (character) {
-            case '"': output += "\\\""; break;
-            case '\\': output += "\\\\"; break;
-            case '\b': output += "\\b"; break;
-            case '\f': output += "\\f"; break;
-            case '\n': output += "\\n"; break;
-            case '\r': output += "\\r"; break;
-            case '\t': output += "\\t"; break;
-            default:
-                if (character < 0x20) {
-                    output += "\\u00";
-                    output.push_back(hex[character >> 4]);
-                    output.push_back(hex[character & 0x0f]);
-                } else {
-                    output.push_back(static_cast<char>(character));
-                }
-        }
-    }
-    output.push_back('"');
-}
-
-void append_number(std::string& output, double value) {
-    char buffer[48];
-    if (!std::isfinite(value)) value = 0.0;
-    const int length = std::snprintf(buffer, sizeof(buffer), "%.9g", value);
-    output.append(buffer, static_cast<std::size_t>(std::max(0, length)));
-}
-
-std::string status_json(std::string_view state, const Adapter* adapter, int rate) {
-    std::string output = "{\"version\":3,\"type\":\"status\",\"state\":";
-    append_json_string(output, state);
-    output += ",\"simulator\":";
-    if (adapter) append_json_string(output, adapter->metadata.simulator); else output += "null";
-    output += ",\"sample_rate_hz\":" + std::to_string(rate) + "}";
-    return output;
-}
-
-std::string telemetry_json(const Frame& frame, const Adapter& adapter, int rate) {
-    std::string output;
-    output.reserve(2300);
-    output = "{\"version\":3,\"type\":\"telemetry\",\"simulator\":";
-    append_json_string(output, adapter.metadata.simulator);
-    output += ",\"sample_rate_hz\":" + std::to_string(rate);
-    const std::pair<const char*, const std::string*> metadata[] = {
-        {"track_name", &adapter.metadata.venue}, {"car_model", &adapter.metadata.vehicle},
-        {"driver_name", &adapter.metadata.driver}, {"session_name", &adapter.metadata.session}
-    };
-    for (const auto& [name, value] : metadata) {
-        output += ",\""; output += name; output += "\":";
-        append_json_string(output, *value);
-    }
-    output += ",\"telemetry\":{";
-    bool first = true;
-    for (std::size_t i = 1; i < field_count; ++i) {
-        if (!first) output.push_back(',');
-        first = false;
-        output.push_back('"'); output += kChannels[i].key; output += "\":";
-        append_number(output, frame.value[i]);
-    }
-    output += ",\"completed_lap_ms\":" + std::to_string(frame.completed_lap_ms);
-    output += ",\"delta_ms\":" + std::to_string(frame.delta_ms) + "}}";
-    return output;
-}
-
 // Protocol v4 wire contract. All integers and IEEE-754 floats are little-endian.
 // Datagram = 52-byte header + payload + 32-byte HMAC-SHA256. The HMAC covers
 // exactly the header and payload. Header fields, in order:
@@ -2243,8 +2178,7 @@ private:
                 if (running_game_) {
                     if (!options_.no_forward) {
                         sender_ = std::make_unique<UdpSender>(options_.pi_host, options_.pi_port);
-                        if (options_.protocol == Protocol::v4)
-                            v4_ = std::make_unique<V4Encoder>(options_.auth_key);
+                        v4_ = std::make_unique<V4Encoder>(options_.auth_key);
                     }
                     logger_.write(std::string(game_name(running_game_.game())) + " process detected; telemetry waking");
                     set_status(std::string(game_name(running_game_.game())) + " started - waiting for telemetry");
@@ -2276,15 +2210,13 @@ private:
                 // "driving" alone no longer means live telemetry is flowing; tell
                 // the Pi apart with "paused" so the dashboard does not read idle.
                 const bool currently_live = adapter_ && adapter_->live();
-                const auto state = !recorder_.recording() ? (adapter_ ? "ready" : "waiting")
-                                  : currently_live ? "driving" : "paused";
                 if (v4_) {
                     if (v4_->active() && adapter_)
                         send(v4_->metadata_packet(running_game_.game(), adapter_->metadata, options_.sample_rate));
                     const auto wire_state = !v4_->active() ? (adapter_ ? V4StatusState::ready : V4StatusState::waiting)
                                            : currently_live ? V4StatusState::driving : V4StatusState::paused;
                     send(v4_->status_packet(running_game_.game(), wire_state, "", packets_, options_.sample_rate));
-                } else send(status_json(state, adapter_.get(), options_.sample_rate));
+                }
                 next_heartbeat = now + 1s;
                 set_status(current_status_);
             }
@@ -2332,7 +2264,6 @@ private:
                     recorder_.add(frame);
                     if (v4_) send(v4_->telemetry_packet(running_game_.game(), frame,
                                                       options_.sample_rate, std::chrono::steady_clock::now()));
-                    else send(telemetry_json(frame, *adapter_, options_.sample_rate));
                     set_status(adapter_->metadata.simulator + " recording - " +
                                std::to_string(recorder_.sample_count()) + " samples");
                 } else if (recorder_.recording()) {
@@ -3383,6 +3314,37 @@ bool run_self_test(const fs::path& directory, int sample_rate,
                     const fs::path& pairing_pi_seals_fixtures = {}) {
     pairing_crypto_self_test();
     manual_pairing_entry_self_test();
+    // The legacy JSON v3 transport is retired: selecting it on the command
+    // line or in a config file must fail with an actionable pairing hint, not
+    // silently fall back to anything unauthenticated.
+    {
+        bool cli_rejected = false;
+        try {
+            wchar_t arg0[] = L"rapid-telemetry-daemon.exe";
+            wchar_t arg1[] = L"--protocol";
+            wchar_t arg2[] = L"v3";
+            wchar_t* cli[] = {arg0, arg1, arg2, nullptr};
+            (void)parse_options(3, cli);
+        } catch (const std::exception& error) {
+            cli_rejected = std::string(error.what()).find("pair") != std::string::npos;
+        }
+        assetto_self_test::require(cli_rejected,
+            "retired v3 transport must fail with a pairing hint");
+        fs::create_directories(directory);
+        const auto retired_config = directory / "retired-v3.conf";
+        {
+            std::ofstream output(retired_config);
+            output << "protocol=v3\n";
+        }
+        bool config_rejected = false;
+        try { Options options; apply_config_file(options, retired_config, true); }
+        catch (const std::exception& error) {
+            config_rejected = std::string(error.what()).find("pair") != std::string::npos;
+        }
+        fs::remove(retired_config);
+        assetto_self_test::require(config_rejected,
+            "a config selecting the retired v3 transport must fail with a pairing hint");
+    }
     const auto [ac_frame, ac_metadata] = assetto_self_test::run();
     additional_adapter_self_test::ace();
     additional_adapter_self_test::iracing();

@@ -1,5 +1,6 @@
 #include "rapid/native.hpp"
 #include "rapid/setup_auth.hpp"
+#include "v4_stream.hpp"
 #include <argon2.h>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
@@ -121,6 +122,9 @@ int main(int argc, char **argv) {
     int port = 18000 + (getpid() % 10000), udp = port + 10000;
     std::string token = "native-network-test-only",
                 salt = "native-network-test-salt";
+    // The runtime only accepts authenticated v4, so the test sender and the
+    // rapid-pi process share this HMAC key (32 bytes of 0x11 as 64 hex).
+    const std::string companion_key_hex(64, '1');
     char hash[256];
     require(argon2id_hash_encoded(2, 8192, 1, token.data(), token.size(),
                                   salt.data(), salt.size(), 32, hash,
@@ -159,6 +163,7 @@ int main(int argc, char **argv) {
       setenv("RAPID_APP_HOST", "127.0.0.1", 1);
       setenv("RAPID_APP_PORT", std::to_string(port).c_str(), 1);
       setenv("RAPID_COMPANION_PORT", std::to_string(udp).c_str(), 1);
+      setenv("RAPID_COMPANION_KEY", companion_key_hex.c_str(), 1);
       setenv("RAPID_NETWORK_CONTROL_DIRECTORY",
              (root / "network-control").c_str(), 1);
       setenv("RAPID_ASSETS_DIRECTORY", argv[2], 1);
@@ -233,24 +238,29 @@ int main(int argc, char **argv) {
     asio::io_context io;
     asio::ip::udp::socket sender(io, asio::ip::udp::v4());
     asio::ip::udp::endpoint endpoint(asio::ip::make_address("127.0.0.1"), udp);
+    rapid::test::V4Stream stream(rapid::test::v4_run_id());
+    stream.rate = 10;
     sender.send_to(asio::buffer(std::string("[]")), endpoint);
+    sender.send_to(asio::buffer(stream.metadata(
+        0, "Network Track", "Network Car", "Network Driver", "Race", "900")),
+        endpoint);
     for (int i = 0; i < 12; ++i) {
-      Json m = {{"version", 3},
-                {"simulator", "AC"},
-                {"session_id", "network-test"},
-                {"sequence", i},
-                {"sample_rate_hz", 10},
-                {"monotonic_us", i * 100000},
-                {"telemetry",
-                 {{"rpm", 5000 + i},
-                  {"steering_angle", .1},
-                  {"g_x", 0},
-                  {"g_y", 1},
-                  {"g_z", 0},
-                  {"throttle", .5},
-                  {"lap_number", i < 10 ? 1 : 2},
-                  {"completed_lap_ms", i < 10 ? 0 : 1000}}}};
-      sender.send_to(asio::buffer(m.dump()), endpoint);
+      const auto mask = rapid::test::v4_mask(
+          {rapid::test::ch_throttle, rapid::test::ch_brake,
+           rapid::test::ch_gear, rapid::test::ch_rpm,
+           rapid::test::ch_steering, rapid::test::ch_g_x,
+           rapid::test::ch_g_y, rapid::test::ch_g_z,
+           rapid::test::ch_lap_number});
+      auto packet = stream.telemetry(
+          std::uint64_t(i + 1) * 100000, mask,
+          {{rapid::test::ch_rpm, float(5000 + i)},
+           {rapid::test::ch_steering, .1f},
+           {rapid::test::ch_g_x, 0.f},
+           {rapid::test::ch_g_y, 1.f},
+           {rapid::test::ch_g_z, 0.f},
+           {rapid::test::ch_throttle, .5f},
+           {rapid::test::ch_lap_number, float(i < 10 ? 1 : 2)}});
+      sender.send_to(asio::buffer(packet), endpoint);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     Json state;
@@ -287,21 +297,22 @@ int main(int argc, char **argv) {
     require(pushed["runtime"] == "cpp" && pushed["rpm"] == 5011 &&
                 pushed.contains("sender_lag_ms") && pushed.contains("process_ms"),
             "WebSocket state push sends the live /api/live snapshot shape");
-    Json fast_packet = {{"version", 3},
-                        {"simulator", "AC"},
-                        {"session_id", "network-test"},
-                        {"sequence", 12},
-                        {"sample_rate_hz", 10},
-                        {"monotonic_us", 12 * 100000},
-                        {"telemetry",
-                         {{"rpm", 9001},
-                          {"steering_angle", .1},
-                          {"g_x", 0},
-                          {"g_y", 1},
-                          {"g_z", 0},
-                          {"lap_number", 2},
-                          {"completed_lap_ms", 1000}}}};
-    sender.send_to(asio::buffer(fast_packet.dump()), endpoint);
+    const auto fast_mask = rapid::test::v4_mask(
+        {rapid::test::ch_throttle, rapid::test::ch_brake,
+         rapid::test::ch_gear, rapid::test::ch_rpm,
+         rapid::test::ch_steering, rapid::test::ch_g_x,
+         rapid::test::ch_g_y, rapid::test::ch_g_z,
+         rapid::test::ch_lap_number});
+    auto fast_packet = stream.telemetry(
+        14 * 100000, fast_mask,
+        {{rapid::test::ch_rpm, 9001.f},
+         {rapid::test::ch_steering, .1f},
+         {rapid::test::ch_g_x, 0.f},
+         {rapid::test::ch_g_y, 1.f},
+         {rapid::test::ch_g_z, 0.f},
+         {rapid::test::ch_throttle, .5f},
+         {rapid::test::ch_lap_number, 2.f}});
+    sender.send_to(asio::buffer(fast_packet), endpoint);
     bool pushed_latest = false;
     for (int i = 0; i < 60 && !pushed_latest; ++i) {
       state_buffer.consume(state_buffer.size());
