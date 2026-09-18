@@ -630,8 +630,16 @@ Json Runtime::snapshot() const {
       result["session_id"].is_string())
     recorder_status.erase("session_id");
   result.update(recorder_status);
-  if (auto replay = replay_->status(); !replay["replay_write_error"].is_null())
-    result["replay_write_error"] = replay["replay_write_error"];
+  {
+    // How long the receive path has been blocked waiting for replay state to
+    // become durable: the one storage wait it can still do.
+    auto replay = replay_->status();
+    if (!replay["replay_write_error"].is_null())
+      result["replay_write_error"] = replay["replay_write_error"];
+    for (const auto *key :
+         {"replay_waits", "replay_wait_ms", "replay_wait_ms_max"})
+      result[key] = replay[key];
+  }
   // sender_lag_ms is the excess (above the best-observed transit) one-way
   // delay for the current v4 stream; see record_lag's comment in receive()
   // for what the baseline method cannot see. "current" is the latest sample
