@@ -614,6 +614,111 @@ void secret_tests(const fs::path &base, const std::string &helper) {
             "password hash persisted outside shadow: " + path.string());
   require(!fs::exists(device.request_file()), "flow request removed");
 }
+
+// #28: browser-generated key enrollment. It reuses #23's authenticated,
+// CSRF-protected, rate-limited /api/v1/account endpoint (setup_account.cpp) and
+// its rapid-account helper. These tests pin that only an OpenSSH public-key
+// line is accepted and that no field can carry private-key material.
+void ssh_key_enrollment_tests(const fs::path &base) {
+  SetupStore store(base / "sshkey-state");
+  const auto queue = base / "sshkey-queue";
+  fs::create_directories(queue);
+  const auto request_file = queue / "account-request.json";
+  const auto result_file = queue / "account-result.json";
+  double time = 0;
+  SetupAuth auth(store, 8002, [&] { return time; }, {}, "127.0.0.1", {}, {}, {}, {}, {}, nullptr, true);
+  auth.set_account_files(request_file, result_file);
+  const std::string owner = "test-only-owner-password";
+  require(auth.enroll(owner), "enroll owner");
+  std::string session, csrf;
+  const auto sign_in = [&] {
+    const auto login = auth.handle(request("/api/v1/auth/login", "POST", {{"password", owner}}));
+    require(login.status == 200, "owner signs in");
+    session = cookie(login);
+    csrf = Json::parse(login.body)["csrf_token"].get<std::string>();
+  };
+  sign_in();
+  const auto authed = [&](const Json &body) {
+    auto value = request("/api/v1/account", "POST", body);
+    value.headers["cookie"] = session;
+    value.headers["x-csrf-token"] = csrf;
+    return value;
+  };
+  const auto post = [&](const Json &body) { return auth.handle(authed(body)); };
+  // Every rejected attempt consumes a rate-limit slot, so give each check its
+  // own window; otherwise a later check would be hidden behind a 429.
+  const auto next_window = [&] { time += 601; sign_in(); };
+
+  // Authentication and CSRF, the same rules as the password path.
+  require(auth.handle(request("/api/v1/account", "POST", {{"ssh_public_key", ed25519_key(10)}})).status == 401 &&
+              !fs::exists(request_file),
+          "an unauthenticated key is refused");
+  auto no_csrf = authed({{"ssh_public_key", ed25519_key(10)}});
+  no_csrf.headers.erase("x-csrf-token");
+  require(auth.handle(no_csrf).status == 403, "a key needs the CSRF token");
+  auto wrong_csrf = authed({{"ssh_public_key", ed25519_key(10)}});
+  wrong_csrf.headers["x-csrf-token"] = std::string(64, '0');
+  require(auth.handle(wrong_csrf).status == 403, "a key with a wrong CSRF token is refused");
+  require(!fs::exists(request_file), "no rejected key is queued");
+
+  // The endpoint schema has no field that could carry private-key material:
+  // anything outside {password, ssh_public_key, replace_existing_password} is
+  // rejected, so the private half cannot even be expressed.
+  for (const char *field : {"private_key", "ssh_private_key", "private_key_pem", "seed",
+                            "passphrase", "public_key", "authorized_keys"}) {
+    next_window();
+    Json body;
+    body[field] = "-----BEGIN OPENSSH PRIVATE KEY-----";
+    const auto response = post(body);
+    require(response.status == 400 && !fs::exists(request_file),
+            std::string("no request field may carry key material: ") + field);
+  }
+
+  // Malformed, wrong-type and oversized keys are refused without queueing.
+  next_window();
+  require(post({{"ssh_public_key", "not a key"}}).status == 400, "a malformed key is refused");
+  next_window();
+  require(post({{"ssh_public_key", "ssh-dss " + base64(field("ssh-dss") + field("x"))}}).status == 400,
+          "a DSA key is refused");
+  next_window();
+  require(post({{"ssh_public_key",
+                 "ssh-rsa " + base64(field("ssh-ed25519") + field(std::string(32, 'a')))}})
+              .status == 400,
+          "a key whose blob does not match its type is refused");
+  next_window();
+  require(post({{"ssh_public_key", std::string(3200, 'a')}}).status == 400,
+          "an oversized key line is refused");
+  next_window();
+  const auto private_paste = post({{"ssh_public_key", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n"
+                                                    "-----END OPENSSH PRIVATE KEY-----"}});
+  require(private_paste.status == 400, "a private key cannot be pasted into the public-key field");
+  next_window();
+  require(post({{"ssh_public_key", std::string(4100, 'a')}}).status == 413,
+          "an oversized account body is refused");
+  require(!fs::exists(request_file), "no rejected key is queued");
+
+  // A browser-generated Ed25519 key (the #28 path) is accepted and queued with
+  // exactly the normalized public line and nothing else.
+  const auto generated = ed25519_key('\x2a', "rapid@laptop");
+  const auto accepted = post({{"ssh_public_key", generated}});
+  require(accepted.status == 202 && fs::is_regular_file(request_file) && mode_of(request_file) == 0600,
+          "a generated Ed25519 key is queued in a 0600 request");
+  const auto contents = read_file(request_file);
+  require(contents.find("PRIVATE KEY") == std::string::npos, "the request has no private material");
+  const auto queued = Json::parse(contents);
+  require(queued.size() == 2 && queued["authorized_key"] == generated && queued["request_id"].is_string(),
+          "the request holds only the id and the normalized public key");
+  require(post({{"ssh_public_key", ed25519_key(11)}}).status == 409,
+          "a second key waits for the helper");
+  fs::remove(request_file);
+
+  // A generated ECDSA P-256 key (the documented fallback) is accepted too.
+  const auto ecdsa = ecdsa_key();
+  require(post({{"ssh_public_key", ecdsa}}).status == 202 &&
+              Json::parse(read_file(request_file))["authorized_key"] == ecdsa,
+          "a generated ECDSA P-256 key is accepted");
+  fs::remove(request_file);
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -626,6 +731,8 @@ int main(int argc, char **argv) {
     std::cout << "ok: setup API auth, TLS, CSRF, validation and rate limit\n";
     network_ssid_tests(root.path);
     std::cout << "ok: setup status publishes the setup AP name in use\n";
+    ssh_key_enrollment_tests(root.path);
+    std::cout << "ok: browser-generated SSH key enrollment reuses the account endpoint\n";
     helper_tests(root.path / "helper", fs::absolute(argv[1]).string());
     std::cout << "ok: rapid-account helper against a fake root\n";
     secret_tests(root.path / "secret", fs::absolute(argv[1]).string());
