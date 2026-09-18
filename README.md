@@ -65,3 +65,7 @@ git clone --recurse-submodules https://github.com/2thgun/rapid.git
 
 For an existing checkout, run `git submodule update --init --recursive`.
 See [HANDOFF.md](HANDOFF.md) to resume development.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
