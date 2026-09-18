@@ -4,7 +4,6 @@ port = 8000
 database_path = "/var/lib/rapid/rapid.db"
 telemetry_directory = "/var/lib/rapid/telemetry"
 assets_directory = "/usr/share/rapid"
-require_v4 = true
 
 [setup]
 state_directory = "/var/lib/rapid-setup"

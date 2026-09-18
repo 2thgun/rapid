@@ -192,7 +192,6 @@ class Runtime {
   // recording open (state "driving" or "paused"), used by expire() to
   // distinguish a sim pause/menu/alt-tab gap from a lost connection.
   double last_recording_heartbeat_ = 0;
-  bool recording_legacy_ = false;
   std::int64_t sequence_ = -1;
   int timing_lap_ = -1, best_lap_ = 0;
   std::vector<int> splits_;

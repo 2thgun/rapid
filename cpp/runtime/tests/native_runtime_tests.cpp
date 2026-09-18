@@ -1,4 +1,5 @@
 #include "rapid/native.hpp"
+#include "v4_stream.hpp"
 #include <bit>
 #include <fstream>
 #include <iostream>
@@ -7,6 +8,8 @@
 #include <unistd.h>
 
 using namespace rapid::native;
+using rapid::test::V4Stream;
+using rapid::test::v4_run_id;
 void require(bool value, const char *message) {
   if (!value)
     throw std::runtime_error(message);
@@ -18,8 +21,11 @@ std::uint32_t u32(const std::string &data, std::size_t offset) {
          << (i * 8);
   return n;
 }
+// Recorder-level payload. The recorder consumes this internal decoded shape
+// directly (it is not a wire packet), so the crash-recovery and publication
+// tests keep using it while every Runtime::receive test now speaks v4.
 Json sample(int sequence = 0, int lap = 1) {
-  return {{"version", 3},
+  return {{"version", 4},
           {"type", "telemetry"},
           {"simulator", "ACC"},
           {"session_id", "native-test"},
@@ -44,6 +50,42 @@ Json sample(int sequence = 0, int lap = 1) {
             {"current_lap_ms", sequence * 100},
             {"completed_lap_ms", lap > 1 ? 1000 : 0}}}};
 }
+// A v4 stream plus the one telemetry shape the runtime tests share. Time is
+// advanced on every call so the decoder's monotonic timestamp check passes.
+struct Wire {
+  V4Stream stream;
+  std::uint64_t time_us = 0;
+  explicit Wire(std::string run) : stream(std::move(run)) {}
+  std::uint64_t tick() { return time_us += 20000; }
+  std::string metadata() {
+    return stream.metadata(0, "Spa", "GT3", "Test driver", "Race", "900");
+  }
+  std::string telemetry(int lap, double current_lap_ms, float throttle = .5f,
+                        int completed_lap_ms = 0) {
+    const auto mask = rapid::test::v4_mask(
+        {rapid::test::ch_throttle, rapid::test::ch_brake,
+         rapid::test::ch_gear, rapid::test::ch_rpm,
+         rapid::test::ch_steering, rapid::test::ch_speed,
+         rapid::test::ch_g_x, rapid::test::ch_g_y, rapid::test::ch_g_z,
+         rapid::test::ch_lap_number, rapid::test::ch_current_lap_ms,
+         rapid::test::ch_lap_position});
+    return stream.telemetry(
+        tick(), mask,
+        {{rapid::test::ch_rpm, 6000.f},
+         {rapid::test::ch_steering, -.2f},
+         {rapid::test::ch_g_x, .4f},
+         {rapid::test::ch_g_y, 1.f},
+         {rapid::test::ch_g_z, -.1f},
+         {rapid::test::ch_throttle, throttle},
+         {rapid::test::ch_brake, .1f},
+         {rapid::test::ch_speed, 160.f},
+         {rapid::test::ch_gear, 3.f},
+         {rapid::test::ch_lap_number, float(lap)},
+         {rapid::test::ch_current_lap_ms, float(current_lap_ms)},
+         {rapid::test::ch_lap_position, 0.f}},
+        completed_lap_ms);
+  }
+};
 int main(int argc, char **argv) {
   try {
     if (argc != 2)
@@ -56,6 +98,9 @@ int main(int argc, char **argv) {
     c.database = root / "state.db";
     c.telemetry = root / "telemetry";
     c.queue = root / "queue.db";
+    // Authenticated v4 is the only transport, so the runtime under test and
+    // the synthetic stream must share the HMAC key.
+    c.companion_key = std::string(32, '\x11');
     Runtime runtime(c);
     {
       Config freshness = c;
@@ -63,53 +108,41 @@ int main(int argc, char **argv) {
       freshness.telemetry = root / "freshness-telemetry";
       Runtime live(freshness);
       require(!live.snapshot()["telemetry_fresh"].get<bool>(), "no sample is not fresh");
-      require(live.receive(sample().dump(), "127.0.0.1"), "freshness sample");
+      Wire wire(v4_run_id());
+      require(live.receive(wire.metadata(), "127.0.0.1"), "freshness metadata");
+      auto first = wire.telemetry(1, 100);
+      require(live.receive(first, "127.0.0.1"), "freshness sample");
       require(live.snapshot()["telemetry_fresh"] == true, "new sample is fresh");
       require(live.snapshot()["process_ms"]["p50"].is_number() &&
                   live.snapshot()["process_ms"]["p95"].is_number(),
               "processing latency percentiles exposed");
       std::this_thread::sleep_for(std::chrono::milliseconds(1600));
-      Json heartbeat = {{"version", 3}, {"type", "status"}, {"state", "driving"}, {"simulator", "ACC"}};
-      require(live.receive(heartbeat.dump(), "127.0.0.1"), "driving heartbeat");
+      require(live.receive(wire.stream.status(2, wire.tick()), "127.0.0.1"),
+              "driving heartbeat");
       require(live.snapshot()["companion_connected"] == true &&
                   live.snapshot()["telemetry_fresh"] == false &&
                   number(live.snapshot(), "telemetry_age_ms") >= 1500,
               "heartbeat cannot freshen retained telemetry");
-      require(live.receive(sample(1).dump(), "127.0.0.1"), "samples resume");
+      auto resumed = wire.telemetry(1, 200);
+      require(live.receive(resumed, "127.0.0.1"), "samples resume");
       require(live.snapshot()["telemetry_fresh"] == true, "resumed sample is fresh");
       std::this_thread::sleep_for(std::chrono::milliseconds(1600));
-      require(!live.receive(sample(1).dump(), "127.0.0.1"), "replayed sample rejected");
+      require(!live.receive(resumed, "127.0.0.1"), "replayed sample rejected");
       live.expire();
       require(live.snapshot()["companion_connected"] == false &&
                   live.snapshot()["recording"] == false,
               "replayed sample cannot extend connection lifetime");
-      require(live.receive(sample(2).dump(), "127.0.0.1"), "reconnect after expiry");
-      heartbeat["state"] = "ready";
-      require(live.receive(heartbeat.dump(), "127.0.0.1"), "ready heartbeat");
+      require(live.receive(wire.telemetry(1, 300), "127.0.0.1"),
+              "reconnect after expiry");
+      // Waiting/ready heartbeats travel on their own random control stream
+      // (v4 contract), so a ready status is a fresh control stream rather than
+      // a status packet on the still-active driving run.
+      V4Stream control(v4_run_id());
+      require(live.receive(control.status(1, 20000), "127.0.0.1"),
+              "ready heartbeat");
       require(live.snapshot()["telemetry_fresh"] == false &&
-                  live.snapshot()["telemetry_age_ms"].is_null(), "ready clears sample freshness");
-    }
-    {
-      Config dropout = c;
-      dropout.database = root / "dropout.db";
-      dropout.telemetry = root / "dropout-telemetry";
-      dropout.queue = root / "dropout-queue.db";
-      Runtime live(dropout);
-      auto first = sample();
-      first.erase("session_id");
-      first.erase("sequence");
-      first.erase("monotonic_us");
-      require(live.receive(first.dump(), "127.0.0.1"), "legacy dropout sample");
-      std::this_thread::sleep_for(std::chrono::milliseconds(1600));
-      live.expire();
-      require(live.snapshot()["companion_connected"] == false &&
-                  live.snapshot()["recording"] == true,
-              "brief legacy disconnect leaves the recorder available for resumption");
-      require(live.receive(first.dump(), "127.0.0.1"), "legacy telemetry resumes");
-      require(live.snapshot()["recorded_samples"] == 2 &&
-                  live.snapshot()["last_bundle_path"].is_null(),
-              "resumed legacy telemetry continues the existing recording");
-      live.finish();
+                  live.snapshot()["telemetry_age_ms"].is_null(),
+              "ready clears sample freshness");
     }
     {
       // #15: a "paused" heartbeat (sim pause/menu overlay/alt-tab) keeps the
@@ -124,12 +157,13 @@ int main(int argc, char **argv) {
       pause_config.queue = root / "pause-queue.db";
       pause_config.not_live_timeout_seconds = 2.5;
       Runtime live(pause_config);
-      require(live.receive(sample().dump(), "127.0.0.1"), "pause-test telemetry sample");
+      Wire wire(v4_run_id());
+      require(live.receive(wire.metadata(), "127.0.0.1"), "pause-test metadata");
+      require(live.receive(wire.telemetry(1, 100), "127.0.0.1"),
+              "pause-test telemetry sample");
       require(live.snapshot()["recording"] == true, "recording starts on telemetry");
-      Json paused_heartbeat = {
-          {"version", 3}, {"type", "status"}, {"state", "paused"}, {"simulator", "ACC"}};
       for (int second = 0; second < 2; ++second) {
-        require(live.receive(paused_heartbeat.dump(), "127.0.0.1"),
+        require(live.receive(wire.stream.status(4, wire.tick()), "127.0.0.1"),
                 "paused heartbeat accepted");
         require(live.snapshot()["recording"] == true &&
                     live.snapshot()["session_active"] == true &&
@@ -141,7 +175,8 @@ int main(int argc, char **argv) {
         require(live.snapshot()["recording"] == true,
                 "still within the not-live timeout while heartbeats keep arriving");
       }
-      require(live.receive(paused_heartbeat.dump(), "127.0.0.1"), "final paused heartbeat");
+      require(live.receive(wire.stream.status(4, wire.tick()), "127.0.0.1"),
+              "final paused heartbeat");
       std::this_thread::sleep_for(std::chrono::milliseconds(1000));
       live.expire();
       require(live.snapshot()["recording"] == false,
@@ -157,34 +192,39 @@ int main(int argc, char **argv) {
       end_config.telemetry = root / "explicit-end-telemetry";
       end_config.queue = root / "explicit-end-queue.db";
       Runtime live(end_config);
-      require(live.receive(sample().dump(), "127.0.0.1"), "explicit-end telemetry sample");
-      Json ended_heartbeat = {
-          {"version", 3}, {"type", "status"}, {"state", "ready"}, {"simulator", "ACC"}};
-      require(live.receive(ended_heartbeat.dump(), "127.0.0.1"), "non-open status accepted");
+      Wire wire(v4_run_id());
+      require(live.receive(wire.metadata(), "127.0.0.1"), "explicit-end metadata");
+      require(live.receive(wire.telemetry(1, 100), "127.0.0.1"),
+              "explicit-end telemetry sample");
+      V4Stream control(v4_run_id());
+      require(live.receive(control.status(1, 20000), "127.0.0.1"),
+              "non-open status accepted");
       require(live.snapshot()["recording"] == false,
               "an explicit non-open status still finalizes immediately, unlike paused (#15)");
     }
+    // A datagram that is not authenticated v4 is rejected and counted, exactly
+    // like malformed v4 -- the retired unauthenticated path is gone.
     require(!runtime.receive("[]", "127.0.0.1"), "non-object rejected");
-    auto bad = sample();
-    bad["telemetry"]["rpm"] = true;
-    require(!runtime.receive(bad.dump(), "127.0.0.1"), "boolean RPM rejected");
-    require(runtime.receive(sample().dump(), "127.0.0.1"),
+    require(runtime.snapshot()["packets_invalid"] == 1,
+            "non-v4 datagram counted invalid");
+    Wire wire(v4_run_id());
+    wire.stream.rate = 10;
+    require(runtime.receive(wire.metadata(), "127.0.0.1"), "main metadata");
+    auto first = wire.telemetry(1, 0);
+    require(runtime.receive(first, "127.0.0.1"),
             "valid telemetry after malformed");
-    auto invalid_session = sample(1);
-    invalid_session["session_id"] = "invalid-session";
-    invalid_session["sequence"] = "invalid";
-    require(!runtime.receive(invalid_session.dump(), "127.0.0.1"),
-            "invalid new-session sequence rejected");
-    require(runtime.snapshot()["session_id"] == "native-test" &&
-                runtime.snapshot()["recorded_samples"] == 1 &&
-                runtime.snapshot()["last_bundle_path"].is_null(),
-            "rejected new session cannot finalize current recording");
-    require(!runtime.receive(sample().dump(), "127.0.0.1"), "replay rejected");
-    require(!runtime.receive(sample(1).dump(), "192.168.1.5"),
+    auto session = runtime.snapshot()["session_id"];
+    require(session.is_string() && session.get<std::string>().size() == 32,
+            "v4 wire run id exposed as the session id");
+    require(!runtime.receive(first, "127.0.0.1"), "replay rejected");
+    // A valid v4 packet from an unexpected host is dropped before it can
+    // change state.
+    require(!runtime.receive(wire.telemetry(1, 100), "192.168.1.5"),
             "sender pinning");
     for (int i = 1; i < 10; ++i)
-      require(runtime.receive(sample(i).dump(), "127.0.0.1"), "session sample");
-    require(runtime.receive(sample(10, 2).dump(), "127.0.0.1"),
+      require(runtime.receive(wire.telemetry(1, i * 100), "127.0.0.1"),
+              "session sample");
+    require(runtime.receive(wire.telemetry(2, 1000, .5f, 1000), "127.0.0.1"),
             "lap transition");
     require(runtime.snapshot()["recording"] == true, "recording state wired");
     require(runtime.snapshot()["recorded_samples"] == 11, "sample count wired");
@@ -197,14 +237,18 @@ int main(int argc, char **argv) {
       burst_config.telemetry = root / "burst-telemetry";
       burst_config.queue = root / "burst-queue.db";
       Runtime burst(burst_config);
+      Wire burst_wire(v4_run_id());
+      burst_wire.stream.rate = 10;
+      require(burst.receive(burst_wire.metadata(), "127.0.0.1"), "burst metadata");
       for (int i = 0; i < 301; ++i)
-        require(burst.receive(sample(i).dump(), "127.0.0.1"), "burst sample");
+        require(burst.receive(burst_wire.telemetry(1, i * 100), "127.0.0.1"),
+                "burst sample");
       std::uint64_t burst_cursor = 0;
       auto batch = burst.events(burst_cursor, 120);
       require(batch["events"].size() == 250 && batch["dropped"] == 51,
               "initial history capped with exact drop count");
-      require(batch["events"].front()["sequence"] == 51 &&
-                  batch["events"].back()["sequence"] == 300 && burst_cursor == 301,
+      require(batch["events"].front()["sequence"] == 53 &&
+                  batch["events"].back()["sequence"] == 302 && burst_cursor == 301,
               "newest events returned in order with final cursor");
       auto empty = burst.events(burst_cursor);
       require(empty["events"].empty() && empty["dropped"] == 0,
@@ -213,10 +257,11 @@ int main(int argc, char **argv) {
       batch = burst.events(burst_cursor);
       require(batch["events"].size() == 250 && batch["dropped"] == 50,
               "lagging cursor accounts only unseen dropped events");
-      require(burst.receive(sample(301).dump(), "127.0.0.1"), "incremental sample");
+      require(burst.receive(burst_wire.telemetry(1, 30100), "127.0.0.1"),
+              "incremental sample");
       batch = burst.events(burst_cursor);
       require(batch["events"].size() == 1 && batch["dropped"] == 0 &&
-                  batch["events"].front()["sequence"] == 301,
+                  batch["events"].front()["sequence"] == 303,
               "incremental delivery after catch-up");
       burst.finish();
     }
@@ -228,43 +273,6 @@ int main(int argc, char **argv) {
     require(manifest["laps"].size() == 1, "completed lap exported");
     require(manifest["metadata"]["upload_after_session"] == false,
             "manual upload choice persisted");
-    auto legacy = sample(0);
-    legacy.erase("session_id");
-    legacy.erase("sequence");
-    legacy.erase("monotonic_us");
-    legacy["telemetry"]["abs"] = 0.25;
-    legacy["telemetry"]["companion_connected"] = false;
-    require(runtime.receive(legacy.dump(), "127.0.0.1"),
-            "current v3 companion without envelope identity");
-    auto legacy_state = runtime.snapshot();
-    auto legacy_id = legacy_state["session_id"];
-    require(legacy_id.is_string() && !legacy_id.get<std::string>().empty(),
-            "generated session identity");
-    require(legacy_state["last_monotonic_us"].is_number_unsigned(),
-            "generated chart timestamp");
-    require(legacy_state["companion_connected"] == true &&
-                legacy_state["abs_activity"] == 0.25,
-            "status protected and ABS mapped");
-    require(runtime.receive(legacy.dump(), "127.0.0.1"),
-            "subsequent legacy sample");
-    require(runtime.snapshot()["session_id"] == legacy_id,
-            "legacy session identity stable");
-    auto invalid_optional = legacy;
-    invalid_optional["telemetry"]["fuel"] = "invalid";
-    require(!runtime.receive(invalid_optional.dump(), "127.0.0.1"),
-            "invalid optional channel type");
-    require(runtime.receive(Json{{"version", 3},
-                                 {"type", "status"},
-                                 {"state", "waiting"},
-                                 {"simulator", nullptr}}
-                                .dump(),
-                            "127.0.0.1"),
-            "legacy session ended");
-    require(runtime.receive(legacy.dump(), "127.0.0.1"),
-            "legacy driving resumed");
-    require(runtime.snapshot()["session_id"] != legacy_id,
-            "legacy session identity resets after waiting");
-    runtime.finish();
     auto data = read_file(path / "full-session.ld");
     auto meta = u32(data, 8), start = u32(data, 12);
     require(meta == 2916, "LD event pointer");
@@ -335,7 +343,7 @@ int main(int argc, char **argv) {
     recorder.wait_idle();
     require(recorder.status()["last_bundle_path"].is_string(),
             "failed publication succeeds on retry");
-    std::cout << "Native runtime: validation, source pinning, replay, state, "
+    std::cout << "Native runtime: v4 validation, source pinning, replay, state, "
                  "broker, LD, lap, hashes, crash recovery and publication "
                  "retry passed\nEvidence: "
               << root << "\n";
