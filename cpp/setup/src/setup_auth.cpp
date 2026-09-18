@@ -1,6 +1,10 @@
 #include "rapid/setup_auth.hpp"
 #include <argon2.h>
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
+#include <array>
+#include <iomanip>
+#include <sstream>
 
 namespace rapid::native {
 namespace {
