@@ -71,9 +71,12 @@ void provision_certificate(const fs::path &key_path, const fs::path &certificate
   };
   const auto key_text = read_bio(key_bio), certificate_text = read_bio(certificate_bio);
   BIO_free(key_bio); BIO_free(certificate_bio);
-  atomic_file(key_path, key_text); atomic_file(certificate_path, certificate_text);
-  if (::chmod(key_path.c_str(), 0600) != 0 || ::chmod(certificate_path.c_str(), 0644) != 0)
-    throw std::runtime_error("cannot secure TLS certificate files");
+  // #31: the private key is key material, created 0600 from the first byte
+  // rather than chmod'ed after creation; the certificate is public.
+  atomic_file(key_path, key_text, fs::perms::owner_read | fs::perms::owner_write);
+  atomic_file(certificate_path, certificate_text,
+              fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read |
+                  fs::perms::others_read);
 }
 
 std::string certificate_fingerprint(const fs::path &path) {
@@ -198,9 +201,11 @@ int main(int argc, char **argv) {
                              {"activation_token", private_hex_secret(token_file, 64, "activation token")}};
     }
     if (!status_file.empty()) {
-      atomic_file(status_file, status.dump() + "\n");
-      if (::chmod(status_file.c_str(), 0640) != 0)
-        throw std::runtime_error("cannot secure first-boot status file");
+      // #31: can carry the bootstrap activation token, so it is created
+      // group-rapid readable (for the privileged provisioner) but never
+      // group/other writable, from the first byte.
+      atomic_file(status_file, status.dump() + "\n",
+                  fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read);
     }
     std::cout << provisioning_status(store.snapshot(), owner_configured).dump() << '\n';
     log("INFO firstboot: provisioning state is " + status.at("state").get<std::string>() +

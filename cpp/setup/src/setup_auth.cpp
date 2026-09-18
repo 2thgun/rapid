@@ -179,11 +179,12 @@ Response SetupAuth::handle(const Request &request) {
           status.erase("bootstrap");
           status["owner_configured"] = true;
           status["state"] = "settings_application_required";
-          atomic_file(firstboot_status_file_, status.dump() + "\n");
-          fs::permissions(firstboot_status_file_,
-                          fs::perms::owner_read | fs::perms::owner_write |
-                              fs::perms::group_read,
-                          fs::perm_options::replace);
+          // #31: this file can still hold bootstrap/activation material, and
+          // is read back by the privileged provisioner; keep it group-rapid
+          // readable (never group/other writable) from creation.
+          atomic_file(firstboot_status_file_, status.dump() + "\n",
+                      fs::perms::owner_read | fs::perms::owner_write |
+                          fs::perms::group_read);
         }
       } catch (const std::exception &error) {
         log(std::string("WARN setup: owner configured but cannot clear bootstrap status: ") +
@@ -278,7 +279,10 @@ Response SetupAuth::handle(const Request &request) {
       return reply(503, {{"detail", "panel calibration is unavailable"}});
     // The panel consumes this key-free request and shows the tap targets.
     try {
-      atomic_file(calibration_request_file_, Json{{"requested", true}}.dump() + "\n");
+      // #31: the panel (same service user) reads this to start capture, so a
+      // different local user must not be able to plant or alter it.
+      atomic_file(calibration_request_file_, Json{{"requested", true}}.dump() + "\n",
+                  fs::perms::owner_read | fs::perms::owner_write);
     } catch (const std::exception &) {
       return reply(503, {{"detail", "panel calibration request failed"}});
     }
@@ -319,7 +323,9 @@ Response SetupAuth::handle(const Request &request) {
           if (status.is_object()) {
             status["setup_complete"] = true;
             status["state"] = "complete";
-            atomic_file(firstboot_status_file_, status.dump() + "\n");
+            atomic_file(firstboot_status_file_, status.dump() + "\n",
+                        fs::perms::owner_read | fs::perms::owner_write |
+                            fs::perms::group_read);
           }
         } catch (const std::exception &error) {
           log(std::string("WARN setup: cannot record setup completion status: ") + error.what());
@@ -348,9 +354,12 @@ Response SetupAuth::handle(const Request &request) {
     if (apply_request_file_.empty())
       return reply(503, {{"detail", "settings application is unavailable"}});
     try {
+      // #31: the root rapid-apply helper reads this back to act; create it
+      // owner-only so no other local user can influence that action.
       atomic_file(apply_request_file_,
                   Json{{"revision", state.at("revision")},
-                       {"settings", state.at("settings")}}.dump());
+                       {"settings", state.at("settings")}}.dump(),
+                  fs::perms::owner_read | fs::perms::owner_write);
     } catch (const std::exception &) {
       return reply(503, {{"detail", "settings application queue is unavailable"}});
     }
@@ -375,7 +384,9 @@ Response SetupAuth::handle(const Request &request) {
     if (display_confirm_file_.empty())
       return reply(503, {{"detail", "orientation confirmation is unavailable"}});
     try {
-      atomic_file(display_confirm_file_, Json{{"revision", state.at("revision")}}.dump());
+      // #31: root rapid-apply polls this to keep a previewed orientation.
+      atomic_file(display_confirm_file_, Json{{"revision", state.at("revision")}}.dump(),
+                  fs::perms::owner_read | fs::perms::owner_write);
     } catch (const std::exception &) {
       return reply(503, {{"detail", "orientation confirmation is unavailable"}});
     }
@@ -445,8 +456,10 @@ Response SetupAuth::handle(const Request &request) {
     const auto state = store_.snapshot();
     if (!apply_request_file_.empty()) {
       try {
+        // #31: root rapid-apply reads this back to apply settings.
         atomic_file(apply_request_file_,
-                    Json{{"revision", state.at("revision")}, {"settings", state.at("settings")}}.dump());
+                    Json{{"revision", state.at("revision")}, {"settings", state.at("settings")}}.dump(),
+                    fs::perms::owner_read | fs::perms::owner_write);
       } catch (const std::exception &) {
         return reply(503, {{"detail", "settings saved but application queue is unavailable"},
                            {"revision", state.at("revision")}, {"settings", state.at("settings")},
