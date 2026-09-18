@@ -17,6 +17,12 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 option(RAPID_BUILD_LOG_STATUS "Build the Linux journal/HTTP log monitor" OFF)
 option(RAPID_BUILD_QT_DISPLAY "Build the Qt touchscreen display" OFF)
 option(RAPID_BUILD_PI_PACKAGE "Assemble the experimental Pi application package" OFF)
+# #10: absolute path to the Windows companion artifact (portable .exe or .msi)
+# to bundle into the Pi package and serve from the setup page. Build it from
+# the same revision as the package so the download cannot be a stale protocol.
+# Empty means "serve no companion" (the setup page then offers no download),
+# never a guessed or mismatched binary.
+set(RAPID_COMPANION_ARTIFACT "" CACHE FILEPATH "Windows companion artifact bundled into the Pi package")
 
 # Dependency detection stays here, in one place, so that two components cannot
 # each discover the same dependency differently. Components declare what they

@@ -1,6 +1,10 @@
 #include "rapid/setup_auth.hpp"
 #include <argon2.h>
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
+#include <array>
+#include <iomanip>
+#include <sstream>
 
 namespace rapid::native {
 namespace {
@@ -52,11 +56,60 @@ std::string network_ssid(const fs::path &path) {
     return {};
   }
 }
+// #10: the SHA-256 the setup page shows for the bundled companion, so the
+// owner (or the release notes) can tell whether the served artifact matches
+// the companion build the Pi's protocol expects. A mismatch is visible, not
+// silent.
+std::string sha256_hex(const std::string &bytes) {
+  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+  unsigned int length = 0;
+  if (EVP_Digest(bytes.data(), bytes.size(), digest.data(), &length, EVP_sha256(), nullptr) != 1)
+    throw std::runtime_error("cannot hash companion artifact");
+  std::ostringstream out;
+  for (unsigned int i = 0; i < length; ++i)
+    out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(digest[i]);
+  return out.str();
+}
 } // namespace
 
 void SetupAuth::set_network_ssid_file(fs::path ssid_file) {
   std::lock_guard lock(mutex_);
   network_ssid_file_ = std::move(ssid_file);
+}
+
+void SetupAuth::set_companion_artifact(fs::path artifact) {
+  std::lock_guard lock(mutex_);
+  companion_artifact_.clear();
+  companion_sha256_.clear();
+  companion_filename_.clear();
+  if (artifact.empty()) return;
+  try {
+    std::error_code error;
+    // The packaged path is a directory (share/rapid/companion) so a release
+    // can swap a portable .exe for an .msi without touching the unit. Exactly
+    // one regular file is required: ambiguity serves nothing rather than a
+    // guess, which is the same fail-closed rule as a missing file.
+    fs::path file = artifact;
+    if (fs::is_directory(artifact, error)) {
+      file.clear();
+      for (fs::directory_iterator entry(artifact, error), end; !error && entry != end; entry.increment(error)) {
+        if (!entry->is_regular_file(error)) continue;
+        const auto name = entry->path().filename().string();
+        if (name.empty() || name.front() == '.') continue;
+        if (!file.empty()) return;
+        file = entry->path();
+      }
+      if (error || file.empty()) return;
+    }
+    if (!fs::is_regular_file(file, error)) return;
+    companion_artifact_ = std::move(file);
+    companion_filename_ = companion_artifact_.filename().string();
+    companion_sha256_ = sha256_hex(read_file(companion_artifact_));
+  } catch (const std::exception &) {
+    companion_artifact_.clear();
+    companion_sha256_.clear();
+    companion_filename_.clear();
+  }
 }
 
 SetupAuth::SetupAuth(SetupStore &store, int port, std::function<double()> clock,
@@ -144,11 +197,35 @@ Response SetupAuth::handle(const Request &request) {
     status["capabilities"]["browser_owner_enrollment"] =
         !enrollment_token_.empty() && store_.owner_hash().empty();
     status["capabilities"]["pairing"] = pairing_ != nullptr;
+    status["capabilities"]["companion_download"] = !companion_artifact_.empty();
+    if (!companion_artifact_.empty() && !companion_sha256_.empty())
+      status["companion"] = {{"filename", companion_filename_},
+                             {"url", "/companion/download"},
+                             {"sha256", companion_sha256_}};
     if (secure_transport_ && !certificate_fingerprint_.empty())
       status["certificate_fingerprint"] = certificate_fingerprint_;
     if (const auto ssid = network_ssid(network_ssid_file_); !ssid.empty())
       status["network_ssid"] = ssid;
     return reply(200, status);
+  }
+  // #10: a plain, unauthenticated static download of the bundled Windows
+  // companion. Deliberately placed above the owner-session gate below, like
+  // /api/v1/setup: the artifact is public (no secret, no key material) and the
+  // whole point is that a fresh owner can fetch it before pairing. The paired
+  // key is only ever negotiated on-device, after the owner approves the PC.
+  if (path == "/companion/download" && request.method == "GET") {
+    if (companion_artifact_.empty() || companion_filename_.empty())
+      return reply(404, {{"detail", "companion download is unavailable"}});
+    try {
+      const auto name = companion_filename_;
+      const bool msi = name.size() > 4 && name.compare(name.size() - 4, 4, ".msi") == 0;
+      return {200, read_file(companion_artifact_),
+              msi ? "application/x-msi" : "application/vnd.microsoft.portable-executable",
+              {{"Content-Disposition", "attachment; filename=\"" + name + "\""},
+               {"Cache-Control", "no-store"}, {"X-Content-Type-Options", "nosniff"}}};
+    } catch (const std::exception &) {
+      return reply(503, {{"detail", "companion download is unavailable"}});
+    }
   }
   if (path == "/api/v1/auth/enroll" && request.method == "POST") {
     if (!store_.owner_hash().empty())

@@ -27,6 +27,15 @@ password). If this device's own physical display shows a different
 Before entering an activation token, match the fingerprint above against the
 one shown on this device's own physical display.</p>
 </section>
+<section id="companion-download" hidden>
+<h2>Windows companion</h2>
+<p>Download the raPId companion for the PC that will send telemetry. It carries
+no secret: the pairing key is negotiated on this device when you approve the
+PC, and the downloaded file is the same one this Pi's protocol was built for.</p>
+<p id="companion-state">Checking for a companion download…</p>
+<p id="companion-file" hidden><a id="companion-download-link" download>Download <span id="companion-filename"></span></a></p>
+<p id="companion-sha" hidden>SHA-256: <code id="companion-sha256"></code></p>
+</section>
 <section id="enrollment" hidden>
 <h2>Create the owner account</h2>
 <form id="enrollment-form">
@@ -104,6 +113,7 @@ let pairing_poll = null;
 // device-password forms, so a spoofed "rapid" access point still shows a
 // fingerprint the owner can check against the Pi's own display.
 let certificateFingerprint = '';
+let companionInfo = null;
 const message = document.getElementById('message');
 function formatFingerprint(fp) {
   return (fp.match(/.{1,16}/g) || [fp]).join(' ');
@@ -169,6 +179,29 @@ async function showProfile() {
   await showPairing();
   await showAccess();
   return data;
+}
+
+// Companion download (#10): a self-contained, unauthenticated static file the
+// Pi serves. The section stays hidden unless GET /api/v1/setup advertises a
+// companion, so a package without one never shows a dead link.
+function showCompanion() {
+  const section = document.getElementById('companion-download');
+  if (!companionInfo || !companionInfo.url) { section.hidden = true; return; }
+  section.hidden = false;
+  document.getElementById('companion-filename').textContent = companionInfo.filename;
+  const link = document.getElementById('companion-download-link');
+  link.href = companionInfo.url;
+  link.setAttribute('download', companionInfo.filename);
+  document.getElementById('companion-file').hidden = false;
+  const sha = document.getElementById('companion-sha');
+  if (companionInfo.sha256) {
+    document.getElementById('companion-sha256').textContent = companionInfo.sha256;
+    sha.hidden = false;
+  } else {
+    sha.hidden = true;
+  }
+  document.getElementById('companion-state').textContent =
+      'Serve this file to the PC that will send telemetry.';
 }
 
 // Device access (#23): the rapid account's SSH/sudo password and an optional SSH key.
@@ -468,6 +501,8 @@ document.getElementById('sign-out').addEventListener('click', async () => {
   try {
     const status = await api('/api/v1/setup');
     if (status.certificate_fingerprint) certificateFingerprint = status.certificate_fingerprint;
+    companionInfo = status.companion || null;
+    showCompanion();
     if (!status.owner_configured) {
       document.getElementById('device-address').textContent = location.host;
       // #22/#23: the provisioner publishes the name actually in use, which is

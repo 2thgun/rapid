@@ -7,6 +7,7 @@
         <Component Id="CompanionFiles" Guid="A3746BD0-5F44-49F4-B11E-6FA9A84DD62D">
           <File Id="CompanionExe" Source="$(var.CompanionExe)" KeyPath="yes" />
           <File Id="CompanionLauncher" Source="$(var.CompanionLauncher)" />
+          <File Id="PairLauncher" Source="$(var.PairLauncher)" />
           <File Id="ConfigExample" Source="$(var.ConfigExample)" />
         </Component>
       </Directory>

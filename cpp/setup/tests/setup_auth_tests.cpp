@@ -160,6 +160,42 @@ int main() {
                 public_setup["capabilities"]["settings_write"] == true,
             "new device has no default owner and advertises saved-profile writes");
     require(auth.handle(request("/api/v1/settings")).status == 401, "settings require owner login");
+    // #10: the companion download is a public static file, deliberately above
+    // the owner-session gate, so a fresh owner can fetch it before pairing.
+    {
+      const auto companion_dir = root.path / "companion";
+      fs::create_directory(companion_dir);
+      const auto artifact = companion_dir / "raPId-Companion.msi";
+      const std::string bytes = "MZ fake companion payload";
+      { std::ofstream out(artifact, std::ios::binary | std::ios::trunc); out << bytes; }
+      auto download = request("/companion/download");
+      require(auth.handle(download).status == 404, "no companion is served before one is installed");
+      auth.set_companion_artifact(companion_dir);
+      const auto advertised = Json::parse(auth.handle(request("/api/v1/setup")).body);
+      require(advertised["capabilities"]["companion_download"] == true &&
+                  advertised["companion"]["url"] == "/companion/download" &&
+                  advertised["companion"]["filename"] == "raPId-Companion.msi" &&
+                  advertised["companion"]["sha256"].get<std::string>().size() == 64,
+              "an installed companion is advertised with name, URL and SHA-256");
+      auto served = auth.handle(download);
+      require(served.status == 200 && served.body == bytes,
+              "the companion downloads without a session");
+      require(served.type == "application/x-msi", "an MSI companion uses the MSI content type");
+      const auto portable = companion_dir / "rapid-telemetry-daemon.exe";
+      { std::ofstream out(portable, std::ios::binary | std::ios::trunc); out << bytes; }
+      auth.set_companion_artifact(portable);
+      auto exe = auth.handle(download);
+      require(exe.status == 200 && exe.type == "application/vnd.microsoft.portable-executable",
+              "a portable companion uses the portable-executable content type");
+      // Ambiguity or a missing file serves nothing rather than a guess.
+      auth.set_companion_artifact(companion_dir);
+      require(auth.handle(download).status == 404, "an ambiguous companion directory serves nothing");
+      auth.set_companion_artifact(root.path / "companion-does-not-exist");
+      require(auth.handle(download).status == 404 &&
+                  Json::parse(auth.handle(request("/api/v1/setup")).body)
+                      ["capabilities"]["companion_download"] == false,
+              "a missing companion clears the download capability");
+    }
     bool rejected = false;
     try { auth.enroll("short"); } catch (const std::invalid_argument &) { rejected = true; }
     require(rejected, "short owner password rejected");
