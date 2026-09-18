@@ -53,10 +53,14 @@ int main(int argc, char **argv) {
                ac_telemetry = fixture(argv[2], "ac-telemetry.hex");
     {
       Runtime r(c);
+      // The retired v3 JSON transport must be gone, not quietly accepted: a
+      // v3-shaped datagram is rejected and counted exactly like malformed v4.
       require(!r.receive(
                   "{\"version\":3,\"type\":\"status\",\"state\":\"waiting\"}",
                   "127.0.0.1"),
               "no v3 downgrade");
+      require(r.snapshot()["packets_invalid"] == 1,
+              "a v3-shaped JSON packet is rejected and counted");
       auto corrupt = metadata;
       corrupt.back() ^= 1;
       require(!r.receive(corrupt, "127.0.0.1"), "bad HMAC rejected");

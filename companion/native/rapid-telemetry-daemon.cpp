@@ -392,8 +392,6 @@ struct Metadata {
     double steering_lock_deg = 0.0;
 };
 
-enum class Protocol { v4, legacy_v3 };
-
 struct Options {
     std::string pi_host = "rapid";
     unsigned short pi_port = 9001;
@@ -403,7 +401,6 @@ struct Options {
     std::vector<std::uint8_t> auth_key;
     fs::path auth_key_dpapi_file;
     fs::path store_auth_key_dpapi_file;
-    Protocol protocol = Protocol::v4;
     bool local_recording = false;
     bool no_forward = false;
     bool headless = false;
@@ -693,6 +690,51 @@ std::string trim_ascii(std::string value) {
     return value.substr(first, last - first + 1);
 }
 
+// #10: manual-address pairing. The owner reads the address (and the TLS
+// fingerprint) off the Pi's own display or the setup page and types them at
+// the console, so reaching the pairing client never needs a memorised command
+// line. This fills the exact Options fields the --pairing-url flags fill and
+// then hands off to run_pairing(); no pairing logic is duplicated, and the
+// fingerprint/on-device approval checks are unchanged.
+std::wstring pairing_url_from_address(std::string address) {
+    address = trim_ascii(std::move(address));
+    if (address.empty()) throw std::runtime_error("pairing address is empty");
+    if (address.find("://") == std::string::npos) address = "https://" + address;
+    if (address.size() < 8 || address.compare(0, 8, "https://") != 0)
+        throw std::runtime_error("pairing address must be an https URL or a host[:port]");
+    return utf8_to_wide(address);
+}
+
+std::string default_pairing_label() {
+    std::array<wchar_t, 64> name{};
+    DWORD size = static_cast<DWORD>(name.size());
+    if (GetComputerNameW(name.data(), &size) && size > 0)
+        return wide_to_utf8(std::wstring_view(name.data(), size));
+    return "Windows PC";
+}
+
+// Fills the pairing options from prompts when they were not given as flags.
+// Piped stdin works too (`echo ADDRESS` / `echo FINGERPRINT` | daemon.exe
+// --pair), so the same entry point is scriptable and testable without a TTY.
+// Returns false on end of input, so a non-interactive run with no input can
+// never hang.
+bool complete_pairing_options(Options& options, std::istream& input, std::ostream& output) {
+    if (options.pairing_label.empty()) options.pairing_label = default_pairing_label();
+    if (options.pairing_url.empty()) {
+        output << "Pi address shown on its display (host, host:port, or https URL): " << std::flush;
+        std::string address;
+        if (!std::getline(input, address)) return false;
+        options.pairing_url = pairing_url_from_address(address);
+    }
+    if (options.pinned_certificate_fingerprint.empty()) {
+        output << "TLS fingerprint shown on the Pi's own display: " << std::flush;
+        std::string fingerprint;
+        if (!std::getline(input, fingerprint)) return false;
+        options.pinned_certificate_fingerprint = lower_ascii(trim_ascii(std::move(fingerprint)));
+    }
+    return true;
+}
+
 std::vector<std::uint8_t> decode_auth_key(std::string text, std::string_view source) {
     text = trim_ascii(std::move(text));
     if (text.size() != 64) {
@@ -763,11 +805,16 @@ bool parse_bool(std::string value, std::string_view name) {
     throw std::runtime_error(std::string(name) + " must be true or false");
 }
 
-Protocol parse_protocol(std::string value, std::string_view source) {
+// Authenticated v4 is the only transport since the legacy JSON v3 path was
+// retired. The option is still recognised so an old command line or config
+// file that names v3 fails with a clear, actionable message instead of being
+// silently ignored or falling back to something unauthenticated.
+void require_v4_protocol(std::string value, std::string_view source) {
     value = lower_ascii(trim_ascii(std::move(value)));
-    if (value == "v4" || value == "4") return Protocol::v4;
-    if (value == "v3" || value == "legacy-v3" || value == "legacy_v3") return Protocol::legacy_v3;
-    throw std::runtime_error(std::string(source) + " must be v4 or v3");
+    if (value == "v4" || value == "4") return;
+    throw std::runtime_error(std::string(source) +
+        " select a transport that is not authenticated v4; the legacy JSON implementation has been removed. "
+        "Pair this companion with the Pi (run --pair) to obtain an authenticated v4 key.");
 }
 
 void apply_config_file(Options& options, const fs::path& path, bool required) {
@@ -798,7 +845,7 @@ void apply_config_file(Options& options, const fs::path& path, bool required) {
             options.sample_rate = std::stoi(value);
             if (options.sample_rate < 1 || options.sample_rate > 100) throw std::runtime_error("sample_rate must be 1-100");
         } else if (name == "protocol") {
-            options.protocol = parse_protocol(value, "protocol");
+            require_v4_protocol(value, "protocol");
         } else if (name == "auth_key") {
             options.auth_key = decode_auth_key(value, "auth_key");
         } else if (name == "auth_key_file") {
@@ -880,7 +927,7 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (raw == L"--output-directory" || raw == L"-outputdirectory") {
             options.output_directory = option_value(i, argc, argv, L"--output-directory");
         } else if (raw == L"--protocol") {
-            options.protocol = parse_protocol(wide_to_utf8(option_value(i, argc, argv, L"--protocol")), "--protocol");
+            require_v4_protocol(wide_to_utf8(option_value(i, argc, argv, L"--protocol")), "--protocol");
         } else if (raw == L"--auth-key") {
             options.auth_key = decode_auth_key(wide_to_utf8(option_value(i, argc, argv, L"--auth-key")), "--auth-key");
         } else if (raw == L"--auth-key-file") {
@@ -911,7 +958,12 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (raw == L"--certificate-fingerprint") {
             options.pinned_certificate_fingerprint = lower_ascii(
                 wide_to_utf8(option_value(i, argc, argv, L"--certificate-fingerprint")));
-        } else if (raw == L"--pair" || raw == L"--pairing-url") {
+        } else if (raw == L"--pair") {
+            // #10: the manual-entry path. Without --pairing-url the address
+            // (and the pinned TLS fingerprint) are prompted for in wmain; with
+            // them this behaves exactly like --pairing-url.
+            options.pairing = true;
+        } else if (raw == L"--pairing-url") {
             options.pairing = true; options.pairing_url = option_value(i, argc, argv, L"--pairing-url");
         } else if (raw == L"--pairing-label") {
             options.pairing_label = wide_to_utf8(option_value(i, argc, argv, L"--pairing-label"));
@@ -922,7 +974,7 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --pi-host HOST            Pi hostname/address (default: rapid)\n"
                       "  --pi-port PORT            Pi UDP port (default: 9001)\n"
                       "  --sample-rate HZ          Capture rate 1-100 (default: 50)\n"
-                      "  --protocol v4|v3          Authenticated binary v4 (default) or legacy JSON v3\n"
+                      "  --protocol v4             Authenticated v4 is the only transport\n"
                       "  --auth-key HEX            64-hex-character v4 HMAC key\n"
                       "  --auth-key-file PATH      Read the v4 HMAC key from a file\n"
                       "  --auth-key-dpapi-file PATH  Read a per-user DPAPI-protected pairing key\n"
@@ -936,6 +988,9 @@ Options parse_options(int argc, wchar_t** argv) {
                       "                              Pi-sealed pairing fixture at PATH (#14)\n"
                       "  --verify-setup-url URL       Verify an HTTPS setup certificate fingerprint and exit\n"
                       "  --certificate-fingerprint HEX64  Expected SHA-256 setup certificate fingerprint\n"
+                      "  --pair                     Pair without flags: prompt for the Pi address and its\n"
+                      "                              TLS fingerprint (piped stdin works). Reaches the same client\n"
+                      "                              path as --pairing-url\n"
                       "  --pairing-url URL          Pair this companion with the Pi and store its credential\n"
                       "  --pairing-label LABEL      Friendly name shown during pairing\n"
                       "  --pairing-credential-file PATH  DPAPI credential destination\n"
@@ -949,8 +1004,12 @@ Options parse_options(int argc, wchar_t** argv) {
     if (!options.verify_setup_url.empty() && options.pinned_certificate_fingerprint.empty())
         throw std::runtime_error("--verify-setup-url requires --certificate-fingerprint");
     if (options.pairing) {
-        if (options.pairing_url.empty() || options.pairing_label.empty() || options.pinned_certificate_fingerprint.size() != 64)
-            throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
+        // --pairing-url keeps its flag-only validation. A bare --pair (empty
+        // URL) is the manual-entry path: wmain completes it from stdin, so the
+        // address and pinned fingerprint are not required on the command line.
+        if (!options.pairing_url.empty() &&
+            (options.pairing_label.empty() || options.pinned_certificate_fingerprint.size() != 64))
+            throw std::runtime_error("pairing requires --pairing-label and --certificate-fingerprint");
         if (options.pairing_credential_file.empty()) {
             PWSTR known = nullptr;
             if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &known))) {
@@ -958,11 +1017,12 @@ Options parse_options(int argc, wchar_t** argv) {
             } else options.pairing_credential_file = fs::current_path() / L"pairing.key.dpapi";
         }
     }
-    if (options.protocol == Protocol::v4 && !options.no_forward && options.auth_key.empty() &&
+    if (!options.no_forward && options.auth_key.empty() &&
         !options.self_test && options.verify_setup_url.empty() && !options.pairing) {
         throw std::runtime_error(
             "Protocol v4 requires a 256-bit HMAC key. Set --auth-key, --auth-key-file, "
-            "RAPID_TELEMETRY_KEY, or auth_key in the daemon config.");
+            "RAPID_TELEMETRY_KEY, or auth_key in the daemon config. New installations "
+            "should pair with the Pi (run --pair) instead of configuring a key by hand.");
     }
     return options;
 }
@@ -1278,23 +1338,33 @@ public:
             !adapter->graphics_.open(graphics_name) ||
             !adapter->static_.open(static_name)) return nullptr;
         adapter->metadata.simulator = "ACE";
-        adapter->metadata.vehicle = "Assetto Corsa EVO car";
-        adapter->metadata.venue = "Assetto Corsa EVO";
         adapter->refresh_metadata();
         return adapter;
     }
 
-    // Only the session type is re-readable from the static block today; car
-    // and track names have no known ACE offset yet (hence the placeholders
-    // above), so a car/track change cannot be detected for ACE, only a
-    // session-type change (#15).
+    // Offsets from the official "ACE SharedFileOut Documentation v1" (changelog
+    // 2026-04-28): SPageFileStaticEvo.session (32), .session_name (36),
+    // .track (136), .track_configuration (169) and SPageFileGraphicEvo.car_model
+    // (3086). Reading track/layout/car makes a mid-session car/track change
+    // detectable, which the old placeholders never could (#15).
     void refresh_metadata() override {
+        // ACEVO_SESSION_TYPE: -1 unknown, 0 time attack, 1 race, 2 hot stint,
+        // 3 cruise. The previous table was AC1's enum and mislabelled every ACE
+        // session (#4).
         const int session_type = static_.read<std::int32_t>(32);
-        static constexpr const char* sessions[] = {
-            "Unknown", "Practice", "Qualifying", "Race", "Hotlap", "Time Attack", "Drift", "Drag"
-        };
-        metadata.session = session_type >= 0 && session_type < 8
-            ? sessions[session_type] : static_.ascii(36, 33);
+        static constexpr const char* sessions[] = {"Time Attack", "Race", "Hot Stint", "Cruise"};
+        if (session_type >= 0 && session_type < 4) metadata.session = sessions[session_type];
+        else metadata.session = static_.ascii(36, 33);
+        const auto track = static_.ascii(136, 33);
+        const auto layout = static_.ascii(169, 33);
+        if (!track.empty()) {
+            metadata.venue = track;
+            if (!layout.empty()) metadata.venue += " / " + layout;
+        } else {
+            metadata.venue = "Assetto Corsa EVO";
+        }
+        const auto car = graphics_.ascii(3086, 33);
+        metadata.vehicle = car.empty() ? "Assetto Corsa EVO car" : car;
     }
 
     bool live() override { return graphics_.read<std::int32_t>(4) == 2; }
@@ -1322,7 +1392,11 @@ public:
         read_corners(v, wheel_slip_fl, 56); read_corners(v, pressure_fl, 88);
         read_corners(v, wheel_speed_fl, 104); read_corners(v, core_temp_fl, 152);
         read_corners(v, suspension_fl, 184);
-        v[tc] = physics_.read<std::int32_t>(672); v[abs_activity] = physics_.read<std::int32_t>(676);
+        // Official ACE physics: tc (float, 204) and abs (float, 252) are the
+        // documented traction-control / ABS intervention intensities, the same
+        // AC1-compatible prefix fields AC1/ACC use. The previous code read the
+        // boolean tcinAction/absInAction flags at 672/676 instead (#4).
+        v[tc] = physics_.read<float>(204); v[abs_activity] = physics_.read<float>(252);
         v[heading] = physics_.read<float>(208); v[pitch] = physics_.read<float>(212);
         v[roll] = physics_.read<float>(216); v[current_lap_ms] = std::max(0, graphics_.read<std::int32_t>(188));
         frame.delta_ms = graphics_.read<std::int32_t>(184); v[lap_position] = graphics_.read<float>(1244);
@@ -1545,74 +1619,6 @@ std::unique_ptr<Adapter> open_adapter(Game game) {
         case Game::ac: return AssettoAdapter::open(game);
         default: return nullptr;
     }
-}
-
-void append_json_string(std::string& output, std::string_view value) {
-    output.push_back('"');
-    static constexpr char hex[] = "0123456789abcdef";
-    for (const unsigned char character : value) {
-        switch (character) {
-            case '"': output += "\\\""; break;
-            case '\\': output += "\\\\"; break;
-            case '\b': output += "\\b"; break;
-            case '\f': output += "\\f"; break;
-            case '\n': output += "\\n"; break;
-            case '\r': output += "\\r"; break;
-            case '\t': output += "\\t"; break;
-            default:
-                if (character < 0x20) {
-                    output += "\\u00";
-                    output.push_back(hex[character >> 4]);
-                    output.push_back(hex[character & 0x0f]);
-                } else {
-                    output.push_back(static_cast<char>(character));
-                }
-        }
-    }
-    output.push_back('"');
-}
-
-void append_number(std::string& output, double value) {
-    char buffer[48];
-    if (!std::isfinite(value)) value = 0.0;
-    const int length = std::snprintf(buffer, sizeof(buffer), "%.9g", value);
-    output.append(buffer, static_cast<std::size_t>(std::max(0, length)));
-}
-
-std::string status_json(std::string_view state, const Adapter* adapter, int rate) {
-    std::string output = "{\"version\":3,\"type\":\"status\",\"state\":";
-    append_json_string(output, state);
-    output += ",\"simulator\":";
-    if (adapter) append_json_string(output, adapter->metadata.simulator); else output += "null";
-    output += ",\"sample_rate_hz\":" + std::to_string(rate) + "}";
-    return output;
-}
-
-std::string telemetry_json(const Frame& frame, const Adapter& adapter, int rate) {
-    std::string output;
-    output.reserve(2300);
-    output = "{\"version\":3,\"type\":\"telemetry\",\"simulator\":";
-    append_json_string(output, adapter.metadata.simulator);
-    output += ",\"sample_rate_hz\":" + std::to_string(rate);
-    const std::pair<const char*, const std::string*> metadata[] = {
-        {"track_name", &adapter.metadata.venue}, {"car_model", &adapter.metadata.vehicle},
-        {"driver_name", &adapter.metadata.driver}, {"session_name", &adapter.metadata.session}
-    };
-    for (const auto& [name, value] : metadata) {
-        output += ",\""; output += name; output += "\":";
-        append_json_string(output, *value);
-    }
-    output += ",\"telemetry\":{";
-    bool first = true;
-    for (std::size_t i = 1; i < field_count; ++i) {
-        if (!first) output.push_back(',');
-        first = false;
-        output.push_back('"'); output += kChannels[i].key; output += "\":";
-        append_number(output, frame.value[i]);
-    }
-    output += ",\"completed_lap_ms\":" + std::to_string(frame.completed_lap_ms);
-    output += ",\"delta_ms\":" + std::to_string(frame.delta_ms) + "}}";
-    return output;
 }
 
 // Protocol v4 wire contract. All integers and IEEE-754 floats are little-endian.
@@ -2186,8 +2192,7 @@ private:
                 if (running_game_) {
                     if (!options_.no_forward) {
                         sender_ = std::make_unique<UdpSender>(options_.pi_host, options_.pi_port);
-                        if (options_.protocol == Protocol::v4)
-                            v4_ = std::make_unique<V4Encoder>(options_.auth_key);
+                        v4_ = std::make_unique<V4Encoder>(options_.auth_key);
                     }
                     logger_.write(std::string(game_name(running_game_.game())) + " process detected; telemetry waking");
                     set_status(std::string(game_name(running_game_.game())) + " started - waiting for telemetry");
@@ -2219,15 +2224,13 @@ private:
                 // "driving" alone no longer means live telemetry is flowing; tell
                 // the Pi apart with "paused" so the dashboard does not read idle.
                 const bool currently_live = adapter_ && adapter_->live();
-                const auto state = !recorder_.recording() ? (adapter_ ? "ready" : "waiting")
-                                  : currently_live ? "driving" : "paused";
                 if (v4_) {
                     if (v4_->active() && adapter_)
                         send(v4_->metadata_packet(running_game_.game(), adapter_->metadata, options_.sample_rate));
                     const auto wire_state = !v4_->active() ? (adapter_ ? V4StatusState::ready : V4StatusState::waiting)
                                            : currently_live ? V4StatusState::driving : V4StatusState::paused;
                     send(v4_->status_packet(running_game_.game(), wire_state, "", packets_, options_.sample_rate));
-                } else send(status_json(state, adapter_.get(), options_.sample_rate));
+                }
                 next_heartbeat = now + 1s;
                 set_status(current_status_);
             }
@@ -2275,7 +2278,6 @@ private:
                     recorder_.add(frame);
                     if (v4_) send(v4_->telemetry_packet(running_game_.game(), frame,
                                                       options_.sample_rate, std::chrono::steady_clock::now()));
-                    else send(telemetry_json(frame, *adapter_, options_.sample_rate));
                     set_status(adapter_->metadata.simulator + " recording - " +
                                std::to_string(recorder_.sample_count()) + " samples");
                 } else if (recorder_.recording()) {
@@ -2616,167 +2618,7 @@ std::pair<Frame, Metadata> run() {
 }
 } // namespace assetto_self_test
 
-// The ACE and iRacing fixtures deliberately model only the bytes consumed by
-// their adapters. They verify our reader and conversions on Windows without
-// pretending that a synthetic mapping proves a live simulator integration.
-namespace additional_adapter_self_test {
-struct Bytes { std::array<std::byte, 8192> bytes{}; };
-
-void require(bool condition, const char* message) {
-    if (!condition) throw std::runtime_error(std::string("Adapter self-test: ") + message);
-}
-
-template <typename T>
-void put(Bytes& mapping, std::size_t offset, T value) {
-    require(offset + sizeof(T) <= mapping.bytes.size(), "fixture write out of bounds");
-    std::memcpy(mapping.bytes.data() + offset, &value, sizeof(T));
-}
-
-void text(Bytes& mapping, std::size_t offset, std::string_view value, std::size_t capacity) {
-    require(value.size() < capacity && offset + capacity <= mapping.bytes.size(), "fixture text out of bounds");
-    std::memcpy(mapping.bytes.data() + offset, value.data(), value.size());
-}
-
-void ace() {
-    const auto prefix = L"Local\\raPIdAceSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
-                        L"_" + std::to_wstring(GetTickCount64());
-    assetto_self_test::TestMapping<Bytes> physics(prefix + L"_physics");
-    assetto_self_test::TestMapping<Bytes> graphics(prefix + L"_graphics");
-    assetto_self_test::TestMapping<Bytes> info(prefix + L"_static");
-    put<std::int32_t>(physics.value(), 0, 41); put<float>(physics.value(), 4, .8f);
-    put<float>(physics.value(), 8, .3f); put<std::int32_t>(physics.value(), 16, 4);
-    put<std::int32_t>(physics.value(), 20, 7000); put<float>(physics.value(), 28, 201.5f);
-    put<float>(physics.value(), 44, .4f); put<float>(physics.value(), 48, 1.1f);
-    put<float>(physics.value(), 52, -.2f); put<float>(physics.value(), 104, 71.f);
-    put<std::int32_t>(physics.value(), 672, 3); put<std::int32_t>(physics.value(), 676, 1);
-    put<std::int32_t>(graphics.value(), 4, 2); put<std::int32_t>(graphics.value(), 184, -123);
-    put<std::int32_t>(graphics.value(), 188, 18000); put<float>(graphics.value(), 1244, .25f);
-    put<std::int32_t>(info.value(), 32, 3);
-    auto adapter = AceAdapter::open((prefix + L"_physics").c_str(), (prefix + L"_graphics").c_str(),
-                                    (prefix + L"_static").c_str());
-    require(bool(adapter) && adapter->live() && !adapter->ended() && adapter->metadata.session == "Race",
-            "ACE opens, enters driving state and reads the initial session type");
-    require(adapter->metadata.steering_lock_deg == 0.0,
-            "ACE shared memory exposes no steering lock: reported unknown, not guessed");
-    Frame frame;
-    require(adapter->read(frame), "ACE accepts coherent sample");
-    const auto close_enough = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
-    require(close_enough(frame.value[throttle], .8) && close_enough(frame.value[brake], .3) && frame.value[gear] == 3 &&
-            frame.value[rpm] == 7000 && close_enough(frame.value[speed_kmh], 201.5) &&
-            close_enough(frame.value[wheel_speed_fl], 71) && frame.value[tc] == 3 && frame.value[abs_activity] == 1 &&
-            frame.value[lap_number] == 1 && frame.value[current_lap_ms] == 18000 &&
-            frame.delta_ms == -123 && frame.completed_lap_ms == 0 && frame.valid_mask ==
-            (all_field_bits() & ~field_bit(pit_limiter) & ~field_bit(damage_front) & ~field_bit(damage_rear) &
-             ~field_bit(damage_left) & ~field_bit(damage_right) & ~field_bit(damage_center)),
-            "ACE fields, unavailable-channel mask and initial lap");
-    put<std::int32_t>(physics.value(), 0, 42); put<std::int32_t>(graphics.value(), 188, 1000);
-    require(adapter->read(frame) && frame.value[lap_number] == 2 && frame.completed_lap_ms == 18000,
-            "ACE lap rollover");
-    put<std::int32_t>(graphics.value(), 4, 1);
-    require(!adapter->live() && !adapter->ended(), "ACE overlay/replay state is not driving but not ended (#15)");
-    put<std::int32_t>(graphics.value(), 4, 0);
-    require(!adapter->live() && adapter->ended(),
-            "ACE reports ended() on the same graphics.status field/value as AC1/ACC (#15, unverified on real ACE)");
-    put<std::int32_t>(info.value(), 32, 1);
-    adapter->refresh_metadata();
-    require(adapter->metadata.session == "Practice",
-            "ACE refresh_metadata reflects a session-type change while not live (#15)");
-}
-
-void write_iracing_variable(Bytes& data, int index, int type, int offset, std::string_view name_text) {
-    const std::size_t at = 256 + static_cast<std::size_t>(index) * 144;
-    put<std::int32_t>(data, at, type); put<std::int32_t>(data, at + 4, offset); put<std::int32_t>(data, at + 8, 1);
-    text(data, at + 16, name_text, 32);
-}
-
-void iracing() {
-    const auto name = L"Local\\raPIdIracingSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
-                      L"_" + std::to_wstring(GetTickCount64());
-    assetto_self_test::TestMapping<Bytes> mapping(name);
-    auto& data = mapping.value();
-    put<std::int32_t>(data, 4, 1); // connected
-    // 18 variables: the 17 already-consumed channels plus SteeringWheelAngleMax,
-    // iRacing's own live half-lock (radians), used to normalise steering.
-    put<std::int32_t>(data, 24, 18); put<std::int32_t>(data, 28, 256); // var table
-    put<std::int32_t>(data, 32, 1); put<std::int32_t>(data, 48, 7); put<std::int32_t>(data, 52, 4096);
-    write_iracing_variable(data, 0, 1, 0, "IsOnTrack"); write_iracing_variable(data, 1, 4, 4, "Throttle");
-    write_iracing_variable(data, 2, 4, 8, "Brake"); write_iracing_variable(data, 3, 4, 12, "FuelLevel");
-    write_iracing_variable(data, 4, 2, 16, "Gear"); write_iracing_variable(data, 5, 4, 20, "RPM");
-    write_iracing_variable(data, 6, 4, 24, "SteeringWheelAngle"); write_iracing_variable(data, 7, 4, 28, "Speed");
-    write_iracing_variable(data, 8, 4, 32, "VelocityX"); write_iracing_variable(data, 9, 4, 36, "VelocityY");
-    write_iracing_variable(data, 10, 4, 40, "VelocityZ"); write_iracing_variable(data, 11, 4, 44, "LatAccel");
-    write_iracing_variable(data, 12, 4, 48, "VertAccel"); write_iracing_variable(data, 13, 4, 52, "LongAccel");
-    write_iracing_variable(data, 14, 2, 56, "Lap"); write_iracing_variable(data, 15, 4, 60, "LapCurrentLapTime");
-    write_iracing_variable(data, 16, 4, 64, "LapLastLapTime");
-    write_iracing_variable(data, 17, 4, 68, "SteeringWheelAngleMax");
-    put<unsigned char>(data, 4096, 1); put<float>(data, 4100, .6f); put<float>(data, 4104, .2f);
-    put<float>(data, 4108, 42.f); put<std::int32_t>(data, 4112, 4); put<float>(data, 4116, 6500.f);
-    // -1.3 rad raw / 6.5 rad live half-lock = -0.2 normalised: proves the live
-    // SteeringWheelAngleMax (not the YAML lock below) drives normalisation.
-    put<float>(data, 4120, -1.3f); put<float>(data, 4124, 50.f); put<float>(data, 4128, 1.f);
-    put<float>(data, 4132, 2.f); put<float>(data, 4136, 3.f); put<float>(data, 4140, 9.80665f);
-    put<float>(data, 4144, 19.6133f); put<float>(data, 4148, -9.80665f); put<std::int32_t>(data, 4152, 7);
-    put<float>(data, 4156, 12.5f); put<float>(data, 4160, 91.25f); put<float>(data, 4164, 6.5f);
-    // DriverInfo.DriverCarSteerWheelRange (session YAML, degrees, lock-to-lock):
-    // populates metadata even though the live variable above wins for
-    // per-sample normalisation.
-    static constexpr std::string_view yaml = "DriverInfo:\n  DriverCarSteerWheelRange: 900.000\n";
-    put<std::int32_t>(data, 16, static_cast<int>(yaml.size())); put<std::int32_t>(data, 20, 5000);
-    text(data, 5000, yaml, 200);
-    auto adapter = IracingAdapter::open(name.c_str());
-    require(bool(adapter) && adapter->connected() && adapter->live(), "iRacing opens and enters track state");
-    require(adapter->metadata.steering_lock_deg == 900.0,
-            "iRacing session YAML steering lock parsed (DriverCarSteerWheelRange)");
-    Frame frame;
-    require(adapter->read(frame), "iRacing accepts connected sample");
-    const auto close_enough = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
-    require(close_enough(frame.value[throttle], .6) && close_enough(frame.value[brake], .2) && frame.value[gear] == 4 &&
-            close_enough(frame.value[steering_angle], -.2) &&
-            close_enough(frame.value[speed_kmh], 180) && close_enough(frame.value[g_x], 1) && close_enough(frame.value[g_y], 2) &&
-            close_enough(frame.value[g_z], -1) && frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
-            frame.completed_lap_ms == 91250,
-            "iRacing conversions, lap timing and live-half-lock steering normalisation");
-    // iRacing updates the session info YAML in place as the session type,
-    // track or car changes (practice/qualifying/race, a car swap); a later
-    // refresh_metadata() call must pick that up without reopening the adapter
-    // so the run loop can detect the change while not live (#15).
-    const std::string refreshed_yaml = "SessionType: Practice\nCarScreenName: Test Car 2\n"
-                                       "TrackDisplayName: Test Track 2\nUserName: Test Driver 2\n";
-    text(data, 5000, refreshed_yaml, refreshed_yaml.size() + 1);
-    put<std::int32_t>(data, 16, static_cast<std::int32_t>(refreshed_yaml.size()));
-    put<std::int32_t>(data, 20, 5000);
-    adapter->refresh_metadata();
-    require(adapter->metadata.session == "Practice" && adapter->metadata.vehicle == "Test Car 2" &&
-                adapter->metadata.venue == "Test Track 2" && adapter->metadata.driver == "Test Driver 2",
-            "iRacing refresh_metadata reflects a session/car/track change while connected (#15)");
-    put<std::int32_t>(data, 4, 0);
-    require(!adapter->connected() && !adapter->read(frame), "iRacing disconnect rejects samples");
-
-    // Older/limited telemetry exports may omit the live SteeringWheelAngleMax
-    // variable. Normalisation must then fall back to the session YAML lock.
-    const auto name_b = name + L"_b";
-    assetto_self_test::TestMapping<Bytes> mapping_b(name_b);
-    auto& data_b = mapping_b.value();
-    put<std::int32_t>(data_b, 4, 1);
-    put<std::int32_t>(data_b, 24, 17); put<std::int32_t>(data_b, 28, 256);
-    put<std::int32_t>(data_b, 32, 1); put<std::int32_t>(data_b, 48, 7); put<std::int32_t>(data_b, 52, 4096);
-    write_iracing_variable(data_b, 0, 1, 0, "IsOnTrack"); write_iracing_variable(data_b, 1, 4, 24, "SteeringWheelAngle");
-    // -2.1380283 rad raw / (350 rad half-lock, from 700 deg YAML / 2) = -0.35
-    // normalised.
-    put<unsigned char>(data_b, 4096, 1); put<float>(data_b, 4120, -2.1380283f);
-    static constexpr std::string_view yaml_b = "DriverInfo:\n  DriverCarSteerWheelRange: 700.000\n";
-    put<std::int32_t>(data_b, 16, static_cast<int>(yaml_b.size())); put<std::int32_t>(data_b, 20, 5000);
-    text(data_b, 5000, yaml_b, 200);
-    auto adapter_b = IracingAdapter::open(name_b.c_str());
-    require(bool(adapter_b) && adapter_b->connected() && adapter_b->live(),
-            "iRacing (no live half-lock variable) opens and enters track state");
-    require(adapter_b->metadata.steering_lock_deg == 700.0,
-            "iRacing session YAML steering lock parsed without a live half-lock variable");
-    Frame frame_b;
-    require(adapter_b->read(frame_b) && close_enough(frame_b.value[steering_angle], -.35),
-            "iRacing steering normalisation falls back to the session YAML lock");
-}
-} // namespace additional_adapter_self_test
+#include "adapter_selftest_fixtures.hpp"
 
 std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key) {
     ULONG size = 0;
@@ -3285,9 +3127,78 @@ void write_pairing_interop_fixtures(const fs::path& pairing_fixtures) {
     std::cout << "Windows pairing interop fixtures written: " << pairing_fixtures.string() << '\n';
 }
 
+// #10: the manual-entry path is only useful if it fills exactly the fields
+// --pairing-url would. This does not re-test the pairing exchange (that is
+// pairing_crypto_self_test() and the pi-seals interop above); it proves the
+// new entry point lands on those same fields, from scripted stdin, and that a
+// closed stdin fails instead of blocking -- so the gate's own --self-test run
+// (which never passes --pair) is unaffected and no invocation can hang.
+void manual_pairing_entry_self_test() {
+    const std::string fingerprint(64, 'a');
+    Options interactive;
+    interactive.pairing = true;
+    std::istringstream input("192.168.1.64:8002\n" + fingerprint + "\n");
+    std::ostringstream output;
+    if (!complete_pairing_options(interactive, input, output))
+        throw std::runtime_error("manual pairing entry refused scripted input");
+    if (interactive.pairing_url != L"https://192.168.1.64:8002" ||
+        interactive.pinned_certificate_fingerprint != fingerprint || interactive.pairing_label.empty())
+        throw std::runtime_error("manual pairing entry did not reach the --pairing-url fields");
+    // Explicit flags are never overwritten (the --pairing-url code path).
+    Options flagged;
+    flagged.pairing = true;
+    flagged.pairing_url = L"https://rapid:8443";
+    flagged.pinned_certificate_fingerprint = fingerprint;
+    flagged.pairing_label = "My PC";
+    std::istringstream unused("not consumed\n");
+    if (!complete_pairing_options(flagged, unused, output) || flagged.pairing_url != L"https://rapid:8443" ||
+        flagged.pairing_label != "My PC")
+        throw std::runtime_error("manual pairing entry overwrote explicit pairing options");
+    // A closed stdin must fail, not block or loop.
+    std::istringstream closed("");
+    Options no_input;
+    no_input.pairing = true;
+    if (complete_pairing_options(no_input, closed, output))
+        throw std::runtime_error("manual pairing entry accepted an empty stdin");
+    std::cout << "Manual pairing entry self-test passed: scripted address and fingerprint reach the "
+                 "--pairing-url fields, and empty input fails closed\n";
+}
+
 bool run_self_test(const fs::path& directory, int sample_rate,
                     const fs::path& pairing_pi_seals_fixtures = {}) {
     pairing_crypto_self_test();
+    manual_pairing_entry_self_test();
+    // The legacy JSON v3 transport is retired: selecting it on the command
+    // line or in a config file must fail with an actionable pairing hint, not
+    // silently fall back to anything unauthenticated.
+    {
+        bool cli_rejected = false;
+        try {
+            wchar_t arg0[] = L"rapid-telemetry-daemon.exe";
+            wchar_t arg1[] = L"--protocol";
+            wchar_t arg2[] = L"v3";
+            wchar_t* cli[] = {arg0, arg1, arg2, nullptr};
+            (void)parse_options(3, cli);
+        } catch (const std::exception& error) {
+            cli_rejected = std::string(error.what()).find("pair") != std::string::npos;
+        }
+        assetto_self_test::require(cli_rejected,
+            "retired v3 transport must fail with a pairing hint");
+        fs::create_directories(directory);
+        const auto retired_config = directory / "retired-v3.conf";
+        {
+            std::ofstream output(retired_config);
+            output << "protocol=v3\n";
+        }
+        bool config_rejected = false;
+        try { Options options; apply_config_file(options, retired_config, true); }
+        catch (const std::exception& error) {
+            config_rejected = std::string(error.what()).find("pair") != std::string::npos;
+        }
+        fs::remove(retired_config);
+        assetto_self_test::require(config_rejected,
+            "a config selecting the retired v3 transport must fail with a pairing hint");
+    }
     const auto [ac_frame, ac_metadata] = assetto_self_test::run();
     additional_adapter_self_test::ace();
     additional_adapter_self_test::iracing();
@@ -3442,7 +3353,16 @@ int wmain(int argc, wchar_t** argv) {
             write_dpapi_credential(options.store_auth_key_dpapi_file, options.auth_key);
             return 0;
         }
-        if (options.pairing) return run_pairing(options);
+        if (options.pairing) {
+            // #10: a bare --pair prompts (or reads piped stdin) for the Pi
+            // address and pinned fingerprint, then takes the same run_pairing()
+            // path as --pairing-url. Explicit flags are left untouched.
+            Options pairing_options = options;
+            if (pairing_options.pairing_url.empty() &&
+                !complete_pairing_options(pairing_options, std::cin, std::cout))
+                throw std::runtime_error("pairing needs a Pi address and its TLS fingerprint");
+            return run_pairing(pairing_options);
+        }
         if (!options.auth_key_dpapi_file.empty())
             verify_paired_identity(options.auth_key_dpapi_file);
         if (options.self_test)

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <sstream>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -12,6 +13,7 @@ using namespace rapid::native;
 
 namespace {
 using Matrix = std::array<double, 9>;
+const Matrix identity{1, 0, 0, 0, 1, 0, 0, 0, 1};
 
 void require(bool value, const char *message) {
   if (!value) throw std::runtime_error(message);
@@ -45,6 +47,17 @@ Matrix multiply(const Matrix &left, const Matrix &right) {
 std::array<double, 2> apply(const Matrix &m, double x, double y) {
   return {m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5]};
 }
+bool close(double left, double right) { return std::abs(left - right) <= 1e-6; }
+bool same_matrix(const Matrix &left, const Matrix &right) {
+  for (int i = 0; i < 9; ++i)
+    if (!close(left[i], right[i])) return false;
+  return true;
+}
+void require_maps(const Matrix &m, double x, double y, double expected_x, double expected_y,
+                  const char *message) {
+  const auto mapped = apply(m, x, y);
+  require(close(mapped[0], expected_x) && close(mapped[1], expected_y), message);
+}
 // Physical taps at fixed device positions: X currently reports them through
 // `applied`; the operator was aiming at targets produced by the true mapping.
 std::vector<std::string> samples(const Matrix &applied, const Matrix &truth, double target_shift = 0) {
@@ -73,6 +86,20 @@ std::string last_line(const fs::path &file) {
   while (std::getline(input, line)) if (!line.empty()) last = line;
   return last;
 }
+// The last coordinate transformation the helper applied through xinput, as a
+// 3x3 matrix, so a test can assert where a specific tap coordinate lands.
+Matrix last_input_matrix(const fs::path &log) {
+  const std::string key = "Coordinate Transformation Matrix";
+  const auto line = last_line(log);
+  const auto at = line.find(key);
+  require(at != std::string::npos, "no touch matrix was applied");
+  std::istringstream stream(line.substr(at + key.size()));
+  Matrix matrix{};
+  for (int i = 0; i < 9; ++i)
+    require(static_cast<bool>(stream >> matrix[i]), "touch matrix was truncated");
+  return matrix;
+}
+Json load_state(const fs::path &path) { return Json::parse(read_file(path)); }
 } // namespace
 
 int main(int argc, char **argv) {
@@ -83,31 +110,52 @@ int main(int argc, char **argv) {
     fs::create_directory(root);
     const auto state = root / "state.json";
     const auto fake = root / "xrandr";
-    const auto log = root / "calls";
-    script(fake, "printf '%s\\n' \"$*\" >> \"" + log.string() + "\"\n");
-    require(run(utility, {"--state-file", state.string(), "--xrandr", fake.string(),
-                          "--output", "default", "--rotation", "180", "--preview"}) == 0,
-            "preview succeeds");
-    auto preview = Json::parse(read_file(state));
-    require(preview["pending"] == true && preview["rotation"] == 180 &&
-                read_file(log).find("--rotate inverted") != std::string::npos,
-            "preview persists rotation and uses inverted output");
-    require(run(utility, {"--state-file", state.string(), "--xrandr", fake.string(),
-                          "--output", "default", "--rollback"}) == 0,
-            "rollback succeeds");
-    auto rolled_back = Json::parse(read_file(state));
+    const auto xrandr_log = root / "xrandr-calls";
+    // A deliberately failing xrandr. If any code path ever executes it, the
+    // run fails and leaves a log line; the assertions below require both the
+    // success and the absence of the log.
+    script(fake, "printf '%s\\n' \"$*\" >> \"" + xrandr_log.string() + "\"\nexit 1\n");
+    const auto preview = [&](const fs::path &state_file, int rotation) {
+      return run(utility, {"--state-file", state_file.string(), "--xrandr", fake.string(),
+                           "--output", "default", "--rotation", std::to_string(rotation), "--preview"});
+    };
+
+    // #13: preview persists the requested rotation for the Qt panel and never
+    // shells out to xrandr, which cannot rotate this fbdev panel.
+    require(preview(state, 180) == 0, "preview succeeds without xrandr");
+    const auto previewed = load_state(state);
+    require(previewed["pending"] == true && previewed["rotation"] == 180 &&
+                previewed["previous_rotation"] == 0,
+            "preview persists the rotation and the previous one for rollback");
+    require(previewed.contains("deadline") && previewed["deadline"].is_number(),
+            "preview arms the rollback deadline");
+    require(!fs::exists(xrandr_log), "preview never invokes xrandr");
+
+    // #11: an unconfirmed preview rolls back to the previous orientation.
+    require(run(utility, {"--state-file", state.string(), "--rollback"}) == 0, "rollback succeeds");
+    const auto rolled_back = load_state(state);
     require(rolled_back["pending"] == false && rolled_back["rotation"] == 0 &&
-                read_file(log).find("--rotate normal") != std::string::npos,
-            "rollback restores the previous orientation");
-    require(run(utility, {"--state-file", state.string(), "--xrandr", fake.string(),
-                          "--output", "default", "--rotation", "180", "--preview"}) == 0,
-            "second preview succeeds");
-    require(run(utility, {"--state-file", state.string(), "--xrandr", fake.string(),
-                          "--output", "default", "--recover"}) == 0,
-            "boot recovery succeeds");
-    require(Json::parse(read_file(state))["pending"] == false &&
-                Json::parse(read_file(state))["rotation"] == 0,
-            "boot recovery clears an interrupted preview");
+                !rolled_back.contains("previous_rotation") && !rolled_back.contains("deadline"),
+            "rollback restores the previous orientation and clears the preview state");
+    require(!fs::exists(xrandr_log), "rollback never invokes xrandr");
+
+    // A confirmed preview keeps the new orientation.
+    require(preview(state, 180) == 0 &&
+                run(utility, {"--state-file", state.string(), "--confirm"}) == 0,
+            "preview then confirm succeeds");
+    const auto confirmed = load_state(state);
+    require(confirmed["rotation"] == 180 && confirmed["pending"] == false &&
+                !confirmed.contains("previous_rotation") && !confirmed.contains("deadline"),
+            "confirm keeps the previewed orientation and stops the timer");
+    require(!fs::exists(xrandr_log), "confirm never invokes xrandr");
+
+    // Boot recovery of an interrupted preview returns to the confirmed value.
+    require(preview(state, 0) == 0, "an interrupted preview is written");
+    require(run(utility, {"--state-file", state.string(), "--recover"}) == 0, "boot recovery succeeds");
+    require(load_state(state)["pending"] == false && load_state(state)["rotation"] == 180,
+            "boot recovery restores the last confirmed orientation");
+    require(!fs::exists(xrandr_log), "recovery never invokes xrandr");
+
     const auto calibration = root / "calibration";
     atomic_file(calibration, "stale");
     require(run(utility, {"--state-file", state.string(), "--reset-calibration",
@@ -115,7 +163,9 @@ int main(int argc, char **argv) {
                 !fs::exists(calibration),
             "calibration reset removes stale calibration");
 
-    // Touch input follows rotation and calibration through the X input matrix.
+    // Touch input follows calibration and the X server baseline only: the
+    // scene rotation is rendered and unwound by Qt, so the X matrix must be
+    // identical at 0 and 180 degrees (#13).
     const auto input_log = root / "input-calls";
     const auto xinput = root / "xinput";
     script(xinput, "printf '%s\\n' \"$*\" >> \"" + input_log.string() + "\"\n"
@@ -130,38 +180,60 @@ int main(int argc, char **argv) {
       arguments.insert(arguments.end(), extra.begin(), extra.end());
       return run(utility, arguments);
     };
-    const Matrix inverted{-1, 0, 1, 0, -1, 1, 0, 0, 1};
-    require(with({"--xrandr", fake.string(), "--rotation", "180", "--preview"}) == 0 &&
-                with({"--confirm"}) == 0 &&
-                last_line(input_log) == "set-prop ADS7846 Touchscreen Coordinate Transformation Matrix "
-                                        "-1.000000 0.000000 1.000000 0.000000 -1.000000 1.000000 "
-                                        "0.000000 0.000000 1.000000",
-            "inverted rotation also inverts touch coordinates");
+    // The X server's own matrix from list-props: an axis swap with no rotation.
+    const Matrix session_baseline{0, 1, 0, 1, 0, 0, 0, 0, 1};
 
     const Matrix skewed{0.9, 0.02, 0.04, -0.01, 1.1, -0.05, 0, 0, 1};
+    atomic_file(calibration,
+                "{\"version\":1,\"matrix\":[0.9,0.02,0.04,-0.01,1.1,-0.05],\"pending\":false}\n");
+    atomic_file(state, "{\"rotation\":0,\"pending\":false}\n");
+    require(with({"--apply-input"}) == 0, "apply touch at 0 degrees");
+    const auto at_zero = last_input_matrix(input_log);
+    require(same_matrix(at_zero, skewed), "0 degrees applies the calibration matrix unchanged");
+    require_maps(at_zero, 0.5, 0.5, 0.5, 0.495, "0 degrees calibration maps a tap to its target");
+    require_maps(at_zero, 0.2, 0.3, 0.226, 0.278, "0 degrees calibration maps a second tap");
+
+    require(preview(state, 180) == 0 && run(utility, {"--state-file", state.string(), "--confirm"}) == 0,
+            "preview 180 then confirm for the touch matrix check");
+    require(with({"--apply-input"}) == 0, "apply touch at 180 degrees");
+    const auto at_half = last_input_matrix(input_log);
+    require(same_matrix(at_half, at_zero),
+            "the X input matrix is identical at 0 and 180 degrees (no rotation composed)");
+    require_maps(at_half, 0.5, 0.5, 0.5, 0.495, "180 degrees maps the same tap coordinate identically");
+    require(!fs::exists(xrandr_log), "touch updates never invoke xrandr");
+
+    // Calibration fit recovers the true mapping. The panel submits taps and
+    // targets in the unrotated screen frame, so the stored matrix is
+    // orientation-independent.
+    atomic_file(state, "{\"rotation\":180,\"pending\":false}\n");
+    fs::remove(calibration);
     auto calibrate = std::vector<std::string>{"--calibrate"};
-    auto taps = samples(inverted, multiply(inverted, skewed));
+    auto taps = samples(identity, skewed);
     calibrate.insert(calibrate.end(), taps.begin(), taps.end());
     require(with(calibrate) == 0 && stored_matrix(calibration, skewed) &&
-                Json::parse(read_file(calibration))["pending"] == true &&
-                last_line(input_log).find("-0.900000 -0.020000 0.960000 0.010000 -1.100000 1.050000") !=
-                    std::string::npos,
-            "calibration fit recovers the rotation-independent matrix and applies it");
-    require(with({"--rollback-calibration"}) == 0 && !fs::exists(calibration) &&
-                last_line(input_log).find("-1.000000 0.000000 1.000000 0.000000 -1.000000") != std::string::npos,
-            "unconfirmed first calibration rolls back to rotation only");
+                load_state(calibration)["pending"] == true,
+            "calibration fit recovers the rotation-independent matrix");
+    const auto fitted = last_input_matrix(input_log);
+    require(same_matrix(fitted, skewed),
+            "calibration applies the fitted matrix with no session baseline recorded");
+    require_maps(fitted, 0.2, 0.3, 0.226, 0.278,
+                 "calibration output maps a tap coordinate to the true target");
+    require(with({"--rollback-calibration"}) == 0 && !fs::exists(calibration),
+            "unconfirmed first calibration rolls back to no calibration");
+    require(same_matrix(last_input_matrix(input_log), identity),
+            "rollback to no calibration leaves only the identity session baseline");
 
     require(with(calibrate) == 0 && with({"--confirm-calibration"}) == 0 &&
-                Json::parse(read_file(calibration))["pending"] == false,
+                load_state(calibration)["pending"] == false,
             "confirmed calibration is retained");
     const Matrix corrected{1.05, 0, -0.02, 0, 0.95, 0.03, 0, 0, 1};
     calibrate = {"--calibrate"};
-    taps = samples(multiply(inverted, skewed), multiply(inverted, corrected));
+    taps = samples(skewed, corrected);
     calibrate.insert(calibrate.end(), taps.begin(), taps.end());
     require(with(calibrate) == 0 && stored_matrix(calibration, corrected),
             "recalibration composes with the applied matrix");
     require(with({"--rollback-calibration"}) == 0 && stored_matrix(calibration, skewed) &&
-                Json::parse(read_file(calibration))["pending"] == false,
+                load_state(calibration)["pending"] == false,
             "panel restart restores the last confirmed calibration");
 
     const auto before = read_file(calibration);
@@ -173,16 +245,16 @@ int main(int argc, char **argv) {
     require(with(collinear) != 0 && read_file(calibration) == before,
             "collinear taps are rejected without changing calibration");
     auto inconsistent = std::vector<std::string>{"--calibrate"};
-    taps = samples(multiply(inverted, skewed), multiply(inverted, skewed), 0.2);
+    taps = samples(skewed, skewed, 0.2);
     inconsistent.insert(inconsistent.end(), taps.begin(), taps.end());
     require(with(inconsistent) != 0 && read_file(calibration) == before,
             "an inconsistent tap is rejected without changing calibration");
     atomic_file(calibration, "not json");
-    require(with({"--apply-input"}) == 0 &&
-                last_line(input_log).find("-1.000000 0.000000 1.000000 0.000000 -1.000000") != std::string::npos,
-            "unreadable calibration falls back to rotation-only touch input");
+    require(with({"--apply-input"}) == 0 && same_matrix(last_input_matrix(input_log), identity),
+            "unreadable calibration falls back to the identity session baseline");
 
-    // A vendor display setup may already swap axes through the same X property.
+    // A vendor display setup may already swap axes through the same X property;
+    // it is composed with, not replaced by, the calibration.
     auto vendor = input;
     vendor[5] = (root / "vendor-calibration").string();
     const auto with_vendor = [&](std::vector<std::string> extra) {
@@ -190,27 +262,33 @@ int main(int argc, char **argv) {
       arguments.insert(arguments.end(), extra.begin(), extra.end());
       return run(utility, arguments);
     };
-    const std::string inverted_swap =
-        "0.000000 -1.000000 1.000000 -1.000000 0.000000 1.000000 0.000000 0.000000 1.000000";
     require(with_vendor({"--rollback-calibration", "--record-input-baseline"}) == 0 &&
                 fs::exists(root / "vendor-calibration.baseline") &&
-                last_line(input_log).find(inverted_swap) != std::string::npos,
+                same_matrix(last_input_matrix(input_log), session_baseline),
             "the X server's configured touch matrix is recorded and composed, not replaced");
-    require(with_vendor({"--apply-input"}) == 0 && last_line(input_log).find(inverted_swap) != std::string::npos,
-            "later touch updates keep the recorded session baseline");
+    require_maps(last_input_matrix(input_log), 0.2, 0.3, 0.3, 0.2,
+                 "the session baseline alone maps a tap coordinate through the axis swap");
+    atomic_file(root / "vendor-calibration",
+                "{\"version\":1,\"matrix\":[0.9,0.02,0.04,-0.01,1.1,-0.05],\"pending\":false}\n");
+    require(with_vendor({"--apply-input"}) == 0 &&
+                same_matrix(last_input_matrix(input_log), multiply(skewed, session_baseline)),
+            "later touch updates compose the calibration with the recorded session baseline");
+    require_maps(last_input_matrix(input_log), 0.2, 0.3, 0.314, 0.167,
+                 "calibration over the session baseline maps a tap to the true target");
 
     script(xinput, "[ \"$1\" = list ] && printf 'Virtual core pointer\\n'\nexit 0\n");
     fs::remove(calibration);
-    require(with({"--xrandr", fake.string(), "--rotation", "0", "--preview"}) == 0,
-            "rotation still succeeds without a touchscreen");
+    atomic_file(state, "{\"rotation\":0,\"pending\":false}\n");
+    require(preview(state, 0) == 0, "rotation still succeeds without a touchscreen");
     calibrate = {"--calibrate"};
-    taps = samples(Matrix{1, 0, 0, 0, 1, 0, 0, 0, 1}, skewed);
+    taps = samples(identity, skewed);
     calibrate.insert(calibrate.end(), taps.begin(), taps.end());
     require(with(calibrate) != 0 && !fs::exists(calibration),
             "calibration fails closed when no touchscreen can receive it");
+    require(!fs::exists(xrandr_log), "no recovery action ever invoked xrandr");
 
     std::error_code error; fs::remove_all(root, error);
-    std::cout << "Display preview, rollback, touch transform and calibration passed\n";
+    std::cout << "Display preview, rollback, rotation-free touch matrix and calibration passed\n";
     return 0;
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';

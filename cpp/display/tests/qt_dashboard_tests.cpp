@@ -117,6 +117,26 @@ int main(int argc, char **argv) {
     if (!ok) { std::cerr << message << '\n'; std::exit(1); }
   };
   spin(500);
+  // #13: the panel renders the orientation rapid-display-recovery persisted,
+  // read from the existing state file, rather than an X/xrandr transform.
+  const auto display_state = helper_directory.filePath("display-state.json");
+  const auto write_display = [&](int rotation) {
+    QFile file(display_state);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write display state");
+    const QJsonObject object{{"rotation", rotation}, {"pending", false}};
+    require(file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) > 0, "write display state");
+    file.close();
+  };
+  require(model.displayRotation() == 0,
+          "The panel defaults to 0 degrees when no display state file exists");
+  write_display(180);
+  spin(700);
+  require(model.displayRotation() == 180,
+          "#13: the panel reads the persisted 180-degree rotation from the state file");
+  write_display(0);
+  spin(700);
+  require(model.displayRotation() == 0,
+          "#13: the panel follows the persisted rotation back to 0 degrees");
   require(model.setupNotice().contains("SETUP AP  rapid  (open network)") &&
               model.setupNotice().contains("fedcba9876543210 fedcba9876543210") &&
               model.setupNotice().contains("0123456789abcdef 0123456789abcdef") &&
@@ -213,6 +233,29 @@ int main(int argc, char **argv) {
   require(model.calibrationStage() == "failed" && calls().contains("--rollback-calibration"),
           "A missed verification tap rolls back the new calibration");
   model.calibrationTap(0.5, 0.5);
+  // #13 touch mapping: at 180 degrees the rotated scene delivers local
+  // coordinates, so the panel maps both the tap and the target into the
+  // unrotated screen frame before calibrating; the stored matrix then stays
+  // orientation-independent and the X matrix needs no rotation.
+  write_display(180);
+  spin(700);
+  require(model.displayRotation() == 180, "rotation is 180 for the touch mapping check");
+  model.startCalibration();
+  model.calibrationTap(0.12, 0.09);
+  model.calibrationTap(0.88, 0.11);
+  model.calibrationTap(0.91, 0.92);
+  model.calibrationTap(0.10, 0.88);
+  model.calibrationTap(0.50, 0.52);
+  spin(600);
+  require(calls().contains("--sample 0.880000,0.910000,0.900000,0.900000") &&
+              calls().contains("--sample 0.500000,0.480000,0.500000,0.500000"),
+          "#13: at 180 degrees local taps and targets are mapped to the unrotated screen frame");
+  model.calibrationTap(0.3, 0.7);
+  spin(600);
+  require(model.calibrationStage() == "done", "The mapped 180-degree calibration still verifies");
+  model.calibrationTap(0.5, 0.5);
+  write_display(0);
+  spin(700);
   { QFile flag(helper_fail); require(flag.open(QIODevice::WriteOnly), "create helper failure flag"); }
   capture();
   require(model.calibrationStage() == "failed" && model.calibrationMessage().contains("inconsistent"),

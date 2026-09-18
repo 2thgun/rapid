@@ -272,16 +272,18 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
         !((ip >> 24) == 10 || (ip >> 24) == 127 || (ip >> 16) == 0xc0a8 ||
           (ip >> 20) == 0xac1 || (ip >> 16) == 0xa9fe))
       return false;
-    const bool v4 = payload.starts_with("RPD4");
-    if (!v4 && (config_.paired_key_mode || !config_.companion_key.empty()))
-      throw AuthenticationError("unauthenticated telemetry disabled");
+    // Authenticated v4 is the only accepted transport. A datagram that is not
+    // a v4 packet -- including a legacy v3-shaped JSON packet -- is rejected
+    // and counted exactly like a malformed v4 packet.
+    if (!payload.starts_with("RPD4"))
+      throw std::runtime_error("not an authenticated v4 packet");
     const std::vector<std::string> keys = config_.paired_key_mode
         ? paired_keys_
         : (config_.companion_keys.empty()
                ? std::vector<std::string>{config_.companion_key}
                : config_.companion_keys);
     Json m;
-    if (v4) {
+    {
       // Authentication and replay admission need no runtime state, and
       // admission may wait for the replay writer: keep snapshot() and
       // events() unblocked meanwhile. udp_loop is the only receiver, so
@@ -301,11 +303,9 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
         }
       } relock{lock, lock_wait_ms, unlock_at};
       m = receive_v4(*replay_, payload, keys, receipt);
-    } else
-      m = Json::parse(payload);
+    }
     if (!m.is_object())
       throw std::runtime_error("packet must be an object");
-    if (!v4) m.erase("_packet_gap");
     if (m.contains("sample_rate_hz") &&
         (!m["sample_rate_hz"].is_number_integer() ||
          number(m, "sample_rate_hz") < 1 || number(m, "sample_rate_hz") > 100))
@@ -319,36 +319,27 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
          number(m, "monotonic_us") < 0 ||
          number(m, "monotonic_us") > 9007199254740991.0))
       throw std::runtime_error("invalid sample timestamp");
-    if (!m.contains("version") || !m["version"].is_number_integer())
-      throw std::runtime_error("missing version");
-    int version = m["version"];
-    if (version < 1 || version > 3)
-      throw std::runtime_error("unsupported wire version");
-    auto type = string(m, "type", "telemetry"),
-         sim = string(m, "simulator", version == 1 ? "ACC" : "");
+    auto type = string(m, "type", "telemetry"), sim = string(m, "simulator");
     if (!sim.empty() && sim != "ACC" && sim != "AC" && sim != "ACE" &&
         sim != "iRacing")
       throw std::runtime_error("invalid simulator");
     auto daemon = string(m, "state");
     Json frame;
     if (type == "status") {
-      if (v4) {
-        state_["schema_version"] = 4;
-        state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
-        if (m.contains("session_id")) state_["session_id"] = m["session_id"];
-        for (const char *key : {"track_name", "car_model", "driver_name", "session_name",
-                                "steering_lock_deg"})
-          if (m.contains(key)) state_[key] = m[key];
-      }
+      state_["schema_version"] = 4;
+      state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
+      if (m.contains("session_id")) state_["session_id"] = m["session_id"];
+      for (const char *key : {"track_name", "car_model", "driver_name", "session_name",
+                              "steering_lock_deg"})
+        if (m.contains(key)) state_[key] = m[key];
       // "paused" (#15) is a live run with a gap (pause/menu/alt-tab): the
       // companion still considers the recording open, so it is accepted like
       // "driving" below rather than finalizing the session.
-      if (version < 2 ||
-          (daemon != "waiting" && daemon != "ready" && daemon != "driving" &&
-           daemon != "paused"))
+      if (daemon != "waiting" && daemon != "ready" && daemon != "driving" &&
+          daemon != "paused")
         throw std::runtime_error("invalid heartbeat");
     } else if (type == "telemetry") {
-      frame = m.value("telemetry", version == 3 ? Json() : m);
+      frame = m.value("telemetry", Json());
       if (!frame.is_object() || sim.empty())
         throw std::runtime_error("invalid telemetry object");
       for (const auto *key :
@@ -382,7 +373,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
           throw std::runtime_error("oversized channel text");
       }
       for (const auto *key : {"throttle", "brake"})
-        if (frame.contains(key) && !(v4 && frame[key].is_null()) &&
+        if (frame.contains(key) && !frame[key].is_null() &&
             (!frame[key].is_number() || number(frame, key) < 0 ||
              number(frame, key) > 1.001))
           throw std::runtime_error("invalid pedal");
@@ -406,11 +397,6 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
           number(m, "sequence") > 9007199254740991.0)
         throw std::runtime_error("invalid sequence");
       sequence = m["sequence"];
-      // Reject before changing liveness or finalizing the current recording.
-      if (!v4 && identity == session_ && sequence_ >= 0 && sequence <= sequence_) {
-        state_["packets_replayed"] = number(state_, "packets_replayed") + 1;
-        return false;
-      }
     }
     source_ = host;
     last_packet_ = monotonic();
@@ -434,7 +420,6 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
         recorder_.finish();
         last_recording_packet_ = 0;
         last_recording_heartbeat_ = 0;
-        recording_legacy_ = false;
         last_sample_ = 0;
         state_["session_active"] = false;
         state_["session_id"] = Json();
@@ -443,13 +428,13 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       } else {
         last_recording_heartbeat_ = monotonic();
       }
-      if (v4 && m.contains("session_id") && m["session_id"].is_string())
+      if (m.contains("session_id") && m["session_id"].is_string())
         state_["session_id"] = m["session_id"];
       record_lag(m);
       record_timing();
       return true;
     }
-    if (identity != session_ && version == 3)
+    if (identity != session_)
       recorder_.finish("session_changed");
     if (identity != session_) {
       session_ = identity;
@@ -471,26 +456,8 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
             "delta_ms"})
         state_[key] = nullptr;
     }
-    if (sequence >= 0) {
-      if (!v4 && sequence_ >= 0) {
-        auto gap = sequence - sequence_ - 1;
-        m["_packet_gap"] = std::min<std::int64_t>(gap, 1000000);
-        state_["packets_lost"] = number(state_, "packets_lost") + gap;
-      }
+    if (sequence >= 0)
       sequence_ = sequence;
-    }
-    // The deployed v3 companion does not send session IDs or timestamps. Supply
-    // local identity/time for recording and charts without inventing wire
-    // sequence numbers or claiming packet-loss measurements for that older
-    // sender.
-    if (version == 3 && session.empty()) {
-      const auto status = recorder_.status();
-      const auto id = status.find("session_id");
-      m["session_id"] = id != status.end() && id->is_string()
-                            ? *id : Json(unique_id());
-    }
-    if (!m.contains("monotonic_us"))
-      m["monotonic_us"] = std::uint64_t(monotonic() * 1000000);
     sectors(frame);
     for (auto it = frame.begin(); it != frame.end(); ++it)
       if (live_channels().contains(it.key()) && state_.contains(it.key()))
@@ -500,9 +467,8 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
     last_sample_ = monotonic();
     last_recording_packet_ = last_sample_;
     last_recording_heartbeat_ = last_sample_;
-    recording_legacy_ = version == 3 && session.empty() && sequence < 0;
-    state_["schema_version"] = v4 ? 4 : version;
-    if (v4) state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
+    state_["schema_version"] = 4;
+    state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
     state_["last_sequence"] = sequence < 0 ? Json() : Json(sequence);
     state_["last_monotonic_us"] = m.value("monotonic_us", Json());
     state_["session_id"] = m.value("session_id", Json());
@@ -510,32 +476,30 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
     state_["session_name"] = m.value("session_name", Json());
     record_lag(m);
     m.erase("_received_monotonic");
-    if (version == 3) {
-      m["telemetry"] = frame;
-      try {
-        // CPU work and the handoff to the recorder's writer thread only
-        // (#17 step 8): the actual spool write, fsync and checkpoint run off
-        // this lock. record_timing() below still counts this handoff as
-        // part of process_ms, since it happens before the sample is visible.
-        recorder_.record(m);
-      } catch (const std::exception &e) {
-        log(std::string("ERROR recording: ") + e.what());
-      }
-      Json values = Json::object();
-      for (auto it = frame.begin(); it != frame.end(); ++it)
-        if (it.value().is_number())
-          values[it.key()] = it.value();
-      Json event = {{"type", "sample"},
-                    {"session_id", m.value("session_id", Json())},
-                    {"sequence", m.value("sequence", Json())},
-                    {"monotonic_us", m.value("monotonic_us", Json())},
-                    {"received_monotonic", monotonic()},
-                    {"packet_gap", m.value(v4 ? "_wire_gap" : "_packet_gap", 0)},
-                    {"values", values}};
-      events_.emplace_back(next_event_++, std::move(event));
-      if (events_.size() > 12256)
-        events_.pop_front();
+    m["telemetry"] = frame;
+    try {
+      // CPU work and the handoff to the recorder's writer thread only
+      // (#17 step 8): the actual spool write, fsync and checkpoint run off
+      // this lock. record_timing() below still counts this handoff as
+      // part of process_ms, since it happens before the sample is visible.
+      recorder_.record(m);
+    } catch (const std::exception &e) {
+      log(std::string("ERROR recording: ") + e.what());
     }
+    Json values = Json::object();
+    for (auto it = frame.begin(); it != frame.end(); ++it)
+      if (it.value().is_number())
+        values[it.key()] = it.value();
+    Json event = {{"type", "sample"},
+                  {"session_id", m.value("session_id", Json())},
+                  {"sequence", m.value("sequence", Json())},
+                  {"monotonic_us", m.value("monotonic_us", Json())},
+                  {"received_monotonic", monotonic()},
+                  {"packet_gap", m.value("_wire_gap", 0)},
+                  {"values", values}};
+    events_.emplace_back(next_event_++, std::move(event));
+    if (events_.size() > 12256)
+      events_.pop_front();
     // Everything above that can affect what a concurrent snapshot() reads is
     // done: process_ms/lock_wait_ms now cover receipt-to-visible in full,
     // including the recorder handoff just above (#17).
@@ -563,13 +527,11 @@ void Runtime::expire() {
   // A proper non-driving status still finalizes immediately above.  Otherwise
   // retain the durable spool for a bounded interval so the sender can resume.
   if (last_packet_ && timestamp - last_packet_ > 1.5) {
-    if (!recording_legacy_) {
-      recorder_.finish("disconnected");
-      last_recording_packet_ = 0;
-      last_recording_heartbeat_ = 0;
-      sequence_ = -1;
-      session_.clear();
-    }
+    recorder_.finish("disconnected");
+    last_recording_packet_ = 0;
+    last_recording_heartbeat_ = 0;
+    sequence_ = -1;
+    session_.clear();
     for (const auto *key :
          {"rpm", "steering_angle", "steering_lock_deg", "g_x", "g_y", "g_z",
           "throttle", "brake", "companion_daemon_state", "companion_source_host"})
@@ -600,7 +562,6 @@ void Runtime::expire() {
       recorder_.finish("disconnected");
       last_recording_packet_ = 0;
       last_recording_heartbeat_ = 0;
-      recording_legacy_ = false;
       sequence_ = -1;
       session_.clear();
     }

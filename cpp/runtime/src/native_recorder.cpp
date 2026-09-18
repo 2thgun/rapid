@@ -1,4 +1,5 @@
 #include "rapid/native.hpp"
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <fstream>
@@ -186,6 +187,32 @@ void write_ldx(const fs::path &path, const Json &laps, int rate) {
   out << "</Details></Layers></LDXFile>\n";
   atomic_file(path, out.str());
 }
+// Durability on slow storage. A checkpoint must sync every channel file
+// before its spool.json can count the rows (invariant R1), and doing that
+// one fsync at a time costs one sync latency per channel: with ~48 channels
+// and a slow card that one checkpoint outlives the sample cadence, the writer
+// falls behind and the durable prefix slips past the 2 s bound (#17). Sync the
+// files concurrently instead, so a checkpoint costs about one sync latency per
+// worker. Each worker owns a disjoint set of streams; the caller joins them
+// before touching the handles again, so the write-before-sync-then-spool.json
+// ordering is unchanged.
+void sync_streams(const std::vector<FILE *> &streams) {
+  const std::size_t workers = std::min<std::size_t>(streams.size(), 8);
+  std::vector<std::string> errors(workers);
+  std::vector<std::thread> threads;
+  threads.reserve(workers);
+  for (std::size_t w = 0; w < workers; ++w)
+    threads.emplace_back([&, w] {
+      for (std::size_t i = w; i < streams.size(); i += workers)
+        if (std::fflush(streams[i]) || fsync(fileno(streams[i])))
+          errors[w] = "spool sync failed";
+    });
+  for (auto &thread : threads)
+    thread.join();
+  for (const auto &error : errors)
+    if (!error.empty())
+      throw std::runtime_error(error);
+}
 } // namespace
 
 // Storage for the recorder, off the receive path. Jobs run strictly in
@@ -242,6 +269,35 @@ struct Recorder::Writer {
     {
       std::lock_guard lock(mutex);
       jobs.push_back(std::move(job));
+    }
+    wake.notify_all();
+  }
+  // Queue a checkpoint, merging into a checkpoint that is already waiting
+  // rather than queueing another. At most one checkpoint is ever queued, so
+  // the writer always writes the newest complete state and a slow sync can
+  // never let the durable prefix fall a whole backlog of small checkpoints
+  // behind. Merging appends rows and replaces the state, which keeps the
+  // job's row count and its spool.json sample_count equal; a finalize or an
+  // open job belongs to a different moment and is never merged into.
+  void submit_checkpoint(const fs::path &spool, std::vector<float> rows,
+                         Json state) {
+    const auto samples = rows.size() / channel_count;
+    {
+      std::lock_guard lock(mutex);
+      queued_rows += samples;
+      if (!jobs.empty() && jobs.back().kind == Kind::checkpoint &&
+          jobs.back().spool == spool) {
+        auto &back = jobs.back();
+        back.rows.insert(back.rows.end(), rows.begin(), rows.end());
+        back.state = std::move(state);
+      } else {
+        Job job;
+        job.kind = Kind::checkpoint;
+        job.spool = spool;
+        job.rows = std::move(rows);
+        job.state = std::move(state);
+        jobs.push_back(std::move(job));
+      }
     }
     wake.notify_all();
   }
@@ -317,9 +373,7 @@ struct Recorder::Writer {
       }
       job.rows.clear();
     }
-    for (auto *f : streams)
-      if (std::fflush(f) || fsync(fileno(f)))
-        throw std::runtime_error("spool sync failed");
+    sync_streams(streams);
     atomic_file(job.spool / "spool.json", job.state.dump());
     if (job.kind != Kind::finalize)
       return;
@@ -432,8 +486,7 @@ void Recorder::start(const Json &message) {
 }
 void Recorder::checkpoint() {
   checkpoint_["upload_after_session"] = upload_;
-  writer_->submit(
-      {Writer::Kind::checkpoint, spool_, std::move(rows_), checkpoint_, {}});
+  writer_->submit_checkpoint(spool_, std::move(rows_), checkpoint_);
   rows_.clear();
 }
 void Recorder::write_frame(const Json &frame, bool substituted) {

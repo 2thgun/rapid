@@ -29,6 +29,11 @@ std::string unique_id();
 std::string read_file(const fs::path &path);
 void sync_file(const fs::path &path);
 void atomic_file(const fs::path &path, const std::string &data);
+// #31: like atomic_file(), but the file is created with `mode` from its first
+// byte (O_CREAT|O_EXCL with that mode, then fchmod before the rename), so a
+// secret or privileged-read request/result file is never momentarily
+// group/other-accessible. Use the 2-argument form for non-sensitive files.
+void atomic_file(const fs::path &path, const std::string &data, fs::perms mode);
 std::string hash_file(const fs::path &path);
 std::string hash_text(const std::string &data);
 std::string safe_name(std::string value);
@@ -192,7 +197,6 @@ class Runtime {
   // recording open (state "driving" or "paused"), used by expire() to
   // distinguish a sim pause/menu/alt-tab gap from a lost connection.
   double last_recording_heartbeat_ = 0;
-  bool recording_legacy_ = false;
   std::int64_t sequence_ = -1;
   int timing_lap_ = -1, best_lap_ = 0;
   std::vector<int> splits_;

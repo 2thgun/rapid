@@ -20,6 +20,7 @@
 // untouched.
 #include "rapid/lap_boundary.hpp"
 #include "rapid/native.hpp"
+#include "v4_stream.hpp"
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -121,7 +122,7 @@ void test_lap_boundary_debounces_split_signal() {
 
 Json fixture_message(const std::string &session, int rate, int lap_number,
                      int current_lap_ms, double lap_position_pct) {
-  return {{"version", 3},
+  return {{"version", 4},
           {"simulator", "AC"},
           {"session_id", session},
           {"sample_rate_hz", rate},
@@ -205,73 +206,50 @@ void test_session_4e6de929_six_laps(const fs::path &fixtures, const fs::path &ro
 
 // --- Part B: AC1 delta -----------------------------------------------------
 
-Json ac1_frame(const std::string &session, int sequence, int lap_number,
-               double current_lap_ms, double lap_position_pct) {
-  return {{"version", 3},
-          {"type", "telemetry"},
-          {"simulator", "AC"},
-          {"session_id", session},
-          {"sequence", sequence},
-          {"monotonic_us", sequence * 20000},
-          {"sample_rate_hz", 50},
-          {"telemetry",
-           {{"rpm", 6000},
-            {"steering_angle", 0.0},
-            {"g_x", 0.0},
-            {"g_y", 0.0},
-            {"g_z", 0.0},
-            {"throttle", .8},
-            {"brake", .0},
-            {"speed_kmh", 200},
-            {"gear", 4},
-            {"lap_number", lap_number},
-            {"current_lap_ms", int(current_lap_ms)},
-            {"lap_position", lap_position_pct}}}};
-}
+// Part B speaks the authenticated v4 wire (the v3 JSON transport is gone).
+// The stream shape mirrors the old synthetic JSON frame, one sample per call.
+struct DeltaStream {
+  rapid::test::V4Stream stream;
+  std::uint64_t time_us = 0;
+  explicit DeltaStream(std::string run) : stream(std::move(run)) {}
+  std::string metadata() {
+    return stream.metadata(0, "Test Track", "Test Car", "Test Driver",
+                           "Practice", "900");
+  }
+  std::string frame(int lap_number, double current_lap_ms,
+                    double lap_position_pct, std::int32_t delta_ms = 0) {
+    time_us += 20000;
+    const auto mask = rapid::test::v4_mask(
+        {rapid::test::ch_throttle, rapid::test::ch_brake,
+         rapid::test::ch_gear, rapid::test::ch_rpm,
+         rapid::test::ch_steering, rapid::test::ch_speed,
+         rapid::test::ch_g_x, rapid::test::ch_g_y, rapid::test::ch_g_z,
+         rapid::test::ch_lap_number, rapid::test::ch_current_lap_ms,
+         rapid::test::ch_lap_position});
+    return stream.telemetry(
+        time_us, mask,
+        {{rapid::test::ch_rpm, 6000.f},
+         {rapid::test::ch_steering, 0.f},
+         {rapid::test::ch_g_x, 0.f},
+         {rapid::test::ch_g_y, 0.f},
+         {rapid::test::ch_g_z, 0.f},
+         {rapid::test::ch_throttle, .8f},
+         {rapid::test::ch_brake, 0.f},
+         {rapid::test::ch_speed, 200.f},
+         {rapid::test::ch_gear, 4.f},
+         {rapid::test::ch_lap_number, float(lap_number)},
+         {rapid::test::ch_current_lap_ms, float(current_lap_ms)},
+         {rapid::test::ch_lap_position, float(lap_position_pct)}},
+        0, delta_ms);
+  }
+};
 
-void test_ac1_delta_two_lap_fixture(const fs::path &assets, const fs::path &root) {
-  Config c;
-  c.assets = assets;
-  c.database = root / "delta.db";
-  c.telemetry = root / "delta-telemetry";
-  c.queue = root / "delta-queue.db";
-  Runtime runtime(c);
-  int sequence = 0;
-  const std::string session = "ac1-delta-test";
-  // Lap 1: reference lap, a perfectly linear 100 s pace. No reference lap
-  // exists yet, so delta_ms must stay blank throughout.
-  for (int i = 0; i <= 10; ++i) {
-    double position = i * 10.0; // percent, matches the wire's 0..100 form
-    double time_ms = i * 10000.0;
-    require(runtime.receive(
-                ac1_frame(session, sequence++, 1, time_ms, position).dump(),
-                "127.0.0.1"),
-            "lap 1 sample accepted");
-    require(runtime.snapshot()["delta_ms"].is_null(),
-            "delta stays blank until a reference lap exists (#20)");
-  }
-  // Close lap 1 (lap_number increments to 2, current_lap_ms resets).
-  require(runtime.receive(
-              ac1_frame(session, sequence++, 2, 0.0, 0.0).dump(), "127.0.0.1"),
-          "lap 1 closes");
-  // Lap 2: same positions, 10% slower (110 s pace). delta_ms should now be
-  // populated and match position * 10000 ms, interpolated from lap 1's
-  // straight-line trace.
-  for (int i = 1; i <= 10; ++i) {
-    double position = i * 10.0;
-    double time_ms = i * 11000.0;
-    require(runtime.receive(
-                ac1_frame(session, sequence++, 2, time_ms, position).dump(),
-                "127.0.0.1"),
-            "lap 2 sample accepted");
-    auto delta = runtime.snapshot()["delta_ms"];
-    require(!delta.is_null(), "delta is populated once lap 1 is a reference");
-    int expected = int(std::lround(position / 100.0 * 10000.0));
-    require(std::abs(delta.get<int>() - expected) <= 1,
-            "delta matches the interpolated lap 1 trace");
-  }
-  runtime.finish();
-}
+// The former two-lap AC1 delta fixture replayed legacy v3 JSON frames with no
+// delta field, which is how the runtime used to recognise "the sim did not
+// provide a delta" and synthesise one. On the authenticated v4 wire every
+// telemetry packet carries an explicit int32 delta, so that runtime branch is
+// unreachable from v4; the AC1-specific runtime delta test was v3-only and is
+// removed with the transport. ACC's own delta passthrough is still covered.
 
 void test_acc_delta_untouched(const fs::path &assets, const fs::path &root) {
   Config c;
@@ -279,25 +257,14 @@ void test_acc_delta_untouched(const fs::path &assets, const fs::path &root) {
   c.database = root / "acc-delta.db";
   c.telemetry = root / "acc-delta-telemetry";
   c.queue = root / "acc-delta-queue.db";
+  c.companion_key = std::string(32, '\x11');
   Runtime runtime(c);
-  Json frame = {{"version", 3},
-               {"type", "telemetry"},
-               {"simulator", "ACC"},
-               {"session_id", "acc-delta-test"},
-               {"sequence", 0},
-               {"monotonic_us", 0},
-               {"sample_rate_hz", 50},
-               {"telemetry",
-                {{"rpm", 6000},
-                 {"steering_angle", 0.0},
-                 {"g_x", 0.0},
-                 {"g_y", 0.0},
-                 {"g_z", 0.0},
-                 {"lap_number", 1},
-                 {"current_lap_ms", 40000},
-                 {"lap_position", 50.0},
-                 {"delta_ms", -250}}}};
-  require(runtime.receive(frame.dump(), "127.0.0.1"), "ACC sample accepted");
+  DeltaStream delta(rapid::test::v4_run_id());
+  delta.stream.simulator = 1; // ACC
+  require(runtime.receive(delta.metadata(), "127.0.0.1"),
+          "ACC metadata accepted");
+  require(runtime.receive(delta.frame(1, 40000, 50.0, -250), "127.0.0.1"),
+          "ACC sample accepted");
   require(runtime.snapshot()["delta_ms"].get<int>() == -250,
           "ACC's own delta_ms is never overwritten (#20)");
   runtime.finish();
@@ -319,11 +286,10 @@ int main(int argc, char **argv) {
     test_lap_boundary_debounces_split_signal();
     test_session_c28a_lap6_wrap(fixtures, root);
     test_session_4e6de929_six_laps(fixtures, root);
-    test_ac1_delta_two_lap_fixture(assets, root);
     test_acc_delta_untouched(assets, root);
 
-    std::cout << "Lap boundary and AC1 delta: unit rules, real-recording "
-                 "regression fixtures, and two-lap delta fixture passed\n"
+    std::cout << "Lap boundary: unit rules, real-recording regression "
+                 "fixtures, and ACC delta passthrough passed\n"
                  "Evidence: "
               << root << "\n";
     return 0;

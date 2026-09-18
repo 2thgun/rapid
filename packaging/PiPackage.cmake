@@ -7,6 +7,18 @@ endif()
 install(TARGETS rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot rapid-provision rapid-apply rapid-display-recovery rapid-wifi rapid-account
         RUNTIME DESTINATION lib/rapid)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/" DESTINATION share/rapid)
+# #10: bundle the Windows companion (built from the same revision) so
+# rapid-setup-server can serve it, unauthenticated, at /companion/download.
+# The service passes this directory, not the file, so the release can ship a
+# portable .exe or an .msi without editing the unit. A supplied-but-missing
+# path is a hard error: a package that claims a download but cannot serve it
+# is the stale-artifact failure this task exists to avoid.
+if(RAPID_COMPANION_ARTIFACT)
+  if(NOT EXISTS "${RAPID_COMPANION_ARTIFACT}")
+    message(FATAL_ERROR "RAPID_COMPANION_ARTIFACT does not exist: ${RAPID_COMPANION_ARTIFACT}")
+  endif()
+  install(FILES "${RAPID_COMPANION_ARTIFACT}" DESTINATION share/rapid/companion)
+endif()
 install(PROGRAMS "${CMAKE_CURRENT_LIST_DIR}/rapid-network-mode"
         DESTINATION lib/rapid)
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/config.toml" DESTINATION /etc/rapid)

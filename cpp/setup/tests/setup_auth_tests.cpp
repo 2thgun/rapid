@@ -5,11 +5,18 @@
 #include <iomanip>
 #include <openssl/evp.h>
 #include <sstream>
+#include <sys/stat.h>
 
 using namespace rapid::native;
 namespace {
 void require(bool value, const char *message) {
   if (!value) throw std::runtime_error(message);
+}
+// #31: the mode each request/status file has as soon as it is created.
+unsigned mode_of(const fs::path &path) {
+  struct stat info {};
+  require(::lstat(path.c_str(), &info) == 0, "stat request file");
+  return info.st_mode & 07777;
 }
 struct TemporaryDirectory {
   fs::path path = fs::temp_directory_path() / ("rapid-auth-tests-" + unique_id());
@@ -75,6 +82,8 @@ int main() {
                   cleared_status["state"] == "settings_application_required" &&
                   !cleared_status.contains("bootstrap"),
               "owner enrollment clears physical bootstrap details immediately");
+      require(mode_of(bootstrap_status) == 0640,
+              "owner enrollment rewrites the bootstrap status owner/group-readable only");
       require(ap.handle(enroll_request).status == 403,
               "AP enrollment rejects a loopback Host or Origin");
       require(fresh.snapshot()["setup_complete"] == false,
@@ -151,6 +160,42 @@ int main() {
                 public_setup["capabilities"]["settings_write"] == true,
             "new device has no default owner and advertises saved-profile writes");
     require(auth.handle(request("/api/v1/settings")).status == 401, "settings require owner login");
+    // #10: the companion download is a public static file, deliberately above
+    // the owner-session gate, so a fresh owner can fetch it before pairing.
+    {
+      const auto companion_dir = root.path / "companion";
+      fs::create_directory(companion_dir);
+      const auto artifact = companion_dir / "raPId-Companion.msi";
+      const std::string bytes = "MZ fake companion payload";
+      { std::ofstream out(artifact, std::ios::binary | std::ios::trunc); out << bytes; }
+      auto download = request("/companion/download");
+      require(auth.handle(download).status == 404, "no companion is served before one is installed");
+      auth.set_companion_artifact(companion_dir);
+      const auto advertised = Json::parse(auth.handle(request("/api/v1/setup")).body);
+      require(advertised["capabilities"]["companion_download"] == true &&
+                  advertised["companion"]["url"] == "/companion/download" &&
+                  advertised["companion"]["filename"] == "raPId-Companion.msi" &&
+                  advertised["companion"]["sha256"].get<std::string>().size() == 64,
+              "an installed companion is advertised with name, URL and SHA-256");
+      auto served = auth.handle(download);
+      require(served.status == 200 && served.body == bytes,
+              "the companion downloads without a session");
+      require(served.type == "application/x-msi", "an MSI companion uses the MSI content type");
+      const auto portable = companion_dir / "rapid-telemetry-daemon.exe";
+      { std::ofstream out(portable, std::ios::binary | std::ios::trunc); out << bytes; }
+      auth.set_companion_artifact(portable);
+      auto exe = auth.handle(download);
+      require(exe.status == 200 && exe.type == "application/vnd.microsoft.portable-executable",
+              "a portable companion uses the portable-executable content type");
+      // Ambiguity or a missing file serves nothing rather than a guess.
+      auth.set_companion_artifact(companion_dir);
+      require(auth.handle(download).status == 404, "an ambiguous companion directory serves nothing");
+      auth.set_companion_artifact(root.path / "companion-does-not-exist");
+      require(auth.handle(download).status == 404 &&
+                  Json::parse(auth.handle(request("/api/v1/setup")).body)
+                      ["capabilities"]["companion_download"] == false,
+              "a missing companion clears the download capability");
+    }
     bool rejected = false;
     try { auth.enroll("short"); } catch (const std::invalid_argument &) { rejected = true; }
     require(rejected, "short owner password rejected");
@@ -191,6 +236,8 @@ int main() {
     require(auth.handle(start_calibration).status == 200 && fs::exists(calibration_request) &&
                 read_file(calibration_request).find("key") == std::string::npos,
             "owner can start calibration on the Pi display through a key-free request");
+    require(mode_of(calibration_request) == 0600,
+            "the panel calibration request is owner-only from creation");
     require(login.headers[0].second.find("HttpOnly; SameSite=Strict") != std::string::npos,
             "session cookie has browser protections");
     auto settings = request("/api/v1/settings");
@@ -209,6 +256,8 @@ int main() {
     const auto queued = Json::parse(read_file(apply_directory / "request.json"));
     require(queued["revision"] == 8 && queued["settings"]["hostname"] == "rapid-renamed",
             "validated settings save queues the exact root application request");
+    require(mode_of(apply_directory / "request.json") == 0600,
+            "the settings application request is owner-only from creation");
     response = Json::parse(auth.handle(settings).body);
     require(response["revision"] == 8 && response["settings"]["hostname"] == "rapid-renamed" &&
                 response["settings"]["rotation"] == 180 && response["applied"] == false &&
@@ -242,6 +291,8 @@ int main() {
     require(auth.handle(confirm_display).status == 202 &&
                 Json::parse(read_file(display_confirm))["revision"] == 8,
             "owner can keep a previewed orientation from the browser");
+    require(mode_of(display_confirm) == 0600,
+            "the orientation confirmation request is owner-only from creation");
     atomic_file(apply_result, Json{{"revision", 8}, {"hostname_applied", true}, {"rotation", "confirmed"},
                                   {"pending", Json::array({"wifi"})}}.dump());
     require(auth.handle(confirm_display).status == 409, "a kept orientation cannot be confirmed again");
@@ -250,6 +301,8 @@ int main() {
             "matching settings and Home Wi-Fi completion finish onboarding persistently");
     require(Json::parse(read_file(completion_status))["state"] == "complete",
             "first-boot status records completed onboarding for local recovery surfaces");
+    require(mode_of(completion_status) == 0640,
+            "the rewritten first-boot status stays owner/group-readable only");
     auto retry = request("/api/v1/settings/retry", "POST", {{"revision", 8}});
     retry.headers["cookie"] = session_cookie;
     require(auth.handle(retry).status == 403, "settings retry requires CSRF token");

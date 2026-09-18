@@ -150,6 +150,28 @@ stage_package
 replace_in "$units/rapid-display-recovery.service" '^ProtectSystem=strict$' ''
 expect_fail "a display recovery helper with a widened sandbox" "rapid-display-recovery.service must keep ProtectSystem=strict and grant ReadWritePaths=/var/lib/rapid"
 
+# #32: systemd accumulates repeated ReadWritePaths=/RuntimeDirectory= directives,
+# so the generic cross-check must consider every line, not only the first. This
+# unit's required result path is moved to a second ReadWritePaths line: it must
+# still pass, where reading only the first line would reject it by accident.
+stage_package
+replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/run/rapid-apply$' 'ReadWritePaths=/run/unused-first-line'
+printf '\nReadWritePaths=/run/rapid-apply\n' >> "$units/rapid-wifi.service"
+expect_pass "a result path granted only on a later ReadWritePaths line"
+
+# The same required path listed on no ReadWritePaths line must still fail.
+stage_package
+replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/run/rapid-apply$' 'ReadWritePaths=/run/unused-first-line'
+replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/etc/NetworkManager/system-connections$' 'ReadWritePaths=/run/unused-second-line'
+expect_fail "a Wi-Fi helper whose result path is granted nowhere" "does not grant write access to /run/rapid-apply/wifi-result.json"
+
+# RuntimeDirectory= is gathered the same way: a grant moved to a later line is
+# still a grant.
+stage_package
+replace_in "$units/rapid-firstboot.service" '^RuntimeDirectory=rapid$' 'RuntimeDirectory=unused'
+printf '\nRuntimeDirectory=rapid\n' >> "$units/rapid-firstboot.service"
+expect_pass "a required path covered only by a later RuntimeDirectory line"
+
 stage_package
 replace_in "$units/rapid-provision.service" '^Group=rapid$' ''
 expect_fail "a provisioner that leaves /run/rapid unreadable by the rapid group" "share /run/rapid with the rapid group"
