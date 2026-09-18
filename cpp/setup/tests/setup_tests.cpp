@@ -1,6 +1,7 @@
 #include "rapid/setup.hpp"
 #include <fstream>
 #include <iostream>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -14,6 +15,12 @@ template <class F> void rejects(F action, const char *message) {
   bool rejected = false;
   try { action(); } catch (const std::exception &) { rejected = true; }
   require(rejected, message);
+}
+// #31: the exact mode each privileged-read/secret file has at creation.
+unsigned mode_of(const fs::path &path) {
+  struct stat info {};
+  require(::lstat(path.c_str(), &info) == 0, "stat private file");
+  return info.st_mode & 07777;
 }
 struct TemporaryDirectory {
   fs::path path = fs::temp_directory_path() / ("rapid-setup-tests-" + unique_id());
@@ -52,8 +59,11 @@ int main(int argc, char **argv) {
     const auto private_key_file = firstboot_directory / "device.key";
     require(fs::file_size(certificate_file) > 0 && fs::file_size(private_key_file) > 0 &&
                 (fs::status(private_key_file).permissions() & fs::perms::group_all) == fs::perms::none &&
-                (fs::status(private_key_file).permissions() & fs::perms::others_all) == fs::perms::none,
-            "first boot creates a persistent private TLS identity");
+                (fs::status(private_key_file).permissions() & fs::perms::others_all) == fs::perms::none &&
+                mode_of(private_key_file) == 0600,
+            "first boot creates a persistent private TLS identity at mode 0600 from creation");
+    require(mode_of(firstboot_status) == 0640,
+            "first-boot status is created group-rapid readable, never group/other writable");
     const auto activation = bootstrap["bootstrap"]["activation_token"].get<std::string>();
     const auto certificate_bytes = read_file(certificate_file);
     require(activation.size() == 64 &&
@@ -69,8 +79,9 @@ int main(int argc, char **argv) {
                 !bootstrap["bootstrap"].contains("access_point_password"),
             "first boot no longer generates a device-specific SSID or AP passphrase");
     require((fs::status(token_file).permissions() & fs::perms::group_all) == fs::perms::none &&
-                (fs::status(token_file).permissions() & fs::perms::others_all) == fs::perms::none,
-            "activation token stays private");
+                (fs::status(token_file).permissions() & fs::perms::others_all) == fs::perms::none &&
+                mode_of(token_file) == 0600,
+            "activation token stays private at mode 0600 from creation");
     const auto legacy_ap_password = firstboot_directory / "ap-password";
     atomic_file(legacy_ap_password, "0123456789abcdef\n");
     require(fs::exists(legacy_ap_password), "legacy AP password fixture is in place before re-running first boot");

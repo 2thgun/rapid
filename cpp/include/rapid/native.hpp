@@ -29,6 +29,11 @@ std::string unique_id();
 std::string read_file(const fs::path &path);
 void sync_file(const fs::path &path);
 void atomic_file(const fs::path &path, const std::string &data);
+// #31: like atomic_file(), but the file is created with `mode` from its first
+// byte (O_CREAT|O_EXCL with that mode, then fchmod before the rename), so a
+// secret or privileged-read request/result file is never momentarily
+// group/other-accessible. Use the 2-argument form for non-sensitive files.
+void atomic_file(const fs::path &path, const std::string &data, fs::perms mode);
 std::string hash_file(const fs::path &path);
 std::string hash_text(const std::string &data);
 std::string safe_name(std::string value);

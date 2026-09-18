@@ -8,6 +8,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <sstream>
+#include <sys/stat.h>
 #include <toml++/toml.h>
 #include <unistd.h>
 
@@ -69,6 +70,35 @@ void atomic_file(const fs::path &path, const std::string &data) {
   out.close();
   sync_file(temp);
   fs::rename(temp, path);
+  sync_file(path.parent_path());
+}
+void atomic_file(const fs::path &path, const std::string &data, fs::perms mode) {
+  fs::create_directories(path.parent_path());
+  auto temp = path;
+  temp += "." + unique_id() + ".part";
+  const auto bits = static_cast<mode_t>(mode) & 0777;
+  // Mode 0600/0640 has no group/other write bits, so umask cannot widen it.
+  const int descriptor =
+      ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, bits);
+  if (descriptor < 0)
+    throw std::runtime_error("cannot create " + path.string());
+  bool ok = true;
+  for (std::size_t written = 0; ok && written < data.size();) {
+    const auto sent = ::write(descriptor, data.data() + written, data.size() - written);
+    if (sent <= 0) {
+      ok = false;
+      break;
+    }
+    written += static_cast<std::size_t>(sent);
+  }
+  if (ok)
+    ok = ::fchmod(descriptor, bits) == 0 && fsync(descriptor) == 0;
+  if (::close(descriptor) != 0)
+    ok = false;
+  if (!ok || ::rename(temp.c_str(), path.c_str()) != 0) {
+    ::unlink(temp.c_str());
+    throw std::runtime_error("cannot write " + path.string());
+  }
   sync_file(path.parent_path());
 }
 static std::string digest(EVP_MD_CTX *ctx) {
