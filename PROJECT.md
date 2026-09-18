@@ -184,7 +184,7 @@ ctest --test-dir build/cpp --output-on-failure
 Report the number of targets that ran rather than quoting a count from an
 older document — the count grows as suites are added, and stale counts in
 prose are a recurring source of confusion. The Qt display regression
-(`node cpp/tests/qt_display_tests.js`) and the Windows companion
+(`node cpp/display/tests/qt_display_tests.js`) and the Windows companion
 self-test are part of the gate, not extras.
 
 Rules for the gate, each learned from a false result:

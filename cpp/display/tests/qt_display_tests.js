@@ -9,7 +9,8 @@
 // no equivalent wheel, steering or graph-freshness logic of its own to port
 // (it never had a copy of this file's checks either). Its own /telemetry and
 // WebSocket (?history= and ?mode=state) coverage lives in
-// cpp/tests/native_network_tests.cpp, next to the rest of the HTTP surface.
+// cpp/runtime/tests/native_network_tests.cpp, next to the rest of the HTTP
+// surface.
 const fs = require('fs');
 const path = require('path');
 const qmlSource = fs.readFileSync(path.join(__dirname, '../Main.qml'), 'utf8');

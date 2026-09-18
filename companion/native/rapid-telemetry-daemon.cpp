@@ -306,8 +306,9 @@ struct Channel {
 };
 
 // Keep this table's name/short_name/dec columns identical to
-// cpp/include/rapid/channels.inc (owned by s7-motec/#19); the companion
-// cannot #include that file because it is a separate Visual Studio project.
+// cpp/runtime/include/rapid/channels.inc (owned by s7-motec/#19); the
+// companion cannot #include that file because it is a separate Visual Studio
+// project.
 // unit/scale are owned per-channel by other steps (e.g. steering's unit is
 // s4-steering's/#18) and are intentionally left untouched here.
 constexpr std::array<Channel, field_count> kChannels{{
@@ -2862,7 +2863,7 @@ std::vector<std::uint8_t> cng_synthetic_private_blob(std::span<const std::uint8_
 // so the companion's byte order is pinned independently of the cross-
 // platform pairing interop fixtures: a regression here is caught even if a
 // fixture happened to still round-trip. The Pi/OpenSSL side has its own
-// independent RFC 7748 KAT in cpp/tests/pairing_tests.cpp
+// independent RFC 7748 KAT in cpp/pairing/tests/pairing_tests.cpp
 // (x25519_shared_secret(), which applies no reversal). Keys and expected
 // secret are the RFC's own published Alice/Bob test vectors, never a real
 // device identity.
@@ -2896,15 +2897,16 @@ struct PairingPiSealsFixture {
                 envelope_tag64, expected_plaintext;
 };
 
-// A snapshot of cpp/tests/pairing-fixtures-pi-seals/, embedded so this check
-// runs -- and can fail a build -- with no directory argument at all: every
+// A snapshot of cpp/pairing/tests/pairing-fixtures-pi-seals/, embedded so this
+// check runs -- and can fail a build -- with no directory argument at all: every
 // existing --self-test invocation (the synchronous local gate script most of
 // all; developer/Test-LocalCandidate.ps1 is a shared file this wave's rules
 // do not have a claim to edit) predates --pairing-pi-seals-fixtures and will
 // never pass it. The embedded values are exactly that fixture's real files,
 // produced once by the real Pi sealing code (seal_pairing_key(), via
-// cpp/tests/pairing_pi_seals_fixture_tests.cpp) with a fixed, obviously-
-// synthetic test companion key -- never a real device identity or key.
+// cpp/pairing/tests/pairing_pi_seals_fixture_tests.cpp) with a fixed,
+// obviously-synthetic test companion key -- never a real device identity or
+// key.
 // --pairing-pi-seals-fixtures overrides this with a directory holding a
 // freshly-produced fixture instead (verify.yml's Linux job produces one
 // every CI run and passes it to the Windows job).
@@ -2934,7 +2936,8 @@ const PairingPiSealsFixture& embedded_pairing_pi_seals_fixture() {
 // the direction a real pairing exchange actually uses, and the one the #14
 // byte-order bug originally broke. An empty fixtures path uses the embedded
 // snapshot above; otherwise fixtures/ holds the same files, freshly written
-// by the real Pi sealing code (cpp/tests/pairing_pi_seals_fixture_tests.cpp).
+// by the real Pi sealing code
+// (cpp/pairing/tests/pairing_pi_seals_fixture_tests.cpp).
 void pairing_pi_seals_interop_self_test(const fs::path& fixtures) {
     PairingPiSealsFixture loaded;
     const PairingPiSealsFixture* data = &embedded_pairing_pi_seals_fixture();
