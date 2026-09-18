@@ -693,6 +693,51 @@ std::string trim_ascii(std::string value) {
     return value.substr(first, last - first + 1);
 }
 
+// #10: manual-address pairing. The owner reads the address (and the TLS
+// fingerprint) off the Pi's own display or the setup page and types them at
+// the console, so reaching the pairing client never needs a memorised command
+// line. This fills the exact Options fields the --pairing-url flags fill and
+// then hands off to run_pairing(); no pairing logic is duplicated, and the
+// fingerprint/on-device approval checks are unchanged.
+std::wstring pairing_url_from_address(std::string address) {
+    address = trim_ascii(std::move(address));
+    if (address.empty()) throw std::runtime_error("pairing address is empty");
+    if (address.find("://") == std::string::npos) address = "https://" + address;
+    if (address.size() < 8 || address.compare(0, 8, "https://") != 0)
+        throw std::runtime_error("pairing address must be an https URL or a host[:port]");
+    return utf8_to_wide(address);
+}
+
+std::string default_pairing_label() {
+    std::array<wchar_t, 64> name{};
+    DWORD size = static_cast<DWORD>(name.size());
+    if (GetComputerNameW(name.data(), &size) && size > 0)
+        return wide_to_utf8(std::wstring_view(name.data(), size));
+    return "Windows PC";
+}
+
+// Fills the pairing options from prompts when they were not given as flags.
+// Piped stdin works too (`echo ADDRESS` / `echo FINGERPRINT` | daemon.exe
+// --pair), so the same entry point is scriptable and testable without a TTY.
+// Returns false on end of input, so a non-interactive run with no input can
+// never hang.
+bool complete_pairing_options(Options& options, std::istream& input, std::ostream& output) {
+    if (options.pairing_label.empty()) options.pairing_label = default_pairing_label();
+    if (options.pairing_url.empty()) {
+        output << "Pi address shown on its display (host, host:port, or https URL): " << std::flush;
+        std::string address;
+        if (!std::getline(input, address)) return false;
+        options.pairing_url = pairing_url_from_address(address);
+    }
+    if (options.pinned_certificate_fingerprint.empty()) {
+        output << "TLS fingerprint shown on the Pi's own display: " << std::flush;
+        std::string fingerprint;
+        if (!std::getline(input, fingerprint)) return false;
+        options.pinned_certificate_fingerprint = lower_ascii(trim_ascii(std::move(fingerprint)));
+    }
+    return true;
+}
+
 std::vector<std::uint8_t> decode_auth_key(std::string text, std::string_view source) {
     text = trim_ascii(std::move(text));
     if (text.size() != 64) {
@@ -911,7 +956,12 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (raw == L"--certificate-fingerprint") {
             options.pinned_certificate_fingerprint = lower_ascii(
                 wide_to_utf8(option_value(i, argc, argv, L"--certificate-fingerprint")));
-        } else if (raw == L"--pair" || raw == L"--pairing-url") {
+        } else if (raw == L"--pair") {
+            // #10: the manual-entry path. Without --pairing-url the address
+            // (and the pinned TLS fingerprint) are prompted for in wmain; with
+            // them this behaves exactly like --pairing-url.
+            options.pairing = true;
+        } else if (raw == L"--pairing-url") {
             options.pairing = true; options.pairing_url = option_value(i, argc, argv, L"--pairing-url");
         } else if (raw == L"--pairing-label") {
             options.pairing_label = wide_to_utf8(option_value(i, argc, argv, L"--pairing-label"));
@@ -936,6 +986,9 @@ Options parse_options(int argc, wchar_t** argv) {
                       "                              Pi-sealed pairing fixture at PATH (#14)\n"
                       "  --verify-setup-url URL       Verify an HTTPS setup certificate fingerprint and exit\n"
                       "  --certificate-fingerprint HEX64  Expected SHA-256 setup certificate fingerprint\n"
+                      "  --pair                     Pair without flags: prompt for the Pi address and its\n"
+                      "                              TLS fingerprint (piped stdin works). Reaches the same client\n"
+                      "                              path as --pairing-url\n"
                       "  --pairing-url URL          Pair this companion with the Pi and store its credential\n"
                       "  --pairing-label LABEL      Friendly name shown during pairing\n"
                       "  --pairing-credential-file PATH  DPAPI credential destination\n"
@@ -949,8 +1002,12 @@ Options parse_options(int argc, wchar_t** argv) {
     if (!options.verify_setup_url.empty() && options.pinned_certificate_fingerprint.empty())
         throw std::runtime_error("--verify-setup-url requires --certificate-fingerprint");
     if (options.pairing) {
-        if (options.pairing_url.empty() || options.pairing_label.empty() || options.pinned_certificate_fingerprint.size() != 64)
-            throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
+        // --pairing-url keeps its flag-only validation. A bare --pair (empty
+        // URL) is the manual-entry path: wmain completes it from stdin, so the
+        // address and pinned fingerprint are not required on the command line.
+        if (!options.pairing_url.empty() &&
+            (options.pairing_label.empty() || options.pinned_certificate_fingerprint.size() != 64))
+            throw std::runtime_error("pairing requires --pairing-label and --certificate-fingerprint");
         if (options.pairing_credential_file.empty()) {
             PWSTR known = nullptr;
             if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &known))) {
@@ -3285,9 +3342,47 @@ void write_pairing_interop_fixtures(const fs::path& pairing_fixtures) {
     std::cout << "Windows pairing interop fixtures written: " << pairing_fixtures.string() << '\n';
 }
 
+// #10: the manual-entry path is only useful if it fills exactly the fields
+// --pairing-url would. This does not re-test the pairing exchange (that is
+// pairing_crypto_self_test() and the pi-seals interop above); it proves the
+// new entry point lands on those same fields, from scripted stdin, and that a
+// closed stdin fails instead of blocking -- so the gate's own --self-test run
+// (which never passes --pair) is unaffected and no invocation can hang.
+void manual_pairing_entry_self_test() {
+    const std::string fingerprint(64, 'a');
+    Options interactive;
+    interactive.pairing = true;
+    std::istringstream input("192.168.1.64:8002\n" + fingerprint + "\n");
+    std::ostringstream output;
+    if (!complete_pairing_options(interactive, input, output))
+        throw std::runtime_error("manual pairing entry refused scripted input");
+    if (interactive.pairing_url != L"https://192.168.1.64:8002" ||
+        interactive.pinned_certificate_fingerprint != fingerprint || interactive.pairing_label.empty())
+        throw std::runtime_error("manual pairing entry did not reach the --pairing-url fields");
+    // Explicit flags are never overwritten (the --pairing-url code path).
+    Options flagged;
+    flagged.pairing = true;
+    flagged.pairing_url = L"https://rapid:8443";
+    flagged.pinned_certificate_fingerprint = fingerprint;
+    flagged.pairing_label = "My PC";
+    std::istringstream unused("not consumed\n");
+    if (!complete_pairing_options(flagged, unused, output) || flagged.pairing_url != L"https://rapid:8443" ||
+        flagged.pairing_label != "My PC")
+        throw std::runtime_error("manual pairing entry overwrote explicit pairing options");
+    // A closed stdin must fail, not block or loop.
+    std::istringstream closed("");
+    Options no_input;
+    no_input.pairing = true;
+    if (complete_pairing_options(no_input, closed, output))
+        throw std::runtime_error("manual pairing entry accepted an empty stdin");
+    std::cout << "Manual pairing entry self-test passed: scripted address and fingerprint reach the "
+                 "--pairing-url fields, and empty input fails closed\n";
+}
+
 bool run_self_test(const fs::path& directory, int sample_rate,
                     const fs::path& pairing_pi_seals_fixtures = {}) {
     pairing_crypto_self_test();
+    manual_pairing_entry_self_test();
     const auto [ac_frame, ac_metadata] = assetto_self_test::run();
     additional_adapter_self_test::ace();
     additional_adapter_self_test::iracing();
@@ -3442,7 +3537,16 @@ int wmain(int argc, wchar_t** argv) {
             write_dpapi_credential(options.store_auth_key_dpapi_file, options.auth_key);
             return 0;
         }
-        if (options.pairing) return run_pairing(options);
+        if (options.pairing) {
+            // #10: a bare --pair prompts (or reads piped stdin) for the Pi
+            // address and pinned fingerprint, then takes the same run_pairing()
+            // path as --pairing-url. Explicit flags are left untouched.
+            Options pairing_options = options;
+            if (pairing_options.pairing_url.empty() &&
+                !complete_pairing_options(pairing_options, std::cin, std::cout))
+                throw std::runtime_error("pairing needs a Pi address and its TLS fingerprint");
+            return run_pairing(pairing_options);
+        }
         if (!options.auth_key_dpapi_file.empty())
             verify_paired_identity(options.auth_key_dpapi_file);
         if (options.self_test)

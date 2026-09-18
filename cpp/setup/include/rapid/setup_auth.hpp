@@ -32,6 +32,12 @@ class SetupAuth {
   std::deque<double> account_attempts_;
   // Setup AP name chosen by rapid-provision for this boot (#22).
   fs::path network_ssid_file_;
+  // #10: the companion artifact served by the unauthenticated
+  // /companion/download route. Empty when nothing suitable was installed, so
+  // the setup page never offers a download that cannot be served.
+  fs::path companion_artifact_;
+  std::string companion_sha256_;
+  std::string companion_filename_;
   void expire(double time);
   Response handle_account(const Request &request, const std::string &path,
                           const std::string &csrf, double time);
@@ -54,6 +60,13 @@ public:
   // Publishes the setup AP SSID in use ("rapid" or "rapid-NNNN") as
   // network_ssid in GET /api/v1/setup when the file holds a valid name.
   void set_network_ssid_file(fs::path ssid_file);
+  // #10: publishes the companion artifact served, unauthenticated, by
+  // /companion/download (it holds no secret). `artifact` may be the file
+  // itself or the packaged companion directory holding exactly one artifact;
+  // anything missing, unreadable or ambiguous clears it, so a stale or
+  // half-installed package can never advertise a download. Its SHA-256 is
+  // computed once here and republished in GET /api/v1/setup.
+  void set_companion_artifact(fs::path artifact);
   Response handle(const Request &request);
 };
 } // namespace rapid::native
