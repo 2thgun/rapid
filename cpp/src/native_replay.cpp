@@ -95,6 +95,21 @@ void ReplayGuard::admit(const std::string &id, const Run &run, bool new_run) {
   }
   // While storage is failing, reject at once instead of stalling every packet
   // for the full wait; the writer keeps retrying and clears the error.
+  // Time actually spent blocked here is the only storage wait on the receive
+  // path, so it is measured rather than inferred from wall-clock timings.
+  const auto wait_started = behind ? monotonic() : 0.0;
+  struct Account {
+    ReplayGuard &guard;
+    double started;
+    ~Account() {
+      if (started) {
+        const auto waited = (monotonic() - started) * 1000;
+        guard.wait_ms_ += waited;
+        guard.max_wait_ms_ = std::max(guard.max_wait_ms_, waited);
+        ++guard.waits_;
+      }
+    }
+  } account{*this, wait_started};
   if (behind &&
       (!error_.empty() ||
        !durable_.wait_for(lock, Seconds(wait_s_), [&] {
@@ -121,6 +136,9 @@ Json ReplayGuard::status() const {
   std::lock_guard lock(mutex_);
   return {{"replay_commits", commits_},
           {"packets_deferred", deferred_},
+          {"replay_waits", waits_},
+          {"replay_wait_ms", wait_ms_},
+          {"replay_wait_ms_max", max_wait_ms_},
           {"replay_write_error", error_.empty() ? Json() : Json(error_)}};
 }
 

@@ -109,7 +109,8 @@ private:
   std::map<std::string, Entry> entries_;
   bool stop_ = false, urgent_ = false;
   std::string error_;
-  std::uint64_t commits_ = 0, deferred_ = 0;
+  std::uint64_t commits_ = 0, deferred_ = 0, waits_ = 0;
+  double wait_ms_ = 0, max_wait_ms_ = 0;
   std::thread writer_;
   void loop();
   bool commit(bool exact);
