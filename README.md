@@ -13,7 +13,7 @@ and the [release checklist](https://github.com/2thgun/rapid/wiki/Release-Accepta
 - Graphs retain 30 seconds of throttle/brake and lateral/longitudinal G-force history while driving; ready and waiting periods render as gaps.
 - Windows C++ telemetry companion with adapters for ACC, AC, ACE and iRacing.
 - Authenticated binary v4 telemetry with shared-key setup and persistent replay checks.
-- Live engineering telemetry in a browser, with selectable traces and history.
+- Live engineering telemetry at `/telemetry`, pushed over WebSocket with selectable traces (up to 8) and history.
 - MoTeC compatible session recordings and completed-lap files, available through
   the read-only network share `\\rapid\Telemetry` after session finalization.
 - Optional authenticated archive uploads with resumable transfer.
@@ -29,7 +29,8 @@ and the [release checklist](https://github.com/2thgun/rapid/wiki/Release-Accepta
 | `rapid-log-status` | Native C++ journal activity monitor |
 | `rapid-archive` | Native C++ archive ingest service |
 | `rapid-setup-server` | Loopback owner enrollment/login and saved desired settings |
-| `rapid-firstboot` | Initializes device state; AP onboarding remains incomplete |
+| `rapid-firstboot` | Initializes device state and first-boot setup access point |
+| `rapid-account` | Privileged helper for the owner-chosen SSH/sudo password |
 
 ## Build
 
