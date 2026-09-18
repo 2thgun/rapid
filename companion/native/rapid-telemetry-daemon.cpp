@@ -1338,23 +1338,33 @@ public:
             !adapter->graphics_.open(graphics_name) ||
             !adapter->static_.open(static_name)) return nullptr;
         adapter->metadata.simulator = "ACE";
-        adapter->metadata.vehicle = "Assetto Corsa EVO car";
-        adapter->metadata.venue = "Assetto Corsa EVO";
         adapter->refresh_metadata();
         return adapter;
     }
 
-    // Only the session type is re-readable from the static block today; car
-    // and track names have no known ACE offset yet (hence the placeholders
-    // above), so a car/track change cannot be detected for ACE, only a
-    // session-type change (#15).
+    // Offsets from the official "ACE SharedFileOut Documentation v1" (changelog
+    // 2026-04-28): SPageFileStaticEvo.session (32), .session_name (36),
+    // .track (136), .track_configuration (169) and SPageFileGraphicEvo.car_model
+    // (3086). Reading track/layout/car makes a mid-session car/track change
+    // detectable, which the old placeholders never could (#15).
     void refresh_metadata() override {
+        // ACEVO_SESSION_TYPE: -1 unknown, 0 time attack, 1 race, 2 hot stint,
+        // 3 cruise. The previous table was AC1's enum and mislabelled every ACE
+        // session (#4).
         const int session_type = static_.read<std::int32_t>(32);
-        static constexpr const char* sessions[] = {
-            "Unknown", "Practice", "Qualifying", "Race", "Hotlap", "Time Attack", "Drift", "Drag"
-        };
-        metadata.session = session_type >= 0 && session_type < 8
-            ? sessions[session_type] : static_.ascii(36, 33);
+        static constexpr const char* sessions[] = {"Time Attack", "Race", "Hot Stint", "Cruise"};
+        if (session_type >= 0 && session_type < 4) metadata.session = sessions[session_type];
+        else metadata.session = static_.ascii(36, 33);
+        const auto track = static_.ascii(136, 33);
+        const auto layout = static_.ascii(169, 33);
+        if (!track.empty()) {
+            metadata.venue = track;
+            if (!layout.empty()) metadata.venue += " / " + layout;
+        } else {
+            metadata.venue = "Assetto Corsa EVO";
+        }
+        const auto car = graphics_.ascii(3086, 33);
+        metadata.vehicle = car.empty() ? "Assetto Corsa EVO car" : car;
     }
 
     bool live() override { return graphics_.read<std::int32_t>(4) == 2; }
@@ -1382,7 +1392,11 @@ public:
         read_corners(v, wheel_slip_fl, 56); read_corners(v, pressure_fl, 88);
         read_corners(v, wheel_speed_fl, 104); read_corners(v, core_temp_fl, 152);
         read_corners(v, suspension_fl, 184);
-        v[tc] = physics_.read<std::int32_t>(672); v[abs_activity] = physics_.read<std::int32_t>(676);
+        // Official ACE physics: tc (float, 204) and abs (float, 252) are the
+        // documented traction-control / ABS intervention intensities, the same
+        // AC1-compatible prefix fields AC1/ACC use. The previous code read the
+        // boolean tcinAction/absInAction flags at 672/676 instead (#4).
+        v[tc] = physics_.read<float>(204); v[abs_activity] = physics_.read<float>(252);
         v[heading] = physics_.read<float>(208); v[pitch] = physics_.read<float>(212);
         v[roll] = physics_.read<float>(216); v[current_lap_ms] = std::max(0, graphics_.read<std::int32_t>(188));
         frame.delta_ms = graphics_.read<std::int32_t>(184); v[lap_position] = graphics_.read<float>(1244);
@@ -2604,167 +2618,7 @@ std::pair<Frame, Metadata> run() {
 }
 } // namespace assetto_self_test
 
-// The ACE and iRacing fixtures deliberately model only the bytes consumed by
-// their adapters. They verify our reader and conversions on Windows without
-// pretending that a synthetic mapping proves a live simulator integration.
-namespace additional_adapter_self_test {
-struct Bytes { std::array<std::byte, 8192> bytes{}; };
-
-void require(bool condition, const char* message) {
-    if (!condition) throw std::runtime_error(std::string("Adapter self-test: ") + message);
-}
-
-template <typename T>
-void put(Bytes& mapping, std::size_t offset, T value) {
-    require(offset + sizeof(T) <= mapping.bytes.size(), "fixture write out of bounds");
-    std::memcpy(mapping.bytes.data() + offset, &value, sizeof(T));
-}
-
-void text(Bytes& mapping, std::size_t offset, std::string_view value, std::size_t capacity) {
-    require(value.size() < capacity && offset + capacity <= mapping.bytes.size(), "fixture text out of bounds");
-    std::memcpy(mapping.bytes.data() + offset, value.data(), value.size());
-}
-
-void ace() {
-    const auto prefix = L"Local\\raPIdAceSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
-                        L"_" + std::to_wstring(GetTickCount64());
-    assetto_self_test::TestMapping<Bytes> physics(prefix + L"_physics");
-    assetto_self_test::TestMapping<Bytes> graphics(prefix + L"_graphics");
-    assetto_self_test::TestMapping<Bytes> info(prefix + L"_static");
-    put<std::int32_t>(physics.value(), 0, 41); put<float>(physics.value(), 4, .8f);
-    put<float>(physics.value(), 8, .3f); put<std::int32_t>(physics.value(), 16, 4);
-    put<std::int32_t>(physics.value(), 20, 7000); put<float>(physics.value(), 28, 201.5f);
-    put<float>(physics.value(), 44, .4f); put<float>(physics.value(), 48, 1.1f);
-    put<float>(physics.value(), 52, -.2f); put<float>(physics.value(), 104, 71.f);
-    put<std::int32_t>(physics.value(), 672, 3); put<std::int32_t>(physics.value(), 676, 1);
-    put<std::int32_t>(graphics.value(), 4, 2); put<std::int32_t>(graphics.value(), 184, -123);
-    put<std::int32_t>(graphics.value(), 188, 18000); put<float>(graphics.value(), 1244, .25f);
-    put<std::int32_t>(info.value(), 32, 3);
-    auto adapter = AceAdapter::open((prefix + L"_physics").c_str(), (prefix + L"_graphics").c_str(),
-                                    (prefix + L"_static").c_str());
-    require(bool(adapter) && adapter->live() && !adapter->ended() && adapter->metadata.session == "Race",
-            "ACE opens, enters driving state and reads the initial session type");
-    require(adapter->metadata.steering_lock_deg == 0.0,
-            "ACE shared memory exposes no steering lock: reported unknown, not guessed");
-    Frame frame;
-    require(adapter->read(frame), "ACE accepts coherent sample");
-    const auto close_enough = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
-    require(close_enough(frame.value[throttle], .8) && close_enough(frame.value[brake], .3) && frame.value[gear] == 3 &&
-            frame.value[rpm] == 7000 && close_enough(frame.value[speed_kmh], 201.5) &&
-            close_enough(frame.value[wheel_speed_fl], 71) && frame.value[tc] == 3 && frame.value[abs_activity] == 1 &&
-            frame.value[lap_number] == 1 && frame.value[current_lap_ms] == 18000 &&
-            frame.delta_ms == -123 && frame.completed_lap_ms == 0 && frame.valid_mask ==
-            (all_field_bits() & ~field_bit(pit_limiter) & ~field_bit(damage_front) & ~field_bit(damage_rear) &
-             ~field_bit(damage_left) & ~field_bit(damage_right) & ~field_bit(damage_center)),
-            "ACE fields, unavailable-channel mask and initial lap");
-    put<std::int32_t>(physics.value(), 0, 42); put<std::int32_t>(graphics.value(), 188, 1000);
-    require(adapter->read(frame) && frame.value[lap_number] == 2 && frame.completed_lap_ms == 18000,
-            "ACE lap rollover");
-    put<std::int32_t>(graphics.value(), 4, 1);
-    require(!adapter->live() && !adapter->ended(), "ACE overlay/replay state is not driving but not ended (#15)");
-    put<std::int32_t>(graphics.value(), 4, 0);
-    require(!adapter->live() && adapter->ended(),
-            "ACE reports ended() on the same graphics.status field/value as AC1/ACC (#15, unverified on real ACE)");
-    put<std::int32_t>(info.value(), 32, 1);
-    adapter->refresh_metadata();
-    require(adapter->metadata.session == "Practice",
-            "ACE refresh_metadata reflects a session-type change while not live (#15)");
-}
-
-void write_iracing_variable(Bytes& data, int index, int type, int offset, std::string_view name_text) {
-    const std::size_t at = 256 + static_cast<std::size_t>(index) * 144;
-    put<std::int32_t>(data, at, type); put<std::int32_t>(data, at + 4, offset); put<std::int32_t>(data, at + 8, 1);
-    text(data, at + 16, name_text, 32);
-}
-
-void iracing() {
-    const auto name = L"Local\\raPIdIracingSelfTest_" + std::to_wstring(GetCurrentProcessId()) +
-                      L"_" + std::to_wstring(GetTickCount64());
-    assetto_self_test::TestMapping<Bytes> mapping(name);
-    auto& data = mapping.value();
-    put<std::int32_t>(data, 4, 1); // connected
-    // 18 variables: the 17 already-consumed channels plus SteeringWheelAngleMax,
-    // iRacing's own live half-lock (radians), used to normalise steering.
-    put<std::int32_t>(data, 24, 18); put<std::int32_t>(data, 28, 256); // var table
-    put<std::int32_t>(data, 32, 1); put<std::int32_t>(data, 48, 7); put<std::int32_t>(data, 52, 4096);
-    write_iracing_variable(data, 0, 1, 0, "IsOnTrack"); write_iracing_variable(data, 1, 4, 4, "Throttle");
-    write_iracing_variable(data, 2, 4, 8, "Brake"); write_iracing_variable(data, 3, 4, 12, "FuelLevel");
-    write_iracing_variable(data, 4, 2, 16, "Gear"); write_iracing_variable(data, 5, 4, 20, "RPM");
-    write_iracing_variable(data, 6, 4, 24, "SteeringWheelAngle"); write_iracing_variable(data, 7, 4, 28, "Speed");
-    write_iracing_variable(data, 8, 4, 32, "VelocityX"); write_iracing_variable(data, 9, 4, 36, "VelocityY");
-    write_iracing_variable(data, 10, 4, 40, "VelocityZ"); write_iracing_variable(data, 11, 4, 44, "LatAccel");
-    write_iracing_variable(data, 12, 4, 48, "VertAccel"); write_iracing_variable(data, 13, 4, 52, "LongAccel");
-    write_iracing_variable(data, 14, 2, 56, "Lap"); write_iracing_variable(data, 15, 4, 60, "LapCurrentLapTime");
-    write_iracing_variable(data, 16, 4, 64, "LapLastLapTime");
-    write_iracing_variable(data, 17, 4, 68, "SteeringWheelAngleMax");
-    put<unsigned char>(data, 4096, 1); put<float>(data, 4100, .6f); put<float>(data, 4104, .2f);
-    put<float>(data, 4108, 42.f); put<std::int32_t>(data, 4112, 4); put<float>(data, 4116, 6500.f);
-    // -1.3 rad raw / 6.5 rad live half-lock = -0.2 normalised: proves the live
-    // SteeringWheelAngleMax (not the YAML lock below) drives normalisation.
-    put<float>(data, 4120, -1.3f); put<float>(data, 4124, 50.f); put<float>(data, 4128, 1.f);
-    put<float>(data, 4132, 2.f); put<float>(data, 4136, 3.f); put<float>(data, 4140, 9.80665f);
-    put<float>(data, 4144, 19.6133f); put<float>(data, 4148, -9.80665f); put<std::int32_t>(data, 4152, 7);
-    put<float>(data, 4156, 12.5f); put<float>(data, 4160, 91.25f); put<float>(data, 4164, 6.5f);
-    // DriverInfo.DriverCarSteerWheelRange (session YAML, degrees, lock-to-lock):
-    // populates metadata even though the live variable above wins for
-    // per-sample normalisation.
-    static constexpr std::string_view yaml = "DriverInfo:\n  DriverCarSteerWheelRange: 900.000\n";
-    put<std::int32_t>(data, 16, static_cast<int>(yaml.size())); put<std::int32_t>(data, 20, 5000);
-    text(data, 5000, yaml, 200);
-    auto adapter = IracingAdapter::open(name.c_str());
-    require(bool(adapter) && adapter->connected() && adapter->live(), "iRacing opens and enters track state");
-    require(adapter->metadata.steering_lock_deg == 900.0,
-            "iRacing session YAML steering lock parsed (DriverCarSteerWheelRange)");
-    Frame frame;
-    require(adapter->read(frame), "iRacing accepts connected sample");
-    const auto close_enough = [](double actual, double expected) { return std::abs(actual - expected) < .0001; };
-    require(close_enough(frame.value[throttle], .6) && close_enough(frame.value[brake], .2) && frame.value[gear] == 4 &&
-            close_enough(frame.value[steering_angle], -.2) &&
-            close_enough(frame.value[speed_kmh], 180) && close_enough(frame.value[g_x], 1) && close_enough(frame.value[g_y], 2) &&
-            close_enough(frame.value[g_z], -1) && frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
-            frame.completed_lap_ms == 91250,
-            "iRacing conversions, lap timing and live-half-lock steering normalisation");
-    // iRacing updates the session info YAML in place as the session type,
-    // track or car changes (practice/qualifying/race, a car swap); a later
-    // refresh_metadata() call must pick that up without reopening the adapter
-    // so the run loop can detect the change while not live (#15).
-    const std::string refreshed_yaml = "SessionType: Practice\nCarScreenName: Test Car 2\n"
-                                       "TrackDisplayName: Test Track 2\nUserName: Test Driver 2\n";
-    text(data, 5000, refreshed_yaml, refreshed_yaml.size() + 1);
-    put<std::int32_t>(data, 16, static_cast<std::int32_t>(refreshed_yaml.size()));
-    put<std::int32_t>(data, 20, 5000);
-    adapter->refresh_metadata();
-    require(adapter->metadata.session == "Practice" && adapter->metadata.vehicle == "Test Car 2" &&
-                adapter->metadata.venue == "Test Track 2" && adapter->metadata.driver == "Test Driver 2",
-            "iRacing refresh_metadata reflects a session/car/track change while connected (#15)");
-    put<std::int32_t>(data, 4, 0);
-    require(!adapter->connected() && !adapter->read(frame), "iRacing disconnect rejects samples");
-
-    // Older/limited telemetry exports may omit the live SteeringWheelAngleMax
-    // variable. Normalisation must then fall back to the session YAML lock.
-    const auto name_b = name + L"_b";
-    assetto_self_test::TestMapping<Bytes> mapping_b(name_b);
-    auto& data_b = mapping_b.value();
-    put<std::int32_t>(data_b, 4, 1);
-    put<std::int32_t>(data_b, 24, 17); put<std::int32_t>(data_b, 28, 256);
-    put<std::int32_t>(data_b, 32, 1); put<std::int32_t>(data_b, 48, 7); put<std::int32_t>(data_b, 52, 4096);
-    write_iracing_variable(data_b, 0, 1, 0, "IsOnTrack"); write_iracing_variable(data_b, 1, 4, 24, "SteeringWheelAngle");
-    // -2.1380283 rad raw / (350 rad half-lock, from 700 deg YAML / 2) = -0.35
-    // normalised.
-    put<unsigned char>(data_b, 4096, 1); put<float>(data_b, 4120, -2.1380283f);
-    static constexpr std::string_view yaml_b = "DriverInfo:\n  DriverCarSteerWheelRange: 700.000\n";
-    put<std::int32_t>(data_b, 16, static_cast<int>(yaml_b.size())); put<std::int32_t>(data_b, 20, 5000);
-    text(data_b, 5000, yaml_b, 200);
-    auto adapter_b = IracingAdapter::open(name_b.c_str());
-    require(bool(adapter_b) && adapter_b->connected() && adapter_b->live(),
-            "iRacing (no live half-lock variable) opens and enters track state");
-    require(adapter_b->metadata.steering_lock_deg == 700.0,
-            "iRacing session YAML steering lock parsed without a live half-lock variable");
-    Frame frame_b;
-    require(adapter_b->read(frame_b) && close_enough(frame_b.value[steering_angle], -.35),
-            "iRacing steering normalisation falls back to the session YAML lock");
-}
-} // namespace additional_adapter_self_test
+#include "adapter_selftest_fixtures.hpp"
 
 std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key) {
     ULONG size = 0;
