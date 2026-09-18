@@ -10,7 +10,7 @@ section{background:#1a2330;border:1px solid #344254;border-radius:16px;padding:2
 label{display:block;margin-bottom:8px}input,select,button{box-sizing:border-box;width:100%;font:inherit;min-height:48px;border-radius:8px}
 input,select{padding:12px;background:#10151c;border:1px solid #62758e;color:inherit}button{margin-top:16px;background:#69d9b3;border:0;color:#10251e;font-weight:650;cursor:pointer}
 button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margin:4px 0;overflow-wrap:anywhere}
-[hidden]{display:none!important}#message{min-height:24px;color:#f9cc85}
+[hidden]{display:none!important}#message{min-height:24px;color:#f9cc85}#access-public-key,#access-ssh-command{display:block;overflow-wrap:anywhere;color:#edf2f7;margin:4px 0 12px}
 </style>
 <h1>raPId setup</h1>
 <p>Manage your device.</p>
@@ -93,6 +93,19 @@ and do not enter a password or key.</p>
 <label><input id="access-fingerprint-confirm" type="checkbox" required style="width:auto;min-height:0"> I compared the TLS fingerprint above with the one on the Pi's own display, and they match.</label>
 <button id="access-save" type="submit">Set device access</button>
 </form>
+<h3>Generate a key for this computer</h3>
+<p>Generate an SSH key here and this page downloads the private key to this
+computer and fills its public key into the field above, so only the public half
+is installed on the Pi. The private key never leaves this computer.</p>
+<button id="access-generate" type="button">Generate a key and download it</button>
+<p id="access-generate-state" role="status" aria-live="polite"></p>
+<div id="access-generated" hidden>
+<p>Public key (installed when you press Set device access):</p>
+<code id="access-public-key"></code>
+<p>Sign in from this computer with:</p>
+<code id="access-ssh-command"></code>
+<button id="access-download" type="button">Download the private key again</button>
+</div>
 </section>
 <script>
 'use strict';
@@ -107,6 +120,101 @@ let certificateFingerprint = '';
 const message = document.getElementById('message');
 function formatFingerprint(fp) {
   return (fp.match(/.{1,16}/g) || [fp]).join(' ');
+}
+/* #28-key-format:start */
+// OpenSSH key encoding for the browser-generated key (#28). WebCrypto exports
+// JWK/raw; OpenSSH has its own wire format. These are pure functions (bytes in,
+// strings out) so cpp/setup/tests/openssh_key_tests.mjs can load this exact
+// block from setup.html and check it against fixed key material.
+function sshBytes(...parts) {
+  let length = 0;
+  for (const part of parts) length += part.length;
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) { out.set(part, offset); offset += part.length; }
+  return out;
+}
+function sshField(value) {
+  const header = new Uint8Array(4);
+  new DataView(header.buffer).setUint32(0, value.length, false);
+  return sshBytes(header, value);
+}
+// RFC 4251 mpint: no redundant leading zero bytes, but a leading zero byte
+// when the top bit of the first significant byte is set.
+function sshMpint(value) {
+  let start = 0;
+  while (start < value.length - 1 && value[start] === 0) ++start;
+  const trimmed = value.slice(start);
+  return sshField(trimmed[0] & 0x80 ? sshBytes(new Uint8Array([0]), trimmed) : trimmed);
+}
+function base64FromBytes(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; ++i) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+function bytesFromBase64Url(text) {
+  const padded = text.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(padded + '='.repeat((4 - padded.length % 4) % 4));
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; ++i) out[i] = binary.charCodeAt(i);
+  return out;
+}
+function opensshPublicKeyLine(type, publicBlob, comment) {
+  const line = type + ' ' + base64FromBytes(publicBlob);
+  return comment ? line + ' ' + comment : line;
+}
+// Unencrypted OpenSSH private-key format (PROTOCOL.key): a fixed header, the
+// public blob, then one private section with a repeated random check word and
+// 1..n padding to the 8-byte block size of the "none" cipher.
+function opensshPrivateKeyPem(type, publicBlob, privateFields, comment, checkint) {
+  const encoder = new TextEncoder();
+  let body = sshBytes(checkint, checkint, sshField(encoder.encode(type)), ...privateFields,
+                      sshField(comment ? encoder.encode(comment) : new Uint8Array(0)));
+  const padding = (8 - body.length % 8) % 8;
+  if (padding) body = sshBytes(body, new Uint8Array(Array.from({length: padding}, (_, i) => i + 1)));
+  const key = sshBytes(encoder.encode('openssh-key-v1\0'), sshField(encoder.encode('none')),
+                       sshField(encoder.encode('none')), sshField(new Uint8Array(0)),
+                       new Uint8Array([0, 0, 0, 1]), sshField(publicBlob), sshField(body));
+  const wrapped = base64FromBytes(key).replace(/(.{70})/g, '$1\n').replace(/\n$/, '');
+  return '-----BEGIN OPENSSH PRIVATE KEY-----\n' + wrapped + '\n-----END OPENSSH PRIVATE KEY-----\n';
+}
+function sshEd25519(seed, publicKey, comment, checkint) {
+  const type = 'ssh-ed25519';
+  const publicBlob = sshBytes(sshField(new TextEncoder().encode(type)), sshField(publicKey));
+  return {type, publicLine: opensshPublicKeyLine(type, publicBlob, comment),
+          privateKeyPem: opensshPrivateKeyPem(type, publicBlob,
+              [sshField(publicKey), sshField(sshBytes(seed, publicKey))], comment, checkint)};
+}
+function sshEcdsaP256(scalar, x, y, comment, checkint) {
+  const type = 'ecdsa-sha2-nistp256', curve = 'nistp256';
+  const point = sshBytes(new Uint8Array([4]), x, y);
+  const publicBlob = sshBytes(sshField(new TextEncoder().encode(type)),
+                              sshField(new TextEncoder().encode(curve)), sshField(point));
+  return {type, publicLine: opensshPublicKeyLine(type, publicBlob, comment),
+          privateKeyPem: opensshPrivateKeyPem(type, publicBlob,
+              [sshField(new TextEncoder().encode(curve)), sshField(point), sshMpint(scalar)],
+              comment, checkint)};
+}
+/* #28-key-format:end */
+function randomCheckint() {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return bytes;
+}
+// #28: prefer Ed25519 (small, fast, supported by every current OpenSSH). If
+// this browser's WebCrypto has no Ed25519, fall back to ECDSA P-256 and say so
+// in the page; the server validates and accepts both (#23 account_policy.cpp).
+async function generateSshKey(comment) {
+  try {
+    const pair = await crypto.subtle.generateKey({name:'Ed25519'}, true, ['sign', 'verify']);
+    const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+    return sshEd25519(bytesFromBase64Url(jwk.d), bytesFromBase64Url(jwk.x), comment, randomCheckint());
+  } catch (ed25519Unsupported) {
+    const pair = await crypto.subtle.generateKey({name:'ECDSA', namedCurve:'P-256'}, true, ['sign', 'verify']);
+    const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+    return sshEcdsaP256(bytesFromBase64Url(jwk.d), bytesFromBase64Url(jwk.x),
+                        bytesFromBase64Url(jwk.y), comment, randomCheckint());
+  }
 }
 async function api(path, method='GET', body) {
   const headers = {};
@@ -247,6 +355,47 @@ document.getElementById('access-form').addEventListener('submit', async event =>
   } catch (error) { message.textContent = error.message; }
   finally { password.value = ''; confirmation.value = ''; body.password = ''; button.disabled = false; }
 });
+// #28: the browser-generated key. The private key is only ever in this page's
+// memory and the download; the public line is filled into #access-key and sent
+// by the existing form to the existing /api/v1/account endpoint.
+let accessPrivateKey = null;
+let accessPrivateKeyName = '';
+function downloadAccessPrivateKey() {
+  if (!accessPrivateKey) return;
+  const url = URL.createObjectURL(new Blob([accessPrivateKey], {type:'application/octet-stream'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = accessPrivateKeyName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+async function generateAccessKey() {
+  const button = document.getElementById('access-generate');
+  const state = document.getElementById('access-generate-state');
+  button.disabled = true;
+  state.textContent = 'Generating a key…';
+  try {
+    const host = location.hostname || 'the-pi';
+    const key = await generateSshKey('rapid@' + host);
+    accessPrivateKey = key.privateKeyPem;
+    accessPrivateKeyName = key.type === 'ssh-ed25519' ? 'rapid_ed25519' : 'rapid_ecdsa';
+    downloadAccessPrivateKey();
+    document.getElementById('access-key').value = key.publicLine;
+    document.getElementById('access-public-key').textContent = key.publicLine;
+    document.getElementById('access-ssh-command').textContent =
+        'ssh -i ' + accessPrivateKeyName + ' rapid@' + host;
+    document.getElementById('access-generated').hidden = false;
+    state.textContent = 'Generated a ' + key.type + ' key. The private key file ' + accessPrivateKeyName +
+        ' was downloaded to this computer; keep it safe. Add a device password if you want one, then press ' +
+        'Set device access to install the public key on the Pi.';
+  } catch (error) {
+    state.textContent = error.message;
+  } finally { button.disabled = false; }
+}
+document.getElementById('access-generate').addEventListener('click', generateAccessKey);
+document.getElementById('access-download').addEventListener('click', downloadAccessPrivateKey);
 document.getElementById('retry-settings').addEventListener('click', async event => {
   const button = event.currentTarget;
   button.disabled = true;
