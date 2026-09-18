@@ -626,6 +626,77 @@ int recording_crash(const fs::path &assets) {
   return 0;
 }
 
+// Deterministic regression for the #17 durability flake on a *fast* machine.
+// With a sync far slower than recording-crash uses (60 ms), a checkpoint that
+// fsyncs the ~48 channel files one at a time costs about 3 s -- longer than
+// the 1 s sample cadence -- so the writer falls behind and the durable prefix
+// slips past the 2 s bound even on an idle host. The production fix syncs the
+// channel files concurrently and coalesces pending checkpoints, so the same
+// stream stays inside the bound with room to spare. The existing
+// rapid-io-recording-crash round guard is not touched.
+int recording_slow_sync(const fs::path &assets) {
+  Fixture f(assets, "recording-slow");
+  const Stream stream(random_run());
+  constexpr int sync_ms = 60;
+  pid_t pid = 0;
+  int progress = -1;
+  crash_child(
+      [&](int out) {
+        sync_delay_ms = sync_ms;
+        Runtime r(f.config);
+        require(r.receive(stream.metadata(), host), "metadata");
+        auto next = Clock::now();
+        for (std::uint64_t i = 0;; ++i) {
+          require(r.receive(stream.telemetry(i), host), "telemetry");
+          std::uint64_t done = i + 1;
+          require(write(out, &done, sizeof done) == sizeof done, "progress");
+          r.expire();
+          next += std::chrono::milliseconds(20);
+          std::this_thread::sleep_until(next);
+        }
+      },
+      &pid, &progress);
+  std::vector<std::pair<Clock::time_point, std::uint64_t>> reports;
+  // Fixed kill time: long enough for several checkpoints on the fixed writer,
+  // but only one or two on a sequential one.
+  const auto kill_after = std::chrono::milliseconds(6000);
+  const auto start = Clock::now();
+  std::uint64_t value = 0;
+  while (Clock::now() - start < kill_after &&
+         read(progress, &value, sizeof value) == sizeof value)
+    reports.emplace_back(Clock::now(), value);
+  const auto killed_at = Clock::now();
+  kill(pid, SIGKILL);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  ::close(progress);
+  require(WIFSIGNALED(status) && !reports.empty(),
+          "kill slow-sync recording child");
+  std::uint64_t must_survive = 0;
+  for (const auto &[at, count] : reports)
+    if (std::chrono::duration<double>(killed_at - at).count() >=
+        durable_within_s)
+      must_survive = count;
+  std::uint64_t count = 0;
+  {
+    Runtime recovered(f.config);
+    count = recovered_prefix(f.config);
+  }
+  std::cout << "recording-slow-sync (" << sync_ms
+            << " ms/sync): accepted>=" << reports.back().second
+            << " must_survive=" << must_survive << " recovered=" << count
+            << "\n";
+  require(count <= reports.back().second + 1,
+          "recording contains samples that were never accepted");
+  require(count >= must_survive,
+          "samples accepted more than " + std::to_string(durable_within_s) +
+              " s before the crash were lost under slow sync");
+  remove_root(f.root);
+  std::cout << "recording-slow-sync: the durable prefix holds when every "
+               "sync is far slower than in recording-crash\n";
+  return 0;
+}
+
 // A run ends and the next starts while storage is slow, and the process shuts
 // down right after: both recordings must be published completely and
 // separately, and the receiver must not wait for either publication.
@@ -892,6 +963,8 @@ int main(int argc, char **argv) {
       return replay_crash(assets);
     if (name == "recording-crash")
       return recording_crash(assets);
+    if (name == "recording-slow-sync")
+      return recording_slow_sync(assets);
     if (name == "finalize-race")
       return finalize_race(assets);
     if (name == "write-failure")

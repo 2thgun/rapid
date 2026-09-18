@@ -61,7 +61,7 @@ if(BUILD_TESTING)
   add_executable(rapid-io-path-tests tests/io_path_tests.cpp)
   target_link_libraries(rapid-io-path-tests PRIVATE rapid_native)
   set_target_properties(rapid-io-path-tests PROPERTIES ENABLE_EXPORTS ON)
-  foreach(io_case replay-crash recording-crash finalize-race write-failure latency)
+  foreach(io_case replay-crash recording-crash recording-slow-sync finalize-race write-failure latency)
     add_test(NAME rapid-io-${io_case} COMMAND rapid-io-path-tests
              "${CMAKE_SOURCE_DIR}/assets" ${io_case})
     set_tests_properties(rapid-io-${io_case} PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
