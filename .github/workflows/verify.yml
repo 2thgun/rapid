@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+# Node 24 action pins (checkout v7.0.1, upload-artifact v7.0.1,
+# download-artifact v8.0.1). Runners are ubuntu-24.04, not ubuntu-latest
+# (ubuntu-latest moves to 26 on 2026-10-19).
+
 jobs:
   # #14 production direction (the reverse of windows-pairing-fixtures below):
   # the Pi seals a credential envelope with the real rapid-pi code and a
@@ -15,14 +19,14 @@ jobs:
   # decrypt_pairing_envelope() and checks the plaintext, catching a
   # regression in the direction an actual pairing exchange uses.
   pairing-pi-seals-fixture:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev
       - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build/cpp --target rapid-pairing-pi-seals-fixture-tests
       - run: ctest --test-dir build/cpp -R rapid-pairing-pi-seals-fixture-tests --output-on-failure
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: pi-seals-pairing-fixture
           path: build/cpp/pairing-fixtures-pi-seals/*
@@ -30,18 +34,18 @@ jobs:
           retention-days: 7
   cpp-native:
     needs: windows-companion
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         build_type: [Debug, Release]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: windows-v4-fixtures
           path: build/windows-v4-fixtures
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: windows-pairing-fixtures
           path: build/windows-pairing-fixtures
@@ -49,7 +53,7 @@ jobs:
       # same-revision windows-companion job just built, so the package download
       # can never be a stale protocol. A missing MSI fails the job here rather
       # than shipping a package with no working download.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: rapid-windows-msi
           path: build/windows-msi
@@ -65,19 +69,63 @@ jobs:
       - if: matrix.build_type == 'Release'
         run: |
           cpack --config build/cpp/CPackConfig.cmake -B build/packages
-          cmake -DPACKAGE="$PWD/build/packages/rapid_0.1.0~preview1_amd64.deb" -P packaging/CheckPackage.cmake
+          shopt -s nullglob
+          debs=(build/packages/rapid_*_amd64.deb)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "expected one amd64 deb, got ${#debs[@]}: ${debs[*]}" >&2
+            exit 1
+          fi
+          cmake -DPACKAGE="$PWD/${debs[0]}" -P packaging/CheckPackage.cmake
       - if: matrix.build_type == 'Release'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rapid-linux-preview-amd64
+          path: build/packages/*.deb
+          if-no-files-found: error
+  cpp-native-arm64:
+    needs: windows-companion
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: windows-v4-fixtures
+          path: build/windows-v4-fixtures
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: windows-pairing-fixtures
+          path: build/windows-pairing-fixtures
+      - run: sudo apt-get update && sudo apt-get install -y libsystemd-dev pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript qt6-websockets-dev
+      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_CXX_FLAGS=-Werror -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON -DRAPID_BUILD_PI_PACKAGE=ON -DRAPID_V4_FIXTURES=${{ github.workspace }}/build/windows-v4-fixtures -DRAPID_PAIRING_FIXTURES=${{ github.workspace }}/build/windows-pairing-fixtures
+      - run: cmake --build build/cpp
+      - run: ctest --test-dir build/cpp --output-on-failure
+      - if: matrix.build_type == 'Release'
+        run: |
+          cpack --config build/cpp/CPackConfig.cmake -B build/packages
+          shopt -s nullglob
+          debs=(build/packages/rapid_*_arm64.deb)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "expected one arm64 deb, got ${#debs[@]}: ${debs[*]}" >&2
+            exit 1
+          fi
+          cmake -DPACKAGE="$PWD/${debs[0]}" -P packaging/CheckPackage.cmake
+      - if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rapid-linux-preview-arm64
           path: build/packages/*.deb
           if-no-files-found: error
   windows-companion:
     needs: pairing-pi-seals-fixture
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: pi-seals-pairing-fixture
           path: build/pi-seals-pairing-fixture
@@ -90,13 +138,13 @@ jobs:
         run: dotnet tool install --global wix --version 4.0.6
       - shell: pwsh
         run: ./companion/build-msi.ps1 -ExecutablePath ./companion/rapid-telemetry-daemon.exe -OutputPath ./dist/raPId-Companion.msi
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rapid-windows-msi
           path: dist/raPId-Companion.msi
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rapid-windows-companion
           path: |
@@ -107,13 +155,13 @@ jobs:
             companion/PAIR.cmd
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: windows-v4-fixtures
           path: ${{ runner.temp }}/rapid-self-test/v4-fixtures/*.hex
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: windows-pairing-fixtures
           path: |

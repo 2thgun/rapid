@@ -40,10 +40,16 @@ install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.service"
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.sysusers" DESTINATION lib/sysusers.d RENAME rapid.conf)
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.tmpfiles" DESTINATION lib/tmpfiles.d RENAME rapid.conf)
 install(PROGRAMS "${CMAKE_CURRENT_LIST_DIR}/rapid-panel" DESTINATION lib/rapid)
+# Off by default: the marker means "this package is the complete first-time
+# flow" and must not appear on ordinary main builds. Release.yml turns it on.
+if(RAPID_IMAGE_READY)
+  install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid-image-ready-v1" DESTINATION share/rapid)
+endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RapidVersion.cmake")
 set(CPACK_GENERATOR DEB)
 set(CPACK_PACKAGE_NAME rapid)
-set(CPACK_PACKAGE_VERSION "0.1.0~preview1")
+set(CPACK_PACKAGE_VERSION "${RAPID_PACKAGE_VERSION}")
 set(CPACK_PACKAGE_CONTACT "raPId maintainers (github.com/2thgun/rapid)")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "raPId Pi runtime, Qt panel and local setup preview")
 set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
