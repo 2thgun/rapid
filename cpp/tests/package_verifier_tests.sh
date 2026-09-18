@@ -44,8 +44,11 @@ EOF
 verify() {
   printf '%s\n' "$depends" > "$work/depends"
   : > "$work/rapid.deb"
-  cmake -DPACKAGE="$work/rapid.deb" -DDPKG_DEB="$work/dpkg-deb" \
-    -P "$source_root/packaging/CheckPackage.cmake" > "$work/output" 2>&1
+  set -- -DPACKAGE="$work/rapid.deb" -DDPKG_DEB="$work/dpkg-deb"
+  if [ "${EXPECT_IMAGE_READY:-}" = ON ]; then
+    set -- "$@" -DEXPECT_IMAGE_READY=ON
+  fi
+  cmake "$@" -P "$source_root/packaging/CheckPackage.cmake" > "$work/output" 2>&1
 }
 
 expect_pass() {
@@ -179,5 +182,16 @@ expect_fail "a package without the SSH server" "Missing generated runtime librar
 stage_package
 replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/etc/NetworkManager/system-connections$' ''
 expect_fail "a Wi-Fi applicator that cannot write its NetworkManager keyfile" "write access to NetworkManager's connection directory"
+
+stage_package
+printf 'v1\n' > "$work/stage/usr/share/rapid/rapid-image-ready-v1"
+expect_fail "an ordinary package that declares the image ready" "must not contain the image-ready marker"
+
+stage_package
+EXPECT_IMAGE_READY=ON expect_fail "a release package missing the image-ready marker" "must contain the image-ready marker"
+
+stage_package
+printf 'v1\n' > "$work/stage/usr/share/rapid/rapid-image-ready-v1"
+EXPECT_IMAGE_READY=ON expect_pass "a release package that declares the image ready"
 
 echo "package verifier tests passed"

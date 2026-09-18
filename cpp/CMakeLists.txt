@@ -17,6 +17,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 option(RAPID_BUILD_LOG_STATUS "Build the Linux journal/HTTP log monitor" OFF)
 option(RAPID_BUILD_QT_DISPLAY "Build the Qt touchscreen display" OFF)
 option(RAPID_BUILD_PI_PACKAGE "Assemble the experimental Pi application package" OFF)
+option(RAPID_IMAGE_READY "Install the image-ready marker (release builds only)" OFF)
 
 # Dependency detection stays here, in one place, so that two components cannot
 # each discover the same dependency differently. Components declare what they
