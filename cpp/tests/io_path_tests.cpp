@@ -43,6 +43,7 @@
 #include <sstream>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <system_error>
 #include <thread>
 #include <unistd.h>
 
@@ -249,6 +250,29 @@ template <class F> int crash_child(F body, pid_t *pid_out = nullptr,
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
+// Teardown for a Fixture's temp directory. Every caller has already
+// waitpid()-reaped whatever child touched it (crash_child()'s own wait, or an
+// explicit waitpid() after a SIGKILL race). Even so, fs::remove_all() has
+// intermittently thrown ENOTEMPTY here on WSL: the reaped child's spool
+// directory can still show a stale entry for a moment, most likely delayed
+// directory-entry propagation on the 9p-backed temp filesystem, not a real
+// write failure (#17). Retry with a short backoff, and only let a removal
+// that still cannot finish raise, so an actual failure to write is not
+// swallowed.
+void remove_root(const fs::path &root) {
+  std::error_code error;
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    error.clear();
+    fs::remove_all(root, error);
+    if (!error && !fs::exists(root))
+      return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20 * (attempt + 1)));
+  }
+  // Out of retries: let the real error (or a leftover path) surface as a
+  // thrown filesystem_error, same as an unretried fs::remove_all() call.
+  fs::remove_all(root);
+}
+
 // Legitimate senders resume after a Pi restart well beyond any reservation
 // margin: a Pi reboot is tens of seconds, i.e. > 1000 packets at 50 Hz.
 constexpr std::uint64_t max_restart_margin = 1024;
@@ -317,7 +341,7 @@ int replay_crash(const fs::path &assets) {
                          host),
               "resumed packet replay accepted after clean restart");
     }
-    fs::remove_all(f.root);
+    remove_root(f.root);
   }
 
   {
@@ -369,7 +393,7 @@ int replay_crash(const fs::path &assets) {
                   " accepted)");
     std::cout << "replay-crash (locked storage): " << accepted.size()
               << " accepted before the crash, none replayable\n";
-    fs::remove_all(f.root);
+    remove_root(f.root);
   }
 
   // Crash at arbitrary points of a paced stream (SIGKILL from outside), then
@@ -417,7 +441,7 @@ int replay_crash(const fs::path &assets) {
     require(r.receive(stream.telemetry(accepted + max_restart_margin + 10000),
                       host),
             "sender resumes after SIGKILL restart");
-    fs::remove_all(f.root);
+    remove_root(f.root);
   }
   std::cout << "replay-crash: accepted v4 packets stay rejected after crash "
                "and restart; sender resumes\n";
@@ -497,7 +521,7 @@ int recording_crash(const fs::path &assets) {
     Runtime recovered(f.config);
     require(recovered_prefix(f.config) == samples,
             "every sample accepted before an idle crash is in the recording");
-    fs::remove_all(f.root);
+    remove_root(f.root);
   }
   std::mt19937 random(std::random_device{}());
   for (int round = 0; round < 3; ++round) {
@@ -555,7 +579,7 @@ int recording_crash(const fs::path &assets) {
     require(count >= must_survive,
             "samples accepted more than " + std::to_string(durable_within_s) +
                 " s before the crash were lost");
-    fs::remove_all(f.root);
+    remove_root(f.root);
   }
   std::cout << "recording-crash: recovered recordings are exact prefixes "
                "within the durability bound\n";
@@ -611,7 +635,7 @@ int finalize_race(const fs::path &assets) {
             << "\n";
   require(percentile(receive_ms, 1) < 50,
           "receive() waited for publication or a checkpoint");
-  fs::remove_all(f.root);
+  remove_root(f.root);
   return 0;
 }
 
@@ -755,7 +779,7 @@ int bench(const fs::path &assets, int packets) {
               << "\n              snapshot during paced stream "
               << stats(contended) << "\n";
     sync_skip = false;
-    fs::remove_all(f.root);
+    remove_root(f.root);
   }
   return 0;
 }

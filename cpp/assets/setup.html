@@ -77,6 +77,10 @@ may return to the setup access point if it fails.</p>
 <p>Choose the password for the <code>rapid</code> account on the Pi. It is used to sign in over SSH and for
 <code>sudo</code>. The device ships without one, and SSH stays off until you set a password or add a key.
 The password is hashed on the Pi before it is stored and is never shown again.</p>
+<p>TLS fingerprint of this connection: <strong id="access-fingerprint">unavailable</strong></p>
+<p>The setup network is open, so this could be a lookalike device. Before typing a password below, compare
+the fingerprint above with the one shown on this device's own physical display; if they don't match, stop
+and do not enter a password or key.</p>
 <p id="access-state">Checking device access…</p>
 <form id="access-form">
 <label for="access-password">New device password (at least 12 characters; mix letters with digits or symbols, or use 20+ characters)</label>
@@ -86,6 +90,7 @@ The password is hashed on the Pi before it is stored and is never shown again.</
 <label for="access-key">SSH public key (optional, one line such as <code>ssh-ed25519 AAAA… name</code>)</label>
 <input id="access-key" autocomplete="off" spellcheck="false" maxlength="3072">
 <label id="access-replace-label" hidden><input id="access-replace" type="checkbox" style="width:auto;min-height:0"> Replace the password this account already has</label>
+<label><input id="access-fingerprint-confirm" type="checkbox" required style="width:auto;min-height:0"> I compared the TLS fingerprint above with the one on the Pi's own display, and they match.</label>
 <button id="access-save" type="submit">Set device access</button>
 </form>
 </section>
@@ -94,7 +99,15 @@ The password is hashed on the Pi before it is stored and is never shown again.</
 let csrf = '';
 let revision = null;
 let pairing_poll = null;
+// The TLS fingerprint this page loaded over (#23 evil-twin defence): read
+// once from /api/v1/setup and shown next to both the owner password and the
+// device-password forms, so a spoofed "rapid" access point still shows a
+// fingerprint the owner can check against the Pi's own display.
+let certificateFingerprint = '';
 const message = document.getElementById('message');
+function formatFingerprint(fp) {
+  return (fp.match(/.{1,16}/g) || [fp]).join(' ');
+}
 async function api(path, method='GET', body) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -178,6 +191,8 @@ async function showAccess() {
   try {
     const data = await api('/api/v1/account');
     section.hidden = false;
+    document.getElementById('access-fingerprint').textContent =
+        certificateFingerprint ? formatFingerprint(certificateFingerprint) : 'unavailable';
     const result = data.result;
     document.getElementById('access-state').textContent = data.queued ? 'Applying device access…' : describeAccess(result);
     if (result && (result.password_set || result.status === 'confirmation_required'))
@@ -203,7 +218,11 @@ document.getElementById('access-form').addEventListener('submit', async event =>
   const confirmation = document.getElementById('access-confirm');
   const key = document.getElementById('access-key');
   const replace = document.getElementById('access-replace');
+  const fingerprintConfirm = document.getElementById('access-fingerprint-confirm');
   const button = document.getElementById('access-save');
+  // Belt and braces alongside the checkbox's own `required` attribute (#23):
+  // don't apply device access without an explicit fingerprint check.
+  if (!fingerprintConfirm.checked) { message.textContent = 'Compare the TLS fingerprint above with the Pi\'s own display first.'; return; }
   if (!password.value && !key.value.trim()) { message.textContent = 'Enter a device password or an SSH public key.'; return; }
   if (password.value !== confirmation.value) { message.textContent = 'The device passwords do not match.'; return; }
   const body = {};
@@ -448,16 +467,14 @@ document.getElementById('sign-out').addEventListener('click', async () => {
 (async () => {
   try {
     const status = await api('/api/v1/setup');
+    if (status.certificate_fingerprint) certificateFingerprint = status.certificate_fingerprint;
     if (!status.owner_configured) {
       document.getElementById('device-address').textContent = location.host;
       // #22/#23: the provisioner publishes the name actually in use, which is
       // "rapid" unless another unit in range already had it.
       if (status.network_ssid) document.getElementById('device-ssid').textContent = status.network_ssid;
-      if (status.certificate_fingerprint) {
-        const fp = status.certificate_fingerprint;
-        document.getElementById('device-fingerprint').textContent =
-            (fp.match(/.{1,16}/g) || [fp]).join(' ');
-      }
+      if (certificateFingerprint)
+        document.getElementById('device-fingerprint').textContent = formatFingerprint(certificateFingerprint);
       document.getElementById('device-identity').hidden = false;
       if (status.capabilities.browser_owner_enrollment) {
         document.getElementById('enrollment').hidden = false;
