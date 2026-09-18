@@ -1,4 +1,4 @@
-#include "../src/qt_dashboard_model.hpp"
+#include "../qt_dashboard_model.hpp"
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QJsonDocument>

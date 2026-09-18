@@ -12,7 +12,7 @@
 // cpp/tests/native_network_tests.cpp, next to the rest of the HTTP surface.
 const fs = require('fs');
 const path = require('path');
-const qmlSource = fs.readFileSync(path.join(__dirname, '../display/Main.qml'), 'utf8');
+const qmlSource = fs.readFileSync(path.join(__dirname, '../Main.qml'), 'utf8');
 
 if (!qmlSource.includes('root.pair("wheel_speed_fl","wheel_speed_fr"," rad/s")') ||
     qmlSource.includes('root.pair("wheel_speed_fl","wheel_speed_fr"," km/h")')) {
