@@ -11,3 +11,10 @@ ProtectSystem=strict
 ProtectHome=true
 # ProtectSystem=strict makes /run read-only; the request/result queue lives here (#25).
 ReadWritePaths=/run/rapid-apply
+# #26: the passphrase now reaches NetworkManager as a private (0600) keyfile
+# this service writes directly, so it needs write access to NetworkManager's
+# connection directory. This is a separate, additive grant -- systemd
+# accumulates repeated ReadWritePaths= directives -- alongside g2-sandbox's
+# ReadWritePaths=/run/rapid-apply for #25 (this service's own result/request
+# queue, a pre-existing gap independent of this change).
+ReadWritePaths=/etc/NetworkManager/system-connections

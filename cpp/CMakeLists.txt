@@ -122,6 +122,14 @@ if(BUILD_TESTING)
   add_executable(rapid-setup-tests tests/setup_tests.cpp)
   target_link_libraries(rapid-setup-tests PRIVATE rapid_native)
   add_test(NAME rapid-setup-tests COMMAND rapid-setup-tests $<TARGET_FILE:rapid-firstboot> $<TARGET_FILE:rapid-provision> $<TARGET_FILE:rapid-apply> $<TARGET_FILE:rapid-wifi>)
+  # #26: the Home Wi-Fi passphrase must never become an nmcli argument; a fake
+  # nmcli records its own argv and environment, and every artifact the flow
+  # produces is grepped for the plaintext password (rapid-account-tests'
+  # secret_tests()/files_containing() pattern).
+  add_executable(rapid-wifi-secret-tests tests/wifi_secret_tests.cpp)
+  target_link_libraries(rapid-wifi-secret-tests PRIVATE rapid_native)
+  target_compile_options(rapid-wifi-secret-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME rapid-wifi-secret-tests COMMAND rapid-wifi-secret-tests $<TARGET_FILE:rapid-wifi>)
   add_executable(rapid-v4-tests tests/v4_tests.cpp)
   target_link_libraries(rapid-v4-tests PRIVATE rapid_native)
   set(RAPID_V4_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/tests/v4-fixtures" CACHE PATH "Windows encoder fixtures")
