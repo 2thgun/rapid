@@ -126,6 +126,42 @@ stage_package
 replace_in "$units/rapid-setup.service" ' --ssid-file /run/rapid/network-ssid' ''
 expect_fail "a setup server that cannot show the AP name" "publish the setup AP name"
 
+# #25: WSL has no systemd, so nothing else in the gate exercises unit
+# sandboxing. These mutations reproduce the exact class of bug found on a
+# real Pi: a unit references a path its binary writes that ProtectSystem=strict
+# then silently makes read-only.
+stage_package
+replace_in "$units/rapid-setup.service" 'ReadWritePaths=/run/rapid-apply /run/rapid$' 'ReadWritePaths=/run/rapid-apply'
+expect_fail "a setup server that cannot write /run/rapid" "does not grant write access to /run/rapid/calibration-request.json"
+
+stage_package
+replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/run/rapid-apply$' ''
+expect_fail "a Wi-Fi helper that cannot write its result file" "does not grant write access to /run/rapid-apply/wifi-result.json"
+
+stage_package
+replace_in "$units/rapid-wifi.service" '^ProtectSystem=strict$' ''
+expect_fail "a Wi-Fi helper with a widened sandbox" "rapid-wifi.service must keep ProtectSystem=strict and grant ReadWritePaths=/run/rapid-apply"
+
+stage_package
+replace_in "$units/rapid-display-recovery.service" '^ReadWritePaths=/var/lib/rapid$' ''
+expect_fail "a display recovery helper that cannot write its state file" "does not grant write access to /var/lib/rapid/display-recovery.json"
+
+stage_package
+replace_in "$units/rapid-display-recovery.service" '^ProtectSystem=strict$' ''
+expect_fail "a display recovery helper with a widened sandbox" "rapid-display-recovery.service must keep ProtectSystem=strict and grant ReadWritePaths=/var/lib/rapid"
+
+stage_package
+replace_in "$units/rapid-provision.service" '^Group=rapid$' ''
+expect_fail "a provisioner that leaves /run/rapid unreadable by the rapid group" "share /run/rapid with the rapid group"
+
+stage_package
+replace_in "$units/rapid-firstboot.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
+expect_fail "a first-boot /run/rapid mode too narrow for the files written into it" "share /run/rapid at mode 0770"
+
+stage_package
+replace_in "$units/rapid-provision.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
+expect_fail "a provisioner whose /run/rapid mode disagrees with first boot's" "must declare the exact same RuntimeDirectoryMode"
+
 stage_package
 mkdir -p "$work/stage/etc/ssh/sshd_config.d"
 printf 'PasswordAuthentication yes\n' > "$work/stage/etc/ssh/sshd_config.d/10-rapid-owner.conf"

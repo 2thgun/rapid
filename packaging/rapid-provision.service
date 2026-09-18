@@ -8,8 +8,11 @@ Before=rapid-setup.service rapid-network-mode.service
 [Service]
 Type=oneshot
 User=root
+Group=rapid
+# Must match rapid-firstboot.service's RuntimeDirectory=rapid declaration
+# exactly (owning group and mode): see the comment there (#25).
 RuntimeDirectory=rapid
-RuntimeDirectoryMode=0750
+RuntimeDirectoryMode=0770
 ExecStart=/usr/lib/rapid/rapid-provision --status-file /run/rapid/firstboot.json --ssid-file /run/rapid/network-ssid
 RemainAfterExit=true
 NoNewPrivileges=true

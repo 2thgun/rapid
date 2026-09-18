@@ -13,6 +13,9 @@ ProtectSystem=strict
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
+# ProtectSystem=strict makes /var read-only; --recover always rewrites its
+# rotation state file there (rapid.service's StateDirectory) (#25).
+ReadWritePaths=/var/lib/rapid
 
 [Install]
 WantedBy=graphical.target

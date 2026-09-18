@@ -71,21 +71,94 @@ read_service("./usr/lib/systemd/system/rapid.service" runtime_service)
 read_service("./usr/lib/systemd/system/rapid-apply.service" apply_service)
 read_service("./usr/lib/systemd/system/rapid-account.service" account_service)
 read_service("./usr/lib/systemd/system/rapid-account.path" account_path)
+read_service("./usr/lib/systemd/system/rapid-wifi.service" wifi_service)
+read_service("./usr/lib/systemd/system/rapid-display-recovery.service" display_recovery_service)
 read_service("./usr/lib/rapid/rapid-panel" panel_script)
 file(REMOVE "${data_tar}")
+set(nl "\n")
+# #25: rapid-firstboot.service and rapid-provision.service both declare
+# RuntimeDirectory=rapid, so whichever one starts first fixes /run/rapid's
+# owning group and mode for the other (systemd re-applies a unit's own
+# RuntimeDirectory ownership recursively on every start that declares it).
+# Group=rapid must appear on both (directly, or via User=rapid's own primary
+# group for first boot) and RuntimeDirectoryMode must match exactly, or the
+# directory can end up unreadable, or unwritable, for whichever unit starts
+# second. 0770 (not just 0750) is required because rapid.service and
+# rapid-setup.service both create new files under /run/rapid (pairing
+# coordinator files, the calibration request) as group "rapid", not as owner.
+string(REGEX MATCH "${nl}RuntimeDirectoryMode=([^${nl}]*)${nl}" firstboot_mode_match "${firstboot_service}")
+set(firstboot_runtime_mode "${CMAKE_MATCH_1}")
+string(REGEX MATCH "${nl}RuntimeDirectoryMode=([^${nl}]*)${nl}" provision_mode_match "${provision_service}")
+set(provision_runtime_mode "${CMAKE_MATCH_1}")
 if(NOT firstboot_service MATCHES "User=rapid" OR
    NOT firstboot_service MATCHES "Group=rapid" OR
    NOT firstboot_service MATCHES "StateDirectory=rapid-setup" OR
-   NOT firstboot_service MATCHES "RuntimeDirectory=rapid")
-  message(FATAL_ERROR "First boot must create private setup state as the rapid service user")
+   NOT firstboot_service MATCHES "RuntimeDirectory=rapid" OR
+   NOT firstboot_runtime_mode STREQUAL "0770")
+  message(FATAL_ERROR "First boot must create private setup state as the rapid service user and share /run/rapid at mode 0770")
 endif()
 if(NOT provision_service MATCHES "User=root" OR
+   NOT provision_service MATCHES "Group=rapid" OR
    NOT provision_service MATCHES "Requires=rapid-firstboot[.]service" OR
    NOT provision_service MATCHES "--status-file /run/rapid/firstboot[.]json" OR
    NOT provision_service MATCHES "--ssid-file /run/rapid/network-ssid" OR
    NOT provision_service MATCHES "RuntimeDirectory=rapid")
-  message(FATAL_ERROR "Only the provisioner may run as root for the generated setup-AP state")
+  message(FATAL_ERROR "Only the provisioner may run as root for the generated setup-AP state, and it must share /run/rapid with the rapid group")
 endif()
+# Checked against firstboot's own required value (rather than hard-coding 0770
+# again here) so this rule stays meaningful even if that value ever changes:
+# the two units must agree, whatever the value is.
+if(NOT provision_runtime_mode STREQUAL firstboot_runtime_mode)
+  message(FATAL_ERROR "rapid-firstboot.service and rapid-provision.service must declare the exact same RuntimeDirectoryMode for the /run/rapid they share")
+endif()
+# Generic cross-check (#25): every unit below runs with ProtectSystem=strict,
+# which makes its whole filesystem view read-only except paths it explicitly
+# grants through ReadWritePaths, or its own RuntimeDirectory/StateDirectory.
+# For each path a unit's binary is actually configured (by flag) to write,
+# assert some grant on that same unit covers it - so a narrowed ReadWritePaths
+# or a path moved to a new flag value cannot silently reintroduce this bug.
+function(assert_writable_path service_content service_name required_path)
+  if(NOT service_content MATCHES "${nl}ProtectSystem=strict${nl}")
+    return()
+  endif()
+  set(covered FALSE)
+  string(REGEX MATCH "${nl}ReadWritePaths=([^${nl}]*)${nl}" rw_match "${service_content}")
+  if(CMAKE_MATCH_1)
+    string(REPLACE " " ";" rw_list "${CMAKE_MATCH_1}")
+    foreach(rw IN LISTS rw_list)
+      string(REGEX REPLACE "^-" "" rw "${rw}")
+      if(NOT rw STREQUAL "" AND required_path MATCHES "^${rw}(/|$)")
+        set(covered TRUE)
+      endif()
+    endforeach()
+  endif()
+  string(REGEX MATCH "${nl}RuntimeDirectory=([^${nl}]*)${nl}" rd_match "${service_content}")
+  if(CMAKE_MATCH_1)
+    string(REPLACE " " ";" rd_list "${CMAKE_MATCH_1}")
+    foreach(name IN LISTS rd_list)
+      if(NOT name STREQUAL "" AND required_path MATCHES "^/run/${name}(/|$)")
+        set(covered TRUE)
+      endif()
+    endforeach()
+  endif()
+  string(REGEX MATCH "${nl}StateDirectory=([^${nl}]*)${nl}" sd_match "${service_content}")
+  if(CMAKE_MATCH_1)
+    string(REPLACE " " ";" sd_list "${CMAKE_MATCH_1}")
+    foreach(name IN LISTS sd_list)
+      if(NOT name STREQUAL "" AND required_path MATCHES "^/var/lib/${name}(/|$)")
+        set(covered TRUE)
+      endif()
+    endforeach()
+  endif()
+  if(NOT covered)
+    message(FATAL_ERROR "${service_name} is sandboxed with ProtectSystem=strict but does not grant write access to ${required_path}, which its binary is configured to write")
+  endif()
+endfunction()
+assert_writable_path("${firstboot_service}" "rapid-firstboot.service" "/run/rapid/firstboot.json")
+assert_writable_path("${provision_service}" "rapid-provision.service" "/run/rapid/network-ssid")
+assert_writable_path("${setup_service}" "rapid-setup.service" "/run/rapid/calibration-request.json")
+assert_writable_path("${wifi_service}" "rapid-wifi.service" "/run/rapid-apply/wifi-result.json")
+assert_writable_path("${display_recovery_service}" "rapid-display-recovery.service" "/var/lib/rapid/display-recovery.json")
 if(NOT setup_service MATCHES "User=rapid" OR
    NOT setup_service MATCHES "Requires=rapid-firstboot[.]service rapid-provision[.]service" OR
    NOT setup_service MATCHES "--listen 192[.]168[.]1[.]64" OR
@@ -114,7 +187,6 @@ if(NOT apply_service MATCHES "--display-confirm-file /run/rapid-apply/display-co
 endif()
 # #23: the device password reaches root only as a hash in a request file that
 # the setup service queues and a sandboxed, path-activated helper consumes.
-set(nl "\n")
 string(REGEX MATCH "ExecStart=[^${nl}]*" account_exec "${account_service}")
 string(REGEX MATCH "ExecStart=[^${nl}]*" setup_exec "${setup_service}")
 foreach(line IN ITEMS "User=root" "NoNewPrivileges=true" "ProtectSystem=strict" "ProtectHome=read-only"
@@ -133,11 +205,23 @@ endif()
 if(NOT setup_exec MATCHES " --account-request-file /run/rapid-apply/account-request[.]json --account-result-file /run/rapid-apply/account-result[.]json" OR
    setup_exec MATCHES "password" OR account_exec MATCHES "password" OR
    NOT setup_service MATCHES "${nl}LimitCORE=0${nl}" OR
-   NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply${nl}")
+   NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply /run/rapid${nl}")
   message(FATAL_ERROR "The setup service must queue device access through rapid-account without secrets on a command line or in core dumps")
 endif()
 if(NOT setup_exec MATCHES " --ssid-file /run/rapid/network-ssid( |$)")
   message(FATAL_ERROR "The setup service must publish the setup AP name chosen by rapid-provision")
+endif()
+# #25: rapid-wifi.service and rapid-display-recovery.service each write a
+# result/state file back under a ProtectSystem=strict mount namespace; without
+# their own ReadWritePaths grant, that write silently fails on a real device
+# (WSL has no systemd, so the gate cannot exercise this).
+if(NOT wifi_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
+   NOT wifi_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply${nl}")
+  message(FATAL_ERROR "rapid-wifi.service must keep ProtectSystem=strict and grant ReadWritePaths=/run/rapid-apply for its result file")
+endif()
+if(NOT display_recovery_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
+   NOT display_recovery_service MATCHES "${nl}ReadWritePaths=/var/lib/rapid${nl}")
+  message(FATAL_ERROR "rapid-display-recovery.service must keep ProtectSystem=strict and grant ReadWritePaths=/var/lib/rapid for its recovery state file")
 endif()
 execute_process(COMMAND "${DPKG_DEB}" --field "${PACKAGE}" Depends OUTPUT_VARIABLE dependencies
                 RESULT_VARIABLE result)

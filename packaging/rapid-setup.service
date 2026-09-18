@@ -18,7 +18,9 @@ StandardError=journal
 # The setup server briefly holds the owner-chosen device password in memory.
 LimitCORE=0
 # ProtectSystem=strict makes /run read-only; the setup queues live here.
-ReadWritePaths=/run/rapid-apply
+# /run/rapid also holds the calibration request and the pairing coordinator's
+# files (#25); firstboot/provision create and own that directory.
+ReadWritePaths=/run/rapid-apply /run/rapid
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
