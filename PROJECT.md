@@ -268,10 +268,6 @@ device then stopped while test volume grew. So:
 
 These have each cost someone a session already.
 
-- `systemd/` in this repository is the **old source-tree** unit set. The
-  packaged device uses the units from `packaging/`, running binaries under
-  `/usr/lib/rapid`. Installing the former over the latter silently runs the
-  old tree.
 - The `developer/` folder outside this repository is optional local history,
   not a source dependency — but installed companion kits may still point into
   it. Relocate deliberately before removing anything.

@@ -7,7 +7,7 @@ endif()
 install(TARGETS rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot rapid-provision rapid-apply rapid-display-recovery rapid-wifi rapid-account
         RUNTIME DESTINATION lib/rapid)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/" DESTINATION share/rapid)
-install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/../systemd/rapid-network-mode"
+install(PROGRAMS "${CMAKE_CURRENT_LIST_DIR}/rapid-network-mode"
         DESTINATION lib/rapid)
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/config.toml" DESTINATION /etc/rapid)
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.service"
