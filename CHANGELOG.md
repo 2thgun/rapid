@@ -5,6 +5,24 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Removed the unauthenticated v3 JSON telemetry transport from the Windows
+  companion and the Pi runtime. A v3 selection now fails with a pairing hint,
+  and the Pi rejects and counts non-v4 packets. `companion_key` remains the
+  valid v4 static-key path; ACC's separate broadcast API is unchanged.
+- Replaced `xrandr` display rotation with Qt scene rotation; the owner
+  confirm/rollback flow is unchanged and touch input follows the rotated
+  picture.
+- Added companion download from the setup page and a command-line-free `--pair`
+  companion entry for manual address and pinned-fingerprint pairing.
+- Added browser-generated Ed25519 (ECDSA P-256 fallback) SSH key enrollment on
+  the setup page; only the public key leaves the browser.
+- Made privileged setup request/status files private from creation and widened
+  the package verifier to check every sandbox write path.
+- Added official-layout ACE and iRacing adapter self-tests and fixed two ACE
+  adapter bugs (session-type enum and the `tc`/`abs` intensity fields).
+- Fixed a recorder durability defect so the durable checkpoint stays within its
+  bound under slow storage.
+
 - Added code-confirmed PC pairing. `rapid-pi` serves an HTTPS pairing listener,
   the owner approves the matching code on the Pi panel or setup page, and the
   telemetry key is delivered once in an encrypted envelope. Paired PCs can be
