@@ -1,0 +1,229 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Node 24 action pins match verify.yml. ubuntu-24.04-arm is the hosted ARM64
+# runner (free for public repos). If it is unavailable, the fallback is to
+# build the ARM64 package and image on the development Pi — the only ARM64
+# path used before this workflow.
+
+jobs:
+  pairing-pi-seals-fixture:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev
+      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/cpp --target rapid-pairing-pi-seals-fixture-tests
+      - run: ctest --test-dir build/cpp -R rapid-pairing-pi-seals-fixture-tests --output-on-failure
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pi-seals-pairing-fixture
+          path: build/cpp/pairing-fixtures-pi-seals/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-companion:
+    needs: pairing-pi-seals-fixture
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: pi-seals-pairing-fixture
+          path: build/pi-seals-pairing-fixture
+      - shell: pwsh
+        run: ./companion/build-native-daemon.ps1 -Compiler MSVC
+      - run: node cpp/display/tests/qt_display_tests.js
+      - shell: pwsh
+        run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test" --pairing-pi-seals-fixtures "$env:GITHUB_WORKSPACE/build/pi-seals-pairing-fixture"
+      - shell: pwsh
+        run: dotnet tool install --global wix --version 4.0.6
+      - shell: pwsh
+        run: ./companion/build-msi.ps1 -ExecutablePath ./companion/rapid-telemetry-daemon.exe -OutputPath ./dist/raPId-Companion.msi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rapid-windows-msi
+          path: dist/raPId-Companion.msi
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rapid-windows-companion
+          path: |
+            companion/rapid-telemetry-daemon.exe
+            companion/START-RAPID.cmd
+            companion/start-rapid-daemon.vbs
+            companion/install-demo.cmd
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-v4-fixtures
+          path: ${{ runner.temp }}/rapid-self-test/v4-fixtures/*.hex
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-pairing-fixtures
+          path: |
+            ${{ runner.temp }}/rapid-self-test/pairing-fixtures/*.hex
+            ${{ runner.temp }}/rapid-self-test/pairing-fixtures/*.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  arm64-package:
+    needs: windows-companion
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: windows-v4-fixtures
+          path: build/windows-v4-fixtures
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: windows-pairing-fixtures
+          path: build/windows-pairing-fixtures
+      # #10: the released Pi package serves the same-revision companion so the
+      # setup page's download and the image's setup flow cannot be stale.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rapid-windows-msi
+          path: build/windows-msi
+      - name: Locate the same-revision companion artifact
+        run: |
+          companion_msi="$(find build/windows-msi -name 'raPId-Companion.msi' -print -quit)"
+          test -n "$companion_msi" || { echo 'companion MSI missing from rapid-windows-msi'; exit 1; }
+          echo "RAPID_COMPANION_ARTIFACT=$PWD/$companion_msi" >> "$GITHUB_ENV"
+      - run: sudo apt-get update && sudo apt-get install -y libsystemd-dev pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript qt6-websockets-dev
+      - name: Configure release ARM64 package
+        run: |
+          extra=
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            extra="-DRAPID_PACKAGE_VERSION=${GITHUB_REF_NAME#v}"
+          fi
+          cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror \
+            -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON -DRAPID_BUILD_PI_PACKAGE=ON \
+            -DRAPID_IMAGE_READY=ON -DRAPID_COMPANION_ARTIFACT="$RAPID_COMPANION_ARTIFACT" \
+            -DRAPID_V4_FIXTURES="${{ github.workspace }}/build/windows-v4-fixtures" \
+            -DRAPID_PAIRING_FIXTURES="${{ github.workspace }}/build/windows-pairing-fixtures" \
+            $extra
+      - run: cmake --build build/cpp
+      - run: ctest --test-dir build/cpp --output-on-failure
+      - name: Package and verify the ARM64 deb
+        run: |
+          cpack --config build/cpp/CPackConfig.cmake -B build/packages
+          shopt -s nullglob
+          debs=(build/packages/rapid_*_arm64.deb)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "expected one arm64 deb, got ${#debs[@]}: ${debs[*]}" >&2
+            exit 1
+          fi
+          cmake -DPACKAGE="$PWD/${debs[0]}" -DEXPECT_IMAGE_READY=ON -P packaging/CheckPackage.cmake
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rapid-linux-arm64
+          path: build/packages/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  image:
+    needs: arm64-package
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rapid-linux-arm64
+          path: build/packages
+      - name: Locate the ARM64 package
+        run: |
+          shopt -s nullglob
+          debs=(build/packages/rapid_*_arm64.deb)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "expected one arm64 deb, got ${#debs[@]}: ${debs[*]}" >&2
+            exit 1
+          fi
+          echo "RAPID_ARM64_DEB=$PWD/${debs[0]}" >> "$GITHUB_ENV"
+      - name: Check out the pinned image builder
+        run: |
+          git clone https://github.com/raspberrypi/rpi-image-gen.git "$RUNNER_TEMP/rpi-image-gen"
+          git -C "$RUNNER_TEMP/rpi-image-gen" checkout "$(cat image/builder-revision)"
+      - name: Install image-builder dependencies
+        run: sudo "$RUNNER_TEMP/rpi-image-gen/install_deps.sh"
+      - name: Validate image metadata
+        run: |
+          validate="$RUNNER_TEMP/rapid-image-validate"
+          mkdir -p "$validate"
+          bash image/prepare.sh "$RUNNER_TEMP/rpi-image-gen" "$RAPID_ARM64_DEB" "$validate"
+      - name: Assemble the flashable image
+        run: |
+          build="$RUNNER_TEMP/rapid-image-build"
+          mkdir -p "$build"
+          bash image/prepare.sh "$RUNNER_TEMP/rpi-image-gen" "$RAPID_ARM64_DEB" "$build" --build
+          img=$(find "$build" -name '*.img' -print -quit)
+          test -n "$img" || { echo 'image build produced no .img' >&2; exit 1; }
+          mkdir -p dist
+          xz -T0 -c "$img" > dist/rapid-pi4.img.xz
+          sha256sum dist/rapid-pi4.img.xz | awk '{print $1 "  rapid-pi4.img.xz"}' > dist/rapid-pi4.img.xz.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rapid-pi4-image
+          path: |
+            dist/rapid-pi4.img.xz
+            dist/rapid-pi4.img.xz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows-companion, arm64-package, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rapid-linux-arm64
+          path: release-assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rapid-pi4-image
+          path: release-assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rapid-windows-msi
+          path: release-assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rapid-windows-companion
+          path: release-assets/companion
+      - name: Create a draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          Flash with Raspberry Pi Imager → Use custom → `rapid-pi4.img.xz`.
+          First boot opens the `rapid` setup network; open the address shown on the Pi screen.
+          Pair the Windows companion from that setup page. The owner publishes this draft after the #12 acceptance run.
+          NOTES
+          gh release create "$tag" --draft --title "raPId ${tag#v}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            release-assets/rapid_*.deb \
+            release-assets/rapid-pi4.img.xz \
+            release-assets/rapid-pi4.img.xz.sha256 \
+            release-assets/raPId-Companion.msi \
+            release-assets/companion/rapid-telemetry-daemon.exe \
+            release-assets/companion/START-RAPID.cmd \
+            release-assets/companion/PAIR.cmd

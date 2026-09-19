@@ -23,6 +23,7 @@ option(RAPID_BUILD_PI_PACKAGE "Assemble the experimental Pi application package"
 # Empty means "serve no companion" (the setup page then offers no download),
 # never a guessed or mismatched binary.
 set(RAPID_COMPANION_ARTIFACT "" CACHE FILEPATH "Windows companion artifact bundled into the Pi package")
+option(RAPID_IMAGE_READY "Install the image-ready marker (release builds only)" OFF)
 
 # Dependency detection stays here, in one place, so that two components cannot
 # each discover the same dependency differently. Components declare what they
