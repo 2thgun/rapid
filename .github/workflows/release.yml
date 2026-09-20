@@ -78,9 +78,20 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The package must be built on the same suite as the image: rpi-image-gen
+  # assembles a Debian 13 (trixie) arm64 root filesystem, and dpkg-shlibdeps
+  # names the runtime libraries by the build host's packages. Ubuntu names
+  # libqt6gui6t64 / libqt6network6t64 and pins qt6-websockets-abi (= 6.4.2);
+  # trixie ships libqt6gui6 / libqt6network6 and Qt 6.8, so an Ubuntu-built deb
+  # cannot resolve there. The ubuntu-24.04-arm runner still supplies the arm64
+  # hardware; the trixie container supplies the userland the Pi image targets.
   arm64-package:
     needs: windows-companion
     runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -103,18 +114,31 @@ jobs:
           companion_msi="$(find build/windows-msi -name 'raPId-Companion.msi' -print -quit)"
           test -n "$companion_msi" || { echo 'companion MSI missing from rapid-windows-msi'; exit 1; }
           echo "RAPID_COMPANION_ARTIFACT=$PWD/$companion_msi" >> "$GITHUB_ENV"
-      - run: sudo apt-get update && sudo apt-get install -y libsystemd-dev pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript qt6-websockets-dev
+      - name: Install Debian trixie build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ git pkg-config ca-certificates dpkg-dev fakeroot file nodejs \
+            libsystemd-dev libsqlite3-dev libcurl4-openssl-dev libssl-dev \
+            nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev libcrypt-dev \
+            qt6-base-dev qt6-declarative-dev qt6-websockets-dev \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript
       - name: Configure release ARM64 package
         run: |
           extra=
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             extra="-DRAPID_PACKAGE_VERSION=${GITHUB_REF_NAME#v}"
           fi
+          # Debian ships the binary as nodejs and/or node; setup/CMakeLists.txt
+          # requires whichever exists.
+          node_bin="$(command -v node || command -v nodejs)"
           cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror \
+            -DNODE_EXECUTABLE="$node_bin" \
             -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON -DRAPID_BUILD_PI_PACKAGE=ON \
             -DRAPID_IMAGE_READY=ON -DRAPID_COMPANION_ARTIFACT="$RAPID_COMPANION_ARTIFACT" \
-            -DRAPID_V4_FIXTURES="${{ github.workspace }}/build/windows-v4-fixtures" \
-            -DRAPID_PAIRING_FIXTURES="${{ github.workspace }}/build/windows-pairing-fixtures" \
+            -DRAPID_V4_FIXTURES="$GITHUB_WORKSPACE/build/windows-v4-fixtures" \
+            -DRAPID_PAIRING_FIXTURES="$GITHUB_WORKSPACE/build/windows-pairing-fixtures" \
             $extra
       - run: cmake --build build/cpp
       - run: ctest --test-dir build/cpp --output-on-failure
@@ -170,10 +194,19 @@ jobs:
           build="$RUNNER_TEMP/rapid-image-build"
           mkdir -p "$build"
           bash image/prepare.sh "$RUNNER_TEMP/rpi-image-gen" "$RAPID_ARM64_DEB" "$build" --build
-          img=$(find "$build" -name '*.img' -print -quit)
-          test -n "$img" || { echo 'image build produced no .img' >&2; exit 1; }
+          # rpi-image-gen writes the raw disk image under work/image-<name>/.
+          # Do not search all of $build: the chroot also contains files named
+          # *.img (e.g. /boot/initrd.img), and an unbounded find picks the first
+          # in traversal order, which produced a compressed initramfs instead of
+          # the disk image. The size guard makes that mistake impossible.
+          raw=$(find "$build"/work/image-*/ -maxdepth 1 -type f -name '*.img' -print -quit)
+          test -n "$raw" || { echo 'image build produced no .img' >&2; exit 1; }
           mkdir -p dist
-          xz -T0 -c "$img" > dist/rapid-pi4.img.xz
+          xz -T0 -c "$raw" > dist/rapid-pi4.img.xz
+          size=$(stat -c%s dist/rapid-pi4.img.xz)
+          test "$size" -gt 50000000 || {
+            echo "compressed image suspiciously small: $size bytes (from $raw)" >&2; exit 1;
+          }
           sha256sum dist/rapid-pi4.img.xz | awk '{print $1 "  rapid-pi4.img.xz"}' > dist/rapid-pi4.img.xz.sha256
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
