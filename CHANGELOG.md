@@ -5,6 +5,11 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Fixed `rapid-setup` restart-looping with `226/NAMESPACE` after an upgrade or
+  reboot when `/run/rapid-apply` was absent. The setup request queue is now
+  created by systemd through `RuntimeDirectory` on the services that use it
+  (`rapid-setup`, `rapid-apply`, `rapid-wifi`, `rapid-account`) instead of a
+  `tmpfiles.d` rule that a service restart does not reliably apply.
 - Removed the unauthenticated v3 JSON telemetry transport from the Windows
   companion and the Pi runtime. A v3 selection now fails with a pairing hint,
   and the Pi rejects and counts non-v4 packets. `companion_key` remains the
