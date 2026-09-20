@@ -22,6 +22,17 @@ last completed checks, not a guarantee of current device state.
   adapter bugs (session-type enum and the `tc`/`abs` intensity fields).
 - Fixed a recorder durability defect so the durable checkpoint stays within its
   bound under slow storage.
+- Removed the remote browser dashboard; `/` now redirects to the engineering
+  `/telemetry` view. The Qt panel is the only live dashboard.
+- The first-boot setup access point is now an open `rapid` network (or
+  `rapid-####` when `rapid` is already in range). The owner chooses the SSH/sudo
+  password and optionally adds an SSH key on the setup page; `rapid-account`
+  applies it and only then enables SSH.
+- Added the 0.9.9 release pipeline: the package version derives from a git tag
+  (`0.9.9`, or `0.9.9~dev+<sha>` untagged), hosted ARM64 CI builds and verifies
+  the `.deb` with `-Werror`, and a `v*` tag assembles a flashable `.img.xz` with
+  a checksum and attaches it, the ARM64 `.deb` and the Windows companion to a
+  draft GitHub release.
 
 - Added code-confirmed PC pairing. `rapid-pi` serves an HTTPS pairing listener,
   the owner approves the matching code on the Pi panel or setup page, and the
