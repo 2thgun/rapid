@@ -55,9 +55,11 @@ std::string fixed_str(const std::string &d, std::size_t off,
   return s;
 }
 
-// The single source of truth for channel names/units/scale/decimals is
-// channels.inc, the same file write_ld reads. Re-including it here checks
-// the on-disk bytes against that table without re-using write_ld's code.
+// channels.inc is the runtime table write_ld reads; re-including it here gives
+// the scale used to compute expected sample values. The intended channel
+// metadata (name/short name/unit/dec) is pinned separately in pinned_channels
+// below, so drifting the canonical table fails the gate instead of updating
+// code and expectation together.
 struct ExpectedChannel {
   const char *name, *short_name, *unit, *key;
   double scale;
@@ -67,6 +69,70 @@ const ExpectedChannel expected_channels[] = {
 #include "rapid/channels.inc"
 };
 constexpr std::size_t expected_channel_count = std::size(expected_channels);
+
+// The intended on-disk channel metadata, pinned here independently of
+// channels.inc so that drifting the canonical table away from the agreed
+// layout fails the gate rather than silently updating both sides. Names are
+// the real MoTeC ADL identifiers the owner's ACC-derived workspace binds
+// (THROTTLE, BRAKE, GEAR, RPMS, SPEED, G_LAT, G_LON, SUS_TRAVEL_*,
+// TYRE_PRESS_*); the remaining channels keep canonical raPId/MoTeC names.
+// Rationale and per-sim sources: cpp/runtime/include/rapid/channels.md (#29).
+struct PinnedChannel {
+  const char *name, *short_name, *unit;
+  int dec;
+};
+const PinnedChannel pinned_channels[] = {
+    {"Time", "Time", "s", 3},
+    {"THROTTLE", "Throttle", "%", 1},
+    {"BRAKE", "Brake", "%", 1},
+    {"Fuel Level", "Fuel", "l", 2},
+    {"GEAR", "Gear", "", 0},
+    {"RPMS", "RPM", "1/min", 0},
+    {"Steered Angle", "Steer", "", 3},
+    {"SPEED", "Speed", "km/h", 1},
+    {"Velocity Lat", "Vel Lat", "m/s", 2},
+    {"Velocity Vert", "Vel Vert", "m/s", 2},
+    {"Velocity Long", "Vel Long", "m/s", 2},
+    {"G_LAT", "G Lat", "g", 2},
+    {"G Force Vert", "G Vert", "g", 2},
+    {"G_LON", "G Long", "g", 2},
+    {"Wheel Slip FL", "Slip FL", "", 2},
+    {"Wheel Slip FR", "Slip FR", "", 2},
+    {"Wheel Slip RL", "Slip RL", "", 2},
+    {"Wheel Slip RR", "Slip RR", "", 2},
+    {"TYRE_PRESS_LF", "Press FL", "psi", 1},
+    {"TYRE_PRESS_FR", "Press FR", "psi", 1},
+    {"TYRE_PRESS_RL", "Press RL", "psi", 1},
+    {"TYRE_PRESS_RR", "Press RR", "psi", 1},
+    {"Wheel Speed FL", "WhlSp FL", "rad/s", 1},
+    {"Wheel Speed FR", "WhlSp FR", "rad/s", 1},
+    {"Wheel Speed RL", "WhlSp RL", "rad/s", 1},
+    {"Wheel Speed RR", "WhlSp RR", "rad/s", 1},
+    {"Tyre Temp FL", "Temp FL", "C", 1},
+    {"Tyre Temp FR", "Temp FR", "C", 1},
+    {"Tyre Temp RL", "Temp RL", "C", 1},
+    {"Tyre Temp RR", "Temp RR", "C", 1},
+    {"SUS_TRAVEL_LF", "Susp FL", "m", 3},
+    {"SUS_TRAVEL_FR", "Susp FR", "m", 3},
+    {"SUS_TRAVEL_RL", "Susp RL", "m", 3},
+    {"SUS_TRAVEL_RR", "Susp RR", "m", 3},
+    {"TC", "TC", "", 0},
+    {"Heading", "Heading", "rad", 3},
+    {"Pitch", "Pitch", "rad", 3},
+    {"Roll", "Roll", "rad", 3},
+    {"Damage Front", "Dmg F", "", 2},
+    {"Damage Rear", "Dmg R", "", 2},
+    {"Damage Left", "Dmg L", "", 2},
+    {"Damage Right", "Dmg Rgt", "", 2},
+    {"Damage Center", "Dmg C", "", 2},
+    {"Pit Limiter", "Pit Lim", "", 0},
+    {"ABS", "ABS", "", 0},
+    {"Lap Number", "Lap", "", 0},
+    {"Lap Time", "Lap Time", "s", 3},
+    {"Lap Position", "Lap Pos", "%", 1},
+};
+static_assert(std::size(pinned_channels) == expected_channel_count,
+              "pinned channel table must cover every channel.inc row");
 
 constexpr int kRate = 50;
 constexpr std::size_t kLap1Samples = 60, kLap2Samples = 60, kTailSamples = 30;
@@ -212,10 +278,10 @@ void check_ld(const std::string &data, std::size_t sample_count,
     require(dtype_type == 7 && dtype == 4, ch + ": dtype");
     require(rate == kRate, ch + ": rate");
     require(shift == 0 && mul == 1 && scale_field == 1, ch + ": shift/mul/scale");
-    require(dec == expected_channels[i].dec, ch + ": decimal places");
-    require(name == expected_channels[i].name, ch + ": name");
-    require(short_name == expected_channels[i].short_name, ch + ": short name");
-    require(unit == expected_channels[i].unit, ch + ": unit");
+    require(dec == pinned_channels[i].dec, ch + ": decimal places");
+    require(name == pinned_channels[i].name, ch + ": name");
+    require(short_name == pinned_channels[i].short_name, ch + ": short name");
+    require(unit == pinned_channels[i].unit, ch + ": unit");
 
     for (std::size_t s = 0; s < sample_count; ++s) {
       float value = f32(data, data_ptr + s * 4);

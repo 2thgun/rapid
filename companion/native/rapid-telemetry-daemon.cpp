@@ -305,37 +305,40 @@ struct Channel {
     int dec;
 };
 
-// Keep this table's name/short_name/dec columns identical to
-// cpp/runtime/include/rapid/channels.inc (owned by s7-motec/#19); the
-// companion cannot #include that file because it is a separate Visual Studio
-// project.
-// unit/scale are owned per-channel by other steps (e.g. steering's unit is
-// s4-steering's/#18) and are intentionally left untouched here.
+// This table mirrors cpp/runtime/include/rapid/channels.inc exactly (name,
+// short_name, unit, key, scale, dec); the companion cannot #include that file
+// because it is a separate Visual Studio project. The canonical layout and the
+// provenance of every name are documented in
+// cpp/runtime/include/rapid/channels.md (#29).
 constexpr std::array<Channel, field_count> kChannels{{
     {"Time", "Time", "s", "elapsed", 1.0, 3},
-    {"Throttle Pos", "Throttle", "%", "throttle", 100.0, 1},
-    {"Brake Pos", "Brake", "%", "brake", 100.0, 1},
+    {"THROTTLE", "Throttle", "%", "throttle", 100.0, 1},
+    {"BRAKE", "Brake", "%", "brake", 100.0, 1},
     {"Fuel Level", "Fuel", "l", "fuel", 1.0, 2},
-    {"Gear", "Gear", "", "gear", 1.0, 0},
-    {"Engine RPM", "RPM", "rpm", "rpm", 1.0, 0},
+    {"GEAR", "Gear", "", "gear", 1.0, 0},
+    {"RPMS", "RPM", "1/min", "rpm", 1.0, 0},
     // Normalised -1..1 for every simulator (AC1/ACC/ACE read this natively;
     // iRacing's raw radians are divided by its half-lock before storage).
+    // Deliberately not the ACC export's STEERANGLE, whose unit is degrees: the
+    // stored value is normalised, see channels.md.
     {"Steered Angle", "Steer", "", "steering_angle", 1.0, 3},
-    {"Ground Speed", "Speed", "km/h", "speed_kmh", 1.0, 1},
+    {"SPEED", "Speed", "km/h", "speed_kmh", 1.0, 1},
     {"Velocity Lat", "Vel Lat", "m/s", "velocity_x", 1.0, 2},
     {"Velocity Vert", "Vel Vert", "m/s", "velocity_y", 1.0, 2},
     {"Velocity Long", "Vel Long", "m/s", "velocity_z", 1.0, 2},
-    {"G Force Lat", "G Lat", "g", "g_x", 1.0, 2},
+    {"G_LAT", "G Lat", "g", "g_x", 1.0, 2},
     {"G Force Vert", "G Vert", "g", "g_y", 1.0, 2},
-    {"G Force Long", "G Long", "g", "g_z", 1.0, 2},
+    {"G_LON", "G Long", "g", "g_z", 1.0, 2},
     {"Wheel Slip FL", "Slip FL", "", "wheel_slip_fl", 1.0, 2},
     {"Wheel Slip FR", "Slip FR", "", "wheel_slip_fr", 1.0, 2},
     {"Wheel Slip RL", "Slip RL", "", "wheel_slip_rl", 1.0, 2},
     {"Wheel Slip RR", "Slip RR", "", "wheel_slip_rr", 1.0, 2},
-    {"Tyre Press FL", "Press FL", "psi", "pressure_fl", 1.0, 1},
-    {"Tyre Press FR", "Press FR", "psi", "pressure_fr", 1.0, 1},
-    {"Tyre Press RL", "Press RL", "psi", "pressure_rl", 1.0, 1},
-    {"Tyre Press RR", "Press RR", "psi", "pressure_rr", 1.0, 1},
+    {"TYRE_PRESS_LF", "Press FL", "psi", "pressure_fl", 1.0, 1},
+    {"TYRE_PRESS_FR", "Press FR", "psi", "pressure_fr", 1.0, 1},
+    {"TYRE_PRESS_RL", "Press RL", "psi", "pressure_rl", 1.0, 1},
+    {"TYRE_PRESS_RR", "Press RR", "psi", "pressure_rr", 1.0, 1},
+    // Deliberately not the ACC export's WHEEL_SPEED_*, whose unit is m/s: the
+    // stored value is angular speed in rad/s, see channels.md.
     {"Wheel Speed FL", "WhlSp FL", "rad/s", "wheel_speed_fl", 1.0, 1},
     {"Wheel Speed FR", "WhlSp FR", "rad/s", "wheel_speed_fr", 1.0, 1},
     {"Wheel Speed RL", "WhlSp RL", "rad/s", "wheel_speed_rl", 1.0, 1},
@@ -344,11 +347,11 @@ constexpr std::array<Channel, field_count> kChannels{{
     {"Tyre Temp FR", "Temp FR", "C", "core_temp_fr", 1.0, 1},
     {"Tyre Temp RL", "Temp RL", "C", "core_temp_rl", 1.0, 1},
     {"Tyre Temp RR", "Temp RR", "C", "core_temp_rr", 1.0, 1},
-    {"Suspension Travel FL", "Susp FL", "m", "suspension_fl", 1.0, 3},
-    {"Suspension Travel FR", "Susp FR", "m", "suspension_fr", 1.0, 3},
-    {"Suspension Travel RL", "Susp RL", "m", "suspension_rl", 1.0, 3},
-    {"Suspension Travel RR", "Susp RR", "m", "suspension_rr", 1.0, 3},
-    {"TC Activity", "TC", "", "tc", 1.0, 0},
+    {"SUS_TRAVEL_LF", "Susp FL", "m", "suspension_fl", 1.0, 3},
+    {"SUS_TRAVEL_FR", "Susp FR", "m", "suspension_fr", 1.0, 3},
+    {"SUS_TRAVEL_RL", "Susp RL", "m", "suspension_rl", 1.0, 3},
+    {"SUS_TRAVEL_RR", "Susp RR", "m", "suspension_rr", 1.0, 3},
+    {"TC", "TC", "", "tc", 1.0, 0},
     {"Heading", "Heading", "rad", "heading", 1.0, 3},
     {"Pitch", "Pitch", "rad", "pitch", 1.0, 3},
     {"Roll", "Roll", "rad", "roll", 1.0, 3},
@@ -358,7 +361,7 @@ constexpr std::array<Channel, field_count> kChannels{{
     {"Damage Right", "Dmg Rgt", "", "damage_right", 1.0, 2},
     {"Damage Center", "Dmg C", "", "damage_center", 1.0, 2},
     {"Pit Limiter", "Pit Lim", "", "pit_limiter", 1.0, 0},
-    {"ABS Activity", "ABS", "", "abs", 1.0, 0},
+    {"ABS", "ABS", "", "abs", 1.0, 0},
     {"Lap Number", "Lap", "", "lap_number", 1.0, 0},
     {"Lap Time", "Lap Time", "s", "current_lap_ms", 0.001, 3},
     {"Lap Position", "Lap Pos", "%", "lap_position", 100.0, 1},
