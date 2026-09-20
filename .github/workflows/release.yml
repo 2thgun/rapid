@@ -78,9 +78,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The package must be built on the same suite as the image: rpi-image-gen
+  # assembles a Debian 13 (trixie) arm64 root filesystem, and dpkg-shlibdeps
+  # names the runtime libraries by the build host's packages. Ubuntu names
+  # libqt6gui6t64 / libqt6network6t64 and pins qt6-websockets-abi (= 6.4.2);
+  # trixie ships libqt6gui6 / libqt6network6 and Qt 6.8, so an Ubuntu-built deb
+  # cannot resolve there. The ubuntu-24.04-arm runner still supplies the arm64
+  # hardware; the trixie container supplies the userland the Pi image targets.
   arm64-package:
     needs: windows-companion
     runs-on: ubuntu-24.04-arm
+    container: debian:trixie
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -103,7 +111,16 @@ jobs:
           companion_msi="$(find build/windows-msi -name 'raPId-Companion.msi' -print -quit)"
           test -n "$companion_msi" || { echo 'companion MSI missing from rapid-windows-msi'; exit 1; }
           echo "RAPID_COMPANION_ARTIFACT=$PWD/$companion_msi" >> "$GITHUB_ENV"
-      - run: sudo apt-get update && sudo apt-get install -y libsystemd-dev pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript qt6-websockets-dev
+      - name: Install Debian trixie build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ git pkg-config ca-certificates dpkg-dev fakeroot file \
+            libsystemd-dev libsqlite3-dev libcurl4-openssl-dev libssl-dev \
+            nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev libcrypt-dev \
+            qt6-base-dev qt6-declarative-dev qt6-websockets-dev \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript
       - name: Configure release ARM64 package
         run: |
           extra=
@@ -113,8 +130,8 @@ jobs:
           cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror \
             -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON -DRAPID_BUILD_PI_PACKAGE=ON \
             -DRAPID_IMAGE_READY=ON -DRAPID_COMPANION_ARTIFACT="$RAPID_COMPANION_ARTIFACT" \
-            -DRAPID_V4_FIXTURES="${{ github.workspace }}/build/windows-v4-fixtures" \
-            -DRAPID_PAIRING_FIXTURES="${{ github.workspace }}/build/windows-pairing-fixtures" \
+            -DRAPID_V4_FIXTURES="$GITHUB_WORKSPACE/build/windows-v4-fixtures" \
+            -DRAPID_PAIRING_FIXTURES="$GITHUB_WORKSPACE/build/windows-pairing-fixtures" \
             $extra
       - run: cmake --build build/cpp
       - run: ctest --test-dir build/cpp --output-on-failure
