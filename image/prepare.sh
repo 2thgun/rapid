@@ -77,6 +77,9 @@ if [[ "$mode" == --build ]]; then
     echo 'Image build unavailable: the package has not declared the complete first-boot customer flow ready.' >&2
     exit 2
   fi
+  # rpi-image-gen requires -B to be an existing directory (site/env_init.py);
+  # it is the workroot the validation phase recorded in config.env.
+  mkdir -p "$output/work"
   exec "$builder/rpi-image-gen" build -S "$source_root" -c rapid-pi4.yaml \
     -B "$output/work" -- "IGconf_rapid_package=$package"
 fi
