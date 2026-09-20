@@ -11,8 +11,11 @@ stage_package() {
   stage=$work/stage
   rm -rf "$stage" "$work/control"
   mkdir -p "$stage/etc/rapid" "$stage/usr/lib/rapid" "$stage/usr/share/rapid" \
-    "$stage/usr/lib/systemd/system" "$work/control"
+    "$stage/usr/lib/systemd/system" "$stage/usr/lib/tmpfiles.d" \
+    "$stage/usr/lib/sysusers.d" "$work/control"
   cp "$source_root/packaging/config.toml" "$stage/etc/rapid/config.toml"
+  cp "$source_root/packaging/rapid.tmpfiles" "$stage/usr/lib/tmpfiles.d/rapid.conf"
+  cp "$source_root/packaging/rapid.sysusers" "$stage/usr/lib/sysusers.d/rapid.conf"
   for binary in rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot \
       rapid-provision rapid-apply rapid-display-recovery rapid-wifi rapid-account rapid-network-mode; do
     : > "$stage/usr/lib/rapid/$binary"
@@ -85,6 +88,7 @@ replace_in() {
 
 write_fake_dpkg
 units=$work/stage/usr/lib/systemd/system
+tmpfiles=$work/stage/usr/lib/tmpfiles.d/rapid.conf
 
 stage_package
 expect_pass "packaged units and device access wiring"
@@ -134,16 +138,16 @@ expect_fail "a setup server that cannot show the AP name" "publish the setup AP 
 # real Pi: a unit references a path its binary writes that ProtectSystem=strict
 # then silently makes read-only.
 stage_package
-replace_in "$units/rapid-setup.service" 'ReadWritePaths=/run/rapid-apply /run/rapid$' 'ReadWritePaths=/run/rapid-apply'
+replace_in "$units/rapid-setup.service" '^ReadWritePaths=/run/rapid$' 'ReadWritePaths=/var/lib/rapid-setup'
 expect_fail "a setup server that cannot write /run/rapid" "does not grant write access to /run/rapid/calibration-request.json"
 
 stage_package
-replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/run/rapid-apply$' ''
-expect_fail "a Wi-Fi helper that cannot write its result file" "does not grant write access to /run/rapid-apply/wifi-result.json"
+replace_in "$units/rapid-wifi.service" '^RuntimeDirectory=rapid-apply$' ''
+expect_fail "a Wi-Fi helper that cannot create its result directory" "does not grant write access to /run/rapid-apply/wifi-result.json"
 
 stage_package
 replace_in "$units/rapid-wifi.service" '^ProtectSystem=strict$' ''
-expect_fail "a Wi-Fi helper with a widened sandbox" "rapid-wifi.service must keep ProtectSystem=strict and grant ReadWritePaths=/run/rapid-apply"
+expect_fail "a Wi-Fi helper with a widened sandbox" "rapid-wifi.service must keep ProtectSystem=strict and declare RuntimeDirectory=rapid-apply"
 
 stage_package
 replace_in "$units/rapid-display-recovery.service" '^ReadWritePaths=/var/lib/rapid$' ''
@@ -158,15 +162,14 @@ expect_fail "a display recovery helper with a widened sandbox" "rapid-display-re
 # unit's required result path is moved to a second ReadWritePaths line: it must
 # still pass, where reading only the first line would reject it by accident.
 stage_package
-replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/run/rapid-apply$' 'ReadWritePaths=/run/unused-first-line'
-printf '\nReadWritePaths=/run/rapid-apply\n' >> "$units/rapid-wifi.service"
+replace_in "$units/rapid-setup.service" '^ReadWritePaths=/run/rapid$' 'ReadWritePaths=/var/lib/rapid-setup'
+printf '\nReadWritePaths=/run/rapid\n' >> "$units/rapid-setup.service"
 expect_pass "a result path granted only on a later ReadWritePaths line"
 
 # The same required path listed on no ReadWritePaths line must still fail.
 stage_package
-replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/run/rapid-apply$' 'ReadWritePaths=/run/unused-first-line'
-replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/etc/NetworkManager/system-connections$' 'ReadWritePaths=/run/unused-second-line'
-expect_fail "a Wi-Fi helper whose result path is granted nowhere" "does not grant write access to /run/rapid-apply/wifi-result.json"
+replace_in "$units/rapid-setup.service" '^ReadWritePaths=/run/rapid$' 'ReadWritePaths=/var/lib/rapid-setup'
+expect_fail "a setup server whose runtime path is granted nowhere" "does not grant write access to /run/rapid/calibration-request.json"
 
 # RuntimeDirectory= is gathered the same way: a grant moved to a later line is
 # still a grant.
@@ -215,5 +218,32 @@ EXPECT_IMAGE_READY=ON expect_fail "a release package missing the image-ready mar
 stage_package
 printf 'v1\n' > "$work/stage/usr/share/rapid/rapid-image-ready-v1"
 EXPECT_IMAGE_READY=ON expect_pass "a release package that declares the image ready"
+
+# /run/rapid-apply lifecycle: the shared queue must be created by the services
+# that use it (RuntimeDirectory), not by tmpfiles.d, or a live upgrade/restart
+# fails with 226/NAMESPACE when the directory is absent.
+stage_package
+replace_in "$units/rapid-setup.service" '^RuntimeDirectory=rapid-apply$' ''
+expect_fail "a setup server that does not create the shared queue directory" "must declare RuntimeDirectory=rapid-apply"
+
+stage_package
+replace_in "$units/rapid-wifi.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
+expect_fail "a helper that narrows the shared queue directory" "must declare RuntimeDirectoryMode=0770"
+
+stage_package
+replace_in "$units/rapid-apply.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0755'
+expect_fail "a helper whose queue mode disagrees" "must declare RuntimeDirectoryMode=0770"
+
+stage_package
+replace_in "$units/rapid-account.service" '^Group=rapid$' ''
+expect_fail "a helper outside the shared queue group" "must run in the rapid group"
+
+stage_package
+printf 'd /run/rapid-apply 0770 root rapid -\n' >> "$tmpfiles"
+expect_fail "a tmpfiles rule that reclaims the queue directory" "must not create /run/rapid-apply"
+
+stage_package
+rm "$tmpfiles"
+expect_fail "a package without the tmpfiles rule" "Package is missing ./usr/lib/tmpfiles.d/rapid.conf"
 
 echo "package verifier tests passed"

@@ -4,8 +4,13 @@ Description=raPId constrained device access (account password, SSH key, SSH enab
 [Service]
 Type=oneshot
 User=root
+Group=rapid
 # The request holds only a yescrypt hash and is consumed on start. No password
 # or hash is ever passed on a command line.
+# Shared request/result queue; systemd creates it before the mount namespace
+# (#25). Must match rapid-setup/apply/wifi.service (Group=rapid, mode 0770).
+RuntimeDirectory=rapid-apply
+RuntimeDirectoryMode=0770
 ExecStart=/usr/lib/rapid/rapid-account --request-file /run/rapid-apply/account-request.json --result-file /run/rapid-apply/account-result.json --user rapid
 TimeoutStartSec=60
 LimitCORE=0
@@ -16,7 +21,7 @@ ProtectSystem=strict
 # drop-in, host keys and unit links, so /etc is writable. The home directory is
 # written only by a child process that has dropped to the account's own uid.
 ProtectHome=read-only
-ReadWritePaths=/etc /run/rapid-apply -/home/rapid
+ReadWritePaths=/etc -/home/rapid
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

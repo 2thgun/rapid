@@ -1,2 +1,6 @@
 d /etc/rapid 0750 root rapid -
-d /run/rapid-apply 0770 root rapid -
+# /run/rapid-apply is deliberately NOT here: tmpfiles.d is only applied at boot
+# and by the dpkg trigger, neither ordered against a service restart, so a
+# missing directory made rapid-setup fail with 226/NAMESPACE. The four services
+# that use the queue declare RuntimeDirectory=rapid-apply (Group=rapid, 0770),
+# so systemd creates it before their mount namespaces.

@@ -4,17 +4,18 @@ Description=raPId constrained Wi-Fi application
 [Service]
 Type=oneshot
 User=root
+Group=rapid
+# Shared request/result queue; systemd creates it before the mount namespace
+# (#25). Must match rapid-setup/apply/account.service (Group=rapid, mode 0770).
+RuntimeDirectory=rapid-apply
+RuntimeDirectoryMode=0770
 ExecStart=/usr/lib/rapid/rapid-wifi --request-file /run/rapid-apply/wifi-request.json --result-file /run/rapid-apply/wifi-result.json
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-# ProtectSystem=strict makes /run read-only; the request/result queue lives here (#25).
-ReadWritePaths=/run/rapid-apply
 # #26: the passphrase now reaches NetworkManager as a private (0600) keyfile
 # this service writes directly, so it needs write access to NetworkManager's
-# connection directory. This is a separate, additive grant -- systemd
-# accumulates repeated ReadWritePaths= directives -- alongside g2-sandbox's
-# ReadWritePaths=/run/rapid-apply for #25 (this service's own result/request
-# queue, a pre-existing gap independent of this change).
+# connection directory. The request/result queue above is covered by
+# RuntimeDirectory=rapid-apply, not a ReadWritePaths grant.
 ReadWritePaths=/etc/NetworkManager/system-connections
