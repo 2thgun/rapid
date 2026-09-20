@@ -9,6 +9,15 @@ User=rapid
 Group=rapid
 StateDirectory=rapid-setup
 StateDirectoryMode=0700
+# /run/rapid-apply is the shared request/result queue. systemd creates it (and
+# makes it writable under ProtectSystem=strict) before it sets up the mount
+# namespace, so the service no longer fails with 226/NAMESPACE when the
+# directory is absent, including a live upgrade or a fresh /run at boot. It is
+# not created by tmpfiles.d, so it cannot depend on that trigger having run.
+# Group=rapid and mode 0770 must match rapid-apply/wifi/account.service;
+# CheckPackage enforces it.
+RuntimeDirectory=rapid-apply
+RuntimeDirectoryMode=0770
 WorkingDirectory=/var/lib/rapid-setup
 ExecStart=/usr/lib/rapid/rapid-setup-server --state-directory /var/lib/rapid-setup --assets /usr/share/rapid --listen 192.168.1.64 --enrollment-token-file /var/lib/rapid-setup/enrollment.token --tls-certificate /var/lib/rapid-setup/device.crt --tls-private-key /var/lib/rapid-setup/device.key --apply-request-file /run/rapid-apply/request.json --apply-result-file /run/rapid-apply/result.json --wifi-request-file /run/rapid-apply/wifi-request.json --wifi-result-file /run/rapid-apply/wifi-result.json --firstboot-status-file /run/rapid/firstboot.json --calibration-file /var/lib/rapid-setup/touch-calibration.conf --calibration-request-file /run/rapid/calibration-request.json --display-confirm-file /run/rapid-apply/display-confirm.json --account-request-file /run/rapid-apply/account-request.json --account-result-file /run/rapid-apply/account-result.json --ssid-file /run/rapid/network-ssid --companion-artifact /usr/share/rapid/companion
 Restart=on-failure
@@ -17,10 +26,10 @@ StandardOutput=journal
 StandardError=journal
 # The setup server briefly holds the owner-chosen device password in memory.
 LimitCORE=0
-# ProtectSystem=strict makes /run read-only; the setup queues live here.
-# /run/rapid also holds the calibration request and the pairing coordinator's
-# files (#25); firstboot/provision create and own that directory.
-ReadWritePaths=/run/rapid-apply /run/rapid
+# ProtectSystem=strict makes /run read-only; /run/rapid holds the calibration
+# request and the pairing coordinator's files (#25); firstboot/provision create
+# and own that directory through their own RuntimeDirectory=rapid.
+ReadWritePaths=/run/rapid
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

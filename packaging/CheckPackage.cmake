@@ -35,6 +35,8 @@ foreach(path IN ITEMS
     "./usr/lib/systemd/system/rapid-wifi.path"
     "./usr/lib/systemd/system/rapid-account.service"
     "./usr/lib/systemd/system/rapid-account.path"
+    "./usr/lib/tmpfiles.d/rapid.conf"
+    "./usr/lib/sysusers.d/rapid.conf"
     "./usr/lib/systemd/system/rapid-network-mode.service")
   string(FIND "${contents}" " ${path}\n" position)
   if(position EQUAL -1)
@@ -74,6 +76,7 @@ read_service("./usr/lib/systemd/system/rapid-account.path" account_path)
 read_service("./usr/lib/systemd/system/rapid-wifi.service" wifi_service)
 read_service("./usr/lib/systemd/system/rapid-display-recovery.service" display_recovery_service)
 read_service("./usr/lib/rapid/rapid-panel" panel_script)
+read_service("./usr/lib/tmpfiles.d/rapid.conf" tmpfiles_file)
 file(REMOVE "${data_tar}")
 set(nl "\n")
 # #25: rapid-firstboot.service and rapid-provision.service both declare
@@ -165,6 +168,42 @@ assert_writable_path("${provision_service}" "rapid-provision.service" "/run/rapi
 assert_writable_path("${setup_service}" "rapid-setup.service" "/run/rapid/calibration-request.json")
 assert_writable_path("${wifi_service}" "rapid-wifi.service" "/run/rapid-apply/wifi-result.json")
 assert_writable_path("${display_recovery_service}" "rapid-display-recovery.service" "/var/lib/rapid/display-recovery.json")
+# /run/rapid-apply is the shared setup request/result queue. It used to be
+# created only by a tmpfiles.d line, which a live upgrade or a service restart
+# does not reliably apply; ReadWritePaths= requires the path to exist, so
+# rapid-setup failed with 226/NAMESPACE when it was absent. Every service that
+# uses the queue now declares it as its own RuntimeDirectory, so systemd creates
+# it (and adds it to the sandbox writable set) before the mount namespace.
+# Group=rapid keeps it usable by the unprivileged setup server and the root
+# helpers; the mode must be identical everywhere so a later start cannot narrow
+# it. The tmpfiles rule must NOT own this path, or a future edit could quietly
+# restore the old, unreliable lifecycle.
+if(tmpfiles_file MATCHES "${nl}d /run/rapid-apply")
+  message(FATAL_ERROR "rapid.tmpfiles must not create /run/rapid-apply; the consuming services own it with RuntimeDirectory=")
+endif()
+if(NOT tmpfiles_file MATCHES "d /etc/rapid 0750 root rapid")
+  message(FATAL_ERROR "rapid.tmpfiles must keep the /etc/rapid rule")
+endif()
+set(rapid_apply_mode "")
+foreach(name IN ITEMS setup apply wifi account)
+  set(service_var "${name}_service")
+  set(service "${${service_var}}")
+  if(NOT service MATCHES "${nl}RuntimeDirectory=rapid-apply${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must declare RuntimeDirectory=rapid-apply so /run/rapid-apply exists before its mount namespace")
+  endif()
+  if(NOT service MATCHES "${nl}RuntimeDirectoryMode=0770${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must declare RuntimeDirectoryMode=0770 for the shared /run/rapid-apply queue")
+  endif()
+  if(NOT service MATCHES "${nl}Group=rapid${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must run in the rapid group so shared /run/rapid-apply ownership stays usable")
+  endif()
+  string(REGEX MATCH "${nl}RuntimeDirectoryMode=([^${nl}]*)${nl}" rapid_apply_match "${service}")
+  if(NOT rapid_apply_mode)
+    set(rapid_apply_mode "${CMAKE_MATCH_1}")
+  elseif(NOT CMAKE_MATCH_1 STREQUAL rapid_apply_mode)
+    message(FATAL_ERROR "rapid-setup/apply/wifi/account.service must declare the same RuntimeDirectoryMode for /run/rapid-apply")
+  endif()
+endforeach()
 if(NOT setup_service MATCHES "User=rapid" OR
    NOT setup_service MATCHES "Requires=rapid-firstboot[.]service rapid-provision[.]service" OR
    NOT setup_service MATCHES "--listen 192[.]168[.]1[.]64" OR
@@ -196,7 +235,7 @@ endif()
 string(REGEX MATCH "ExecStart=[^${nl}]*" account_exec "${account_service}")
 string(REGEX MATCH "ExecStart=[^${nl}]*" setup_exec "${setup_service}")
 foreach(line IN ITEMS "User=root" "NoNewPrivileges=true" "ProtectSystem=strict" "ProtectHome=read-only"
-                      "LimitCORE=0" "ReadWritePaths=/etc /run/rapid-apply -/home/rapid")
+                      "LimitCORE=0" "ReadWritePaths=/etc -/home/rapid")
   string(FIND "${account_service}" "${nl}${line}${nl}" position)
   if(position EQUAL -1)
     message(FATAL_ERROR "rapid-account.service must keep '${line}'")
@@ -211,7 +250,7 @@ endif()
 if(NOT setup_exec MATCHES " --account-request-file /run/rapid-apply/account-request[.]json --account-result-file /run/rapid-apply/account-result[.]json" OR
    setup_exec MATCHES "password" OR account_exec MATCHES "password" OR
    NOT setup_service MATCHES "${nl}LimitCORE=0${nl}" OR
-   NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply /run/rapid${nl}")
+   NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid${nl}")
   message(FATAL_ERROR "The setup service must queue device access through rapid-account without secrets on a command line or in core dumps")
 endif()
 if(NOT setup_exec MATCHES " --ssid-file /run/rapid/network-ssid( |$)")
@@ -219,11 +258,12 @@ if(NOT setup_exec MATCHES " --ssid-file /run/rapid/network-ssid( |$)")
 endif()
 # #25: rapid-wifi.service and rapid-display-recovery.service each write a
 # result/state file back under a ProtectSystem=strict mount namespace; without
-# their own ReadWritePaths grant, that write silently fails on a real device
-# (WSL has no systemd, so the gate cannot exercise this).
+# their own runtime directory (wifi) or ReadWritePaths grant
+# (display-recovery), that write silently fails on a real device (WSL has no
+# systemd, so the gate cannot exercise this).
 if(NOT wifi_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
-   NOT wifi_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply${nl}")
-  message(FATAL_ERROR "rapid-wifi.service must keep ProtectSystem=strict and grant ReadWritePaths=/run/rapid-apply for its result file")
+   NOT wifi_service MATCHES "${nl}RuntimeDirectory=rapid-apply${nl}")
+  message(FATAL_ERROR "rapid-wifi.service must keep ProtectSystem=strict and declare RuntimeDirectory=rapid-apply for its request/result queue")
 endif()
 if(NOT display_recovery_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
    NOT display_recovery_service MATCHES "${nl}ReadWritePaths=/var/lib/rapid${nl}")
