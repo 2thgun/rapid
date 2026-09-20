@@ -194,10 +194,19 @@ jobs:
           build="$RUNNER_TEMP/rapid-image-build"
           mkdir -p "$build"
           bash image/prepare.sh "$RUNNER_TEMP/rpi-image-gen" "$RAPID_ARM64_DEB" "$build" --build
-          img=$(find "$build" -name '*.img' -print -quit)
-          test -n "$img" || { echo 'image build produced no .img' >&2; exit 1; }
+          # rpi-image-gen writes the raw disk image under work/image-<name>/.
+          # Do not search all of $build: the chroot also contains files named
+          # *.img (e.g. /boot/initrd.img), and an unbounded find picks the first
+          # in traversal order, which produced a compressed initramfs instead of
+          # the disk image. The size guard makes that mistake impossible.
+          raw=$(find "$build"/work/image-*/ -maxdepth 1 -type f -name '*.img' -print -quit)
+          test -n "$raw" || { echo 'image build produced no .img' >&2; exit 1; }
           mkdir -p dist
-          xz -T0 -c "$img" > dist/rapid-pi4.img.xz
+          xz -T0 -c "$raw" > dist/rapid-pi4.img.xz
+          size=$(stat -c%s dist/rapid-pi4.img.xz)
+          test "$size" -gt 50000000 || {
+            echo "compressed image suspiciously small: $size bytes (from $raw)" >&2; exit 1;
+          }
           sha256sum dist/rapid-pi4.img.xz | awk '{print $1 "  rapid-pi4.img.xz"}' > dist/rapid-pi4.img.xz.sha256
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
