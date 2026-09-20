@@ -89,6 +89,9 @@ jobs:
     needs: windows-companion
     runs-on: ubuntu-24.04-arm
     container: debian:trixie
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -116,7 +119,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ git pkg-config ca-certificates dpkg-dev fakeroot file \
+            cmake ninja-build g++ git pkg-config ca-certificates dpkg-dev fakeroot file nodejs \
             libsystemd-dev libsqlite3-dev libcurl4-openssl-dev libssl-dev \
             nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev libcrypt-dev \
             qt6-base-dev qt6-declarative-dev qt6-websockets-dev \
@@ -127,7 +130,11 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             extra="-DRAPID_PACKAGE_VERSION=${GITHUB_REF_NAME#v}"
           fi
+          # Debian ships the binary as nodejs and/or node; setup/CMakeLists.txt
+          # requires whichever exists.
+          node_bin="$(command -v node || command -v nodejs)"
           cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror \
+            -DNODE_EXECUTABLE="$node_bin" \
             -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON -DRAPID_BUILD_PI_PACKAGE=ON \
             -DRAPID_IMAGE_READY=ON -DRAPID_COMPANION_ARTIFACT="$RAPID_COMPANION_ARTIFACT" \
             -DRAPID_V4_FIXTURES="$GITHUB_WORKSPACE/build/windows-v4-fixtures" \
