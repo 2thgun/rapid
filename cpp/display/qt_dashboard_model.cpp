@@ -113,6 +113,12 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   network_->setTransferTimeout(1800);
   calibration_timeout_->setSingleShot(true);
   connect(calibration_timeout_, &QTimer::timeout, this, &DashboardModel::calibrationTimedOut);
+  // ~60 Hz presentation tick for the smoothed steering wheel. It only runs
+  // while the wheel is moving (updateSteeringDisplay/advanceSteeringDisplay),
+  // so an idle or straight-line car costs nothing.
+  steering_timer_ = new QTimer(this);
+  steering_timer_->setInterval(16);
+  connect(steering_timer_, &QTimer::timeout, this, &DashboardModel::advanceSteeringDisplay);
   QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayRotation);
@@ -510,6 +516,7 @@ void DashboardModel::applyLiveState(QVariantMap state) {
   state_ = std::move(state);
   updateStatus();
   updateGraphHistory();
+  updateSteeringDisplay();
   bump();
 }
 
@@ -563,6 +570,40 @@ void DashboardModel::updateGraphHistory() {
          graph_samples_.front().toMap().value("time").toLongLong() < now - kWindowMilliseconds) {
     graph_samples_.removeFirst();
   }
+}
+
+void DashboardModel::updateSteeringDisplay() {
+  // Presentation-only: state_ keeps the raw steering_angle for value() and the
+  // recorder; only the wheel reads the smoothed copy. Feed the newest target
+  // and let the ~60 Hz timer interpolate, so a 30 Hz push becomes continuous
+  // motion without queueing anything.
+  const auto raw = state_.value("steering_angle");
+  bool ok = false;
+  const double target = raw.toDouble(&ok);
+  const bool present = raw.isValid() && !raw.isNull() && ok && qIsFinite(target);
+  if (!present) {
+    // Telemetry gone (disconnect/stale): finish any in-flight move so a frozen
+    // wheel never sits mid-sweep, then hold the last position.
+    const bool changed = steering_smoother_.settle();
+    steering_timer_->stop();
+    if (changed) emit steeringDisplayChanged();
+    return;
+  }
+  if (steering_smoother_.set_target(target)) emit steeringDisplayChanged();
+  if (steering_smoother_.moving()) {
+    if (!steering_timer_->isActive()) {
+      steering_tick_.start();
+      steering_timer_->start();
+    }
+  } else {
+    steering_timer_->stop();
+  }
+}
+
+void DashboardModel::advanceSteeringDisplay() {
+  const bool changed = steering_smoother_.advance(steering_tick_.restart() / 1000.0);
+  if (changed) emit steeringDisplayChanged();
+  if (!steering_smoother_.moving()) steering_timer_->stop();
 }
 
 void DashboardModel::updateStatus() {

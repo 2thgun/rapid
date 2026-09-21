@@ -42,13 +42,16 @@ Window {
     // steering_angle is normalised -1..1 for every simulator. Degrees are
     // derived here for display only, using the sim's own reported lock when
     // known, else a configurable default (never silently -- see steeringLockKnown).
+    // The wheel reads dashboard.steeringDisplay, a presentation-only smoothed
+    // copy of the same channel (DashboardModel/SteeringSmoother); the raw
+    // channel and the lock conversion/fallback marker are unchanged.
     readonly property real defaultLockToLockDeg: 900
     function steeringLockKnown() {
         const v = raw("steering_lock_deg")
         return v !== undefined && v !== null && Number.isFinite(Number(v)) && Number(v) > 0
     }
     function steeringLockToLockDeg() { return root.steeringLockKnown() ? Number(raw("steering_lock_deg")) : root.defaultLockToLockDeg }
-    function steeringDegrees() { return root.number("steering_angle") * root.steeringLockToLockDeg() / 2 }
+    function steeringDegrees() { return dashboard.steeringDisplay * root.steeringLockToLockDeg() / 2 }
 
     component Label: Text {
         color: root.muted; font.pixelSize: 10; font.bold: true

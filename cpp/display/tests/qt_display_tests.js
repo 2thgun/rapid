@@ -27,6 +27,17 @@ if (!qmlSource.includes('steering_lock_deg')) {
   throw new Error('Main.qml steering wheel must derive degrees from the steering lock channel');
 }
 
+// steering-display-motion: the wheel must read the model's presentation-only
+// smoothed value, not the raw channel, so a ~30 Hz push renders as continuous
+// motion. The raw channel is still used for the "no telemetry" marker.
+if (!qmlSource.includes('dashboard.steeringDisplay')) {
+  throw new Error('Main.qml steering wheel must use the smoothed dashboard.steeringDisplay');
+}
+if (qmlSource.includes('root.number("steering_angle") * root.steeringLockToLockDeg()') ||
+    qmlSource.includes('root.number("steering_angle")*root.steeringLockToLockDeg()')) {
+  throw new Error('Main.qml steering wheel must not bind directly to the raw steering channel');
+}
+
 // #13: the physical orientation is a Qt scene rotation driven by the value the
 // panel reads from the display-recovery state file, not an xrandr call.
 if (!qmlSource.includes('dashboard.displayRotation') ||

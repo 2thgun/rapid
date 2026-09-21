@@ -11,6 +11,7 @@
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTimer>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -70,7 +71,8 @@ int main(int argc, char **argv) {
   QJsonObject state{{"companion_connected", true}, {"companion_daemon_state", "driving"},
                     {"telemetry_fresh", true}, {"session_id", "qt-test"},
                     {"samples_received", 1}, {"throttle", 0.75}, {"brake", 0.25},
-                    {"g_x", 0.5}, {"g_z", -0.5}, {"telemetry_age_ms", 0}};
+                    {"g_x", 0.5}, {"g_z", -0.5}, {"telemetry_age_ms", 0},
+                    {"steering_angle", 0.25}};
   bool fail = false;
   QObject::connect(&server, &QTcpServer::newConnection, &app, [&] {
     auto *socket = server.nextPendingConnection();
@@ -116,7 +118,71 @@ int main(int argc, char **argv) {
   const auto require = [](bool ok, const char *message) {
     if (!ok) { std::cerr << message << '\n'; std::exit(1); }
   };
+  // steering-display-motion: deterministic checks of the exact presentation
+  // smoother the model runs, measuring the introduced delay from the recorded
+  // ACC motion rather than asserting source shape.
+  {
+    constexpr double tick_ms = 1000.0 / 60.0;
+    SteeringSmoother smoother;
+    require(!smoother.valid() && smoother.value() == 0.0, "Smoother starts invalid");
+    require(smoother.set_target(0.4) && smoother.value() == 0.4 && !smoother.moving(),
+            "The first steering sample snaps to position");
+    // 0.4 -> 0.9 is a 0.5 jump, beyond the 0.25 snap threshold.
+    require(smoother.set_target(0.9) && smoother.value() == 0.9 && !smoother.moving(),
+            "A jump beyond the snap threshold snaps immediately");
+    require(smoother.set_target(0.4), "An opposite discontinuity snaps back");
+    require(!smoother.set_target(0.6) && smoother.moving(),
+            "A step within the threshold animates instead of snapping");
+    double settle_ms = 0.0, ninety_five_ms = -1.0;
+    for (int i = 0; i < 600 && smoother.moving(); ++i) {
+      smoother.advance(tick_ms / 1000.0);
+      settle_ms += tick_ms;
+      require(smoother.value() >= 0.4 - 1e-9 && smoother.value() <= 0.6 + 1e-9,
+              "Smoothing never overshoots the target");
+      if (ninety_five_ms < 0 && smoother.value() >= 0.4 + 0.95 * 0.2) ninety_five_ms = settle_ms;
+    }
+    require(!smoother.moving() && settle_ms <= 150.0,
+            "A steering step settles within the documented budget");
+    require(ninety_five_ms > 0 && ninety_five_ms <= 80.0,
+            "95% of a step is reached within ~54 ms");
+    const double before_reversal = smoother.value();
+    smoother.set_target(0.5);
+    for (int i = 0; i < 600 && smoother.moving(); ++i) {
+      smoother.advance(tick_ms / 1000.0);
+      require(smoother.value() >= 0.5 - 1e-9 && smoother.value() <= before_reversal + 1e-9,
+              "A rapid reversal does not overshoot");
+    }
+    // A sustained 30 Hz ramp must not accumulate lag.
+    SteeringSmoother ramp;
+    ramp.set_target(0.0);
+    double target = 0.0, early_lag = 0.0, late_lag = 0.0;
+    for (int tick = 0; tick < 600; ++tick) {
+      if (tick % 2 == 0) { target += 0.004; ramp.set_target(target); }
+      ramp.advance(tick_ms / 1000.0);
+      const double lag = target - ramp.value();
+      if (tick >= 60 && tick < 120) early_lag = std::max(early_lag, lag);
+      if (tick >= 540) late_lag = std::max(late_lag, lag);
+    }
+    require(early_lag < 0.02 && late_lag < 0.02,
+            "Steady-state steering lag stays under 0.02 norm (~9 deg)");
+    require(late_lag <= early_lag + 0.005, "Steering lag does not grow under sustained updates");
+    ramp.set_target(ramp.value() + 0.2);
+    require(ramp.moving() && ramp.settle() && !ramp.moving(),
+            "Stale telemetry settles the wheel instead of freezing mid-sweep");
+  }
   spin(500);
+  // steering-display-motion: the smoothed copy tracks the raw channel, and the
+  // raw channel itself is preserved for value()/the recorder.
+  require(model.value("steering_angle").toDouble() == 0.25 &&
+              std::abs(model.steeringDisplay() - 0.25) < 1e-6,
+          "Raw steering is preserved and the display settles to it");
+  state["steering_angle"] = -0.5;
+  spin(400);
+  require(model.value("steering_angle").toDouble() == -0.5 &&
+              std::abs(model.steeringDisplay() - (-0.5)) < 1e-6,
+          "A discontinuous steering change snaps through the model");
+  state["steering_angle"] = 0.25;
+  spin(400);
   // #13: the panel renders the orientation rapid-display-recovery persisted,
   // read from the existing state file, rather than an X/xrandr transform.
   const auto display_state = helper_directory.filePath("display-state.json");
