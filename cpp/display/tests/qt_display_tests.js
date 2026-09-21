@@ -38,4 +38,14 @@ if (/xrandr/i.test(qmlSource)) {
   throw new Error('Main.qml must not invoke or reference xrandr for rotation (#13)');
 }
 
-console.log('Main.qml wheel-speed unit, steering-lock degrees and scene-rotation checks passed');
+// #13: the X cursor is not part of the rotated scene, so the panel entry point
+// must re-orient it from the same rotation value instead of leaving it upside
+// down over the rotated picture.
+const entrySource = fs.readFileSync(path.join(__dirname, '../qt_dashboard_main.cpp'), 'utf8');
+if (!entrySource.includes('displayRotation') ||
+    !entrySource.includes('setOverrideCursor') ||
+    !entrySource.includes('rotation_cursor')) {
+  throw new Error('qt_dashboard_main.cpp must rotate the X cursor with the scene (#13)');
+}
+
+console.log('Main.qml wheel-speed unit, steering-lock degrees, scene-rotation and panel-cursor checks passed');
