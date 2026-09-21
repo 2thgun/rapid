@@ -18,7 +18,7 @@
     <!-- #49: the MSI bundles PAIR.cmd but had no Start-menu entry point. Shortcut
          both the portable exe (pairs on first run) and the manual pairing
          launcher so neither needs a terminal or a remembered command line. -->
-    <Component Id="StartMenuShortcuts" Guid="B7F1C0D2-6E3A-4C8B-9F10-2D4E6A8C0B12">
+    <Component Id="StartMenuShortcuts" Directory="ProgramMenuDir" Guid="B7F1C0D2-6E3A-4C8B-9F10-2D4E6A8C0B12">
       <Shortcut Id="CompanionShortcut" Name="raPId Companion"
                 Description="Run the raPId telemetry companion (pairs on first use)"
                 Target="[INSTALLFOLDER]rapid-telemetry-daemon.exe" WorkingDirectory="INSTALLFOLDER" />
