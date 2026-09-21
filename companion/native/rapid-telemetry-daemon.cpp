@@ -56,9 +56,28 @@
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
+// The identity is injected through a generated header on the include path
+// (companion/build-native-daemon.ps1 writes rapid_build_identity.h). A direct
+// compiler invocation without it falls back to the literal "unknown": the
+// identity must trace to source, never a guessed revision or a build timestamp.
+#if defined(__has_include)
+#  if __has_include("rapid_build_identity.h")
+#    include "rapid_build_identity.h"
+#  endif
+#endif
+#ifndef RAPID_BUILD_VERSION
+#  define RAPID_BUILD_VERSION "unknown"
+#endif
+
 namespace rapid {
 
 std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key);
+
+// Build identity shown in the tray "Show status" dialog, injected at build
+// time by companion/build-native-daemon.ps1 using the package rule
+// (packaging/RapidVersion.cmake): a vX.Y.Z tag checkout is X.Y.Z, any other
+// commit is 0.9.9~dev+<short-sha>.
+constexpr const char* kBuildVersion = RAPID_BUILD_VERSION;
 
 // Pairing credentials are deliberately protected before they leave the
 // current Windows user's profile.  DPAPI binds the blob to that user's
@@ -310,61 +329,66 @@ struct Channel {
 // because it is a separate Visual Studio project. The canonical layout and the
 // provenance of every name are documented in
 // cpp/runtime/include/rapid/channels.md (#29).
+// dec is 0 on every row: the LD stores float32 physical values, and the
+// known-good ACC/MoTeC ADL export declares dec=0 for all 55 of its float
+// channels, while the community ldparser applies (raw/scale * 10^-dec + shift)
+// * mul to every dtype. A nonzero dec therefore risks i2 scaling the stored
+// value by 10^-dec; display precision is left to the workspace. See #29.
 constexpr std::array<Channel, field_count> kChannels{{
-    {"Time", "Time", "s", "elapsed", 1.0, 3},
-    {"THROTTLE", "Throttle", "%", "throttle", 100.0, 1},
-    {"BRAKE", "Brake", "%", "brake", 100.0, 1},
-    {"Fuel Level", "Fuel", "l", "fuel", 1.0, 2},
+    {"Time", "Time", "s", "elapsed", 1.0, 0},
+    {"THROTTLE", "Throttle", "%", "throttle", 100.0, 0},
+    {"BRAKE", "Brake", "%", "brake", 100.0, 0},
+    {"Fuel Level", "Fuel", "l", "fuel", 1.0, 0},
     {"GEAR", "Gear", "", "gear", 1.0, 0},
     {"RPMS", "RPM", "1/min", "rpm", 1.0, 0},
     // Normalised -1..1 for every simulator (AC1/ACC/ACE read this natively;
     // iRacing's raw radians are divided by its half-lock before storage).
     // Deliberately not the ACC export's STEERANGLE, whose unit is degrees: the
     // stored value is normalised, see channels.md.
-    {"Steered Angle", "Steer", "", "steering_angle", 1.0, 3},
-    {"SPEED", "Speed", "km/h", "speed_kmh", 1.0, 1},
-    {"Velocity Lat", "Vel Lat", "m/s", "velocity_x", 1.0, 2},
-    {"Velocity Vert", "Vel Vert", "m/s", "velocity_y", 1.0, 2},
-    {"Velocity Long", "Vel Long", "m/s", "velocity_z", 1.0, 2},
-    {"G_LAT", "G Lat", "g", "g_x", 1.0, 2},
-    {"G Force Vert", "G Vert", "g", "g_y", 1.0, 2},
-    {"G_LON", "G Long", "g", "g_z", 1.0, 2},
-    {"Wheel Slip FL", "Slip FL", "", "wheel_slip_fl", 1.0, 2},
-    {"Wheel Slip FR", "Slip FR", "", "wheel_slip_fr", 1.0, 2},
-    {"Wheel Slip RL", "Slip RL", "", "wheel_slip_rl", 1.0, 2},
-    {"Wheel Slip RR", "Slip RR", "", "wheel_slip_rr", 1.0, 2},
-    {"TYRE_PRESS_LF", "Press FL", "psi", "pressure_fl", 1.0, 1},
-    {"TYRE_PRESS_FR", "Press FR", "psi", "pressure_fr", 1.0, 1},
-    {"TYRE_PRESS_RL", "Press RL", "psi", "pressure_rl", 1.0, 1},
-    {"TYRE_PRESS_RR", "Press RR", "psi", "pressure_rr", 1.0, 1},
+    {"Steered Angle", "Steer", "", "steering_angle", 1.0, 0},
+    {"SPEED", "Speed", "km/h", "speed_kmh", 1.0, 0},
+    {"Velocity Lat", "Vel Lat", "m/s", "velocity_x", 1.0, 0},
+    {"Velocity Vert", "Vel Vert", "m/s", "velocity_y", 1.0, 0},
+    {"Velocity Long", "Vel Long", "m/s", "velocity_z", 1.0, 0},
+    {"G_LAT", "G Lat", "g", "g_x", 1.0, 0},
+    {"G Force Vert", "G Vert", "g", "g_y", 1.0, 0},
+    {"G_LON", "G Long", "g", "g_z", 1.0, 0},
+    {"Wheel Slip FL", "Slip FL", "", "wheel_slip_fl", 1.0, 0},
+    {"Wheel Slip FR", "Slip FR", "", "wheel_slip_fr", 1.0, 0},
+    {"Wheel Slip RL", "Slip RL", "", "wheel_slip_rl", 1.0, 0},
+    {"Wheel Slip RR", "Slip RR", "", "wheel_slip_rr", 1.0, 0},
+    {"TYRE_PRESS_LF", "Press FL", "psi", "pressure_fl", 1.0, 0},
+    {"TYRE_PRESS_RF", "Press FR", "psi", "pressure_fr", 1.0, 0},
+    {"TYRE_PRESS_LR", "Press RL", "psi", "pressure_rl", 1.0, 0},
+    {"TYRE_PRESS_RR", "Press RR", "psi", "pressure_rr", 1.0, 0},
     // Deliberately not the ACC export's WHEEL_SPEED_*, whose unit is m/s: the
     // stored value is angular speed in rad/s, see channels.md.
-    {"Wheel Speed FL", "WhlSp FL", "rad/s", "wheel_speed_fl", 1.0, 1},
-    {"Wheel Speed FR", "WhlSp FR", "rad/s", "wheel_speed_fr", 1.0, 1},
-    {"Wheel Speed RL", "WhlSp RL", "rad/s", "wheel_speed_rl", 1.0, 1},
-    {"Wheel Speed RR", "WhlSp RR", "rad/s", "wheel_speed_rr", 1.0, 1},
-    {"Tyre Temp FL", "Temp FL", "C", "core_temp_fl", 1.0, 1},
-    {"Tyre Temp FR", "Temp FR", "C", "core_temp_fr", 1.0, 1},
-    {"Tyre Temp RL", "Temp RL", "C", "core_temp_rl", 1.0, 1},
-    {"Tyre Temp RR", "Temp RR", "C", "core_temp_rr", 1.0, 1},
-    {"SUS_TRAVEL_LF", "Susp FL", "m", "suspension_fl", 1.0, 3},
-    {"SUS_TRAVEL_FR", "Susp FR", "m", "suspension_fr", 1.0, 3},
-    {"SUS_TRAVEL_RL", "Susp RL", "m", "suspension_rl", 1.0, 3},
-    {"SUS_TRAVEL_RR", "Susp RR", "m", "suspension_rr", 1.0, 3},
+    {"Wheel Speed FL", "WhlSp FL", "rad/s", "wheel_speed_fl", 1.0, 0},
+    {"Wheel Speed FR", "WhlSp FR", "rad/s", "wheel_speed_fr", 1.0, 0},
+    {"Wheel Speed RL", "WhlSp RL", "rad/s", "wheel_speed_rl", 1.0, 0},
+    {"Wheel Speed RR", "WhlSp RR", "rad/s", "wheel_speed_rr", 1.0, 0},
+    {"Tyre Temp FL", "Temp FL", "C", "core_temp_fl", 1.0, 0},
+    {"Tyre Temp FR", "Temp FR", "C", "core_temp_fr", 1.0, 0},
+    {"Tyre Temp RL", "Temp RL", "C", "core_temp_rl", 1.0, 0},
+    {"Tyre Temp RR", "Temp RR", "C", "core_temp_rr", 1.0, 0},
+    {"SUS_TRAVEL_LF", "Susp FL", "m", "suspension_fl", 1.0, 0},
+    {"SUS_TRAVEL_RF", "Susp FR", "m", "suspension_fr", 1.0, 0},
+    {"SUS_TRAVEL_LR", "Susp RL", "m", "suspension_rl", 1.0, 0},
+    {"SUS_TRAVEL_RR", "Susp RR", "m", "suspension_rr", 1.0, 0},
     {"TC", "TC", "", "tc", 1.0, 0},
-    {"Heading", "Heading", "rad", "heading", 1.0, 3},
-    {"Pitch", "Pitch", "rad", "pitch", 1.0, 3},
-    {"Roll", "Roll", "rad", "roll", 1.0, 3},
-    {"Damage Front", "Dmg F", "", "damage_front", 1.0, 2},
-    {"Damage Rear", "Dmg R", "", "damage_rear", 1.0, 2},
-    {"Damage Left", "Dmg L", "", "damage_left", 1.0, 2},
-    {"Damage Right", "Dmg Rgt", "", "damage_right", 1.0, 2},
-    {"Damage Center", "Dmg C", "", "damage_center", 1.0, 2},
+    {"Heading", "Heading", "rad", "heading", 1.0, 0},
+    {"Pitch", "Pitch", "rad", "pitch", 1.0, 0},
+    {"Roll", "Roll", "rad", "roll", 1.0, 0},
+    {"Damage Front", "Dmg F", "", "damage_front", 1.0, 0},
+    {"Damage Rear", "Dmg R", "", "damage_rear", 1.0, 0},
+    {"Damage Left", "Dmg L", "", "damage_left", 1.0, 0},
+    {"Damage Right", "Dmg Rgt", "", "damage_right", 1.0, 0},
+    {"Damage Center", "Dmg C", "", "damage_center", 1.0, 0},
     {"Pit Limiter", "Pit Lim", "", "pit_limiter", 1.0, 0},
     {"ABS", "ABS", "", "abs", 1.0, 0},
     {"Lap Number", "Lap", "", "lap_number", 1.0, 0},
-    {"Lap Time", "Lap Time", "s", "current_lap_ms", 0.001, 3},
-    {"Lap Position", "Lap Pos", "%", "lap_position", 100.0, 1},
+    {"Lap Time", "Lap Time", "s", "current_lap_ms", 0.001, 0},
+    {"Lap Position", "Lap Pos", "%", "lap_position", 100.0, 0},
 }};
 
 constexpr std::uint64_t field_bit(Field field) {
@@ -2359,9 +2383,14 @@ std::unique_ptr<Daemon> g_daemon;
 NOTIFYICONDATAW g_tray{};
 fs::path g_output_directory;
 
-std::wstring status_text(const PublicStatus& status) {
+// The status dialog body, parameterised so the build-identity self-test can
+// prove a known injected version reaches the text without opening a tray
+// window. The version sits below the daemon status and before the runtime
+// counters (samples / forwarded packets).
+std::wstring status_text_with_version(const PublicStatus& status, std::string_view version) {
     std::wostringstream text;
     text << L"Status: " << utf8_to_wide(status.status)
+         << L"\nVersion: " << utf8_to_wide(version)
          << L"\nSimulator: " << utf8_to_wide(status.simulator)
          << L"\nRecording: " << (status.recording ? L"Yes" : L"No")
          << L"\nSamples: " << status.samples
@@ -2369,6 +2398,10 @@ std::wstring status_text(const PublicStatus& status) {
          << L"\nLast log: " << (status.last_log.empty() ? L"None yet" : status.last_log.wstring())
          << L"\nLast error: " << utf8_to_wide(status.last_error);
     return text.str();
+}
+
+std::wstring status_text(const PublicStatus& status) {
+    return status_text_with_version(status, kBuildVersion);
 }
 
 void show_status(HWND window) {
@@ -3167,10 +3200,41 @@ void manual_pairing_entry_self_test() {
                  "--pairing-url fields, and empty input fails closed\n";
 }
 
+// The tray "Show status" dialog must identify the exact build, and the identity
+// must come from build-time metadata rather than a clock. This proves a known
+// injected version reaches the status text through the same function the real
+// dialog uses (no tray window required), that it is placed below the daemon
+// status and before the runtime counters, and that the compiled-in identity is
+// the one surfaced.
+void build_identity_self_test() {
+    PublicStatus status;
+    status.status = "SELFTEST - identity";
+    status.simulator = "Identity";
+    status.samples = 1;
+    status.packets = 2;
+    const std::string probe = "0.0.0~selftest+abcdef0";
+    const std::wstring text = status_text_with_version(status, probe);
+    if (text.find(L"Version: " + utf8_to_wide(probe)) == std::wstring::npos)
+        throw std::runtime_error("a known injected version must reach the status text as 'Version: <version>'");
+    const auto status_at = text.find(L"Status:");
+    const auto version_at = text.find(L"Version:");
+    const auto samples_at = text.find(L"Samples:");
+    if (status_at == std::wstring::npos || version_at == std::wstring::npos || samples_at == std::wstring::npos ||
+        !(status_at < version_at && version_at < samples_at))
+        throw std::runtime_error("the version must sit below the daemon status and before the runtime counters");
+    if (kBuildVersion[0] == '\0')
+        throw std::runtime_error("the compiled-in build version must never be empty");
+    const std::wstring built = status_text(status);
+    if (built.find(L"Version: " + utf8_to_wide(kBuildVersion)) == std::wstring::npos)
+        throw std::runtime_error("the status dialog must show the compiled-in build version");
+    std::cout << "Build identity self-test passed: status reports Version: " << kBuildVersion << '\n';
+}
+
 bool run_self_test(const fs::path& directory, int sample_rate,
                     const fs::path& pairing_pi_seals_fixtures = {}) {
     pairing_crypto_self_test();
     manual_pairing_entry_self_test();
+    build_identity_self_test();
     // The legacy JSON v3 transport is retired: selecting it on the command
     // line or in a config file must fail with an actionable pairing hint, not
     // silently fall back to anything unauthenticated.

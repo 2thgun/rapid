@@ -197,17 +197,25 @@ std::vector<fs::path> files_containing(const fs::path &directory, const std::str
 }
 
 void policy_tests() {
-  for (const auto *weak : {"short1A!", "aaaaaaaaaaaaaaaa", "abababababab", "lowercaseonly", "Password1234",
+  // #22/#23 rework: the device-access hard minimum is 4 characters, so a
+  // 4-digit PIN is accepted. Trivially weak credentials stay rejected.
+  for (const auto *weak : {"abc", "1111", "0000", "1234", "4321", "1212", "12121212",
+                           "aaaaaaaaaaaaaaaa", "abababababab", "Password1234",
                            "myraspberrypi22", "abcdefghijklmnopqrstuvwxyz"})
-    require(!account::password_problem(weak).empty(), std::string("weak password rejected: ") + weak);
-  require(!account::password_problem("Aa1-" + std::string(125, 'x')).empty(), "overlong password rejected");
+    require(!account::password_problem(weak).empty(), std::string("weak credential rejected: ") + weak);
+  require(!account::password_problem("Aa1-" + std::string(125, 'x')).empty(), "overlong credential rejected");
   require(!account::password_problem(std::string("Good-pass\n2024")).empty(), "control characters rejected");
   require(!account::password_problem(std::string("Good-pass\x00" "2024x", 14)).empty(), "NUL rejected");
   require(!account::password_problem("Good-pass-\xff\xfe" "2024").empty(), "invalid UTF-8 rejected");
-  for (const auto *good : {"Tr4ck-day-at-Spa", "correct horse battery staple", "caf\xc3\xa9-lap-time-9"})
-    require(account::password_problem(good).empty(), std::string("acceptable password: ") + good);
-  const auto problem = account::password_problem("S3cr3t!");
-  require(problem.find("S3cr3t") == std::string::npos, "the reason never echoes the password");
+  // A 4-digit PIN (and other short-but-not-trivial credentials) is the point of
+  // the relaxation; the longer examples remain acceptable.
+  for (const auto *good : {"4821", "9053", "short1A!", "lowercaseonly", "abcd1234",
+                           "Tr4ck-day-at-Spa", "correct horse battery staple",
+                           "caf\xc3\xa9-lap-time-9"})
+    require(account::password_problem(good).empty(), std::string("acceptable credential: ") + good);
+  const auto problem = account::password_problem("Password-S1x");
+  require(!problem.empty() && problem.find("S1x") == std::string::npos,
+          "a rejected credential's reason never echoes it");
 
   const auto ed = account::parse_public_key(ed25519_key('\x07') + "\r\n");
   require(ed && ed->type == "ssh-ed25519" && ed->comment == "owner@laptop" &&
@@ -308,11 +316,11 @@ void api_tests(const fs::path &base) {
   }
 
   // Validation. Each rejected attempt counts toward the rate limit.
-  auto weak = authed(request("/api/v1/account", "POST", {{"password", "Weak1"}}));
+  auto weak = authed(request("/api/v1/account", "POST", {{"password", "1111"}}));
   const auto weak_response = auth.handle(weak);
-  require(weak_response.status == 400 && weak_response.body.find("Weak1") == std::string::npos &&
+  require(weak_response.status == 400 && weak_response.body.find("1111") == std::string::npos &&
               !fs::exists(request_file),
-          "weak password rejected server-side without echoing it");
+          "trivially weak credential rejected server-side without echoing it");
   auto unknown = authed(request("/api/v1/account", "POST", {{"password", password}, {"user", "root"}}));
   require(auth.handle(unknown).status == 400 && !fs::exists(request_file), "unexpected fields rejected");
   auto bad_key = authed(request("/api/v1/account", "POST", {{"ssh_public_key", "command=\"sh\" " + ed25519_key(1)}}));
@@ -583,7 +591,7 @@ void secret_tests(const fs::path &base, const std::string &helper) {
     change.headers["cookie"] = cookie(login);
     change.headers["x-csrf-token"] = Json::parse(login.body)["csrf_token"].get<std::string>();
     auto weak = change;
-    weak.body = Json{{"password", password.substr(0, 8)}}.dump();
+    weak.body = Json{{"password", "1111"}}.dump();
     const auto weak_response = auth.handle(weak);
     server_log_stream << weak_response.body << "\n";
     const auto response = auth.handle(change);

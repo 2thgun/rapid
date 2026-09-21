@@ -117,24 +117,29 @@ bool valid_blob(const std::string &type, const std::string &blob) {
 }
 } // namespace
 
+// Device-access credential policy (#23/#22, reworked 2026-09-21).
+//
+// The threat model is local-only: this credential is the `rapid` account's
+// SSH/sudo password, the account is not reachable off the local network, SSH
+// password login exists only while a password is set, and the setup page needs
+// HTTPS plus an authenticated owner session and CSRF token to change it. The
+// owner asked for a painless credential, so the hard minimum is 4 characters
+// (a 4-digit PIN is accepted) and the page states that 12+ characters or a key
+// are recommended, not required. The owner setup login keeps its 12-character
+// minimum in setup_auth.cpp: it guards the whole management surface.
+//
+// This is a deliberate relaxation, not a removal of validation: control
+// characters, invalid text, single-character and repeating patterns, straight
+// sequences and well-known passwords are still refused, and the same function
+// is the single server-side authority the client mirrors.
 std::string password_problem(const std::string &password) {
-  if (password.size() < 12) return "the password must be at least 12 characters";
-  if (password.size() > 128) return "the password must be at most 128 bytes";
+  if (password.size() < 4) return "the password or PIN must be at least 4 characters";
+  if (password.size() > 128) return "the password or PIN must be at most 128 bytes";
   for (unsigned char c : password)
-    if (c < 0x20 || c == 0x7f) return "the password must not contain control characters";
-  if (!well_formed_utf8(password)) return "the password must be valid text";
+    if (c < 0x20 || c == 0x7f) return "the password or PIN must not contain control characters";
+  if (!well_formed_utf8(password)) return "the password or PIN must be valid text";
   std::set<unsigned char> distinct(password.begin(), password.end());
-  if (distinct.size() < 5) return "the password must use at least 5 different characters";
-  bool lower = false, upper = false, digit = false, other = false;
-  for (unsigned char c : password) {
-    if (c >= 'a' && c <= 'z') lower = true;
-    else if (c >= 'A' && c <= 'Z') upper = true;
-    else if (c >= '0' && c <= '9') digit = true;
-    else other = true;
-  }
-  // A long passphrase is accepted as is; a shorter password needs variety.
-  if (password.size() < 20 && int(lower) + int(upper) + int(digit) + int(other) < 2)
-    return "use at least 20 characters, or mix letters with digits, capitals or symbols";
+  if (distinct.size() < 3) return "the password or PIN must use at least 3 different characters";
   static const std::array<std::string_view, 12> common{
       "password1234", "password12345", "passw0rd1234", "raspberrypi1", "raspberry123",
       "rapidrapid12", "123456789012", "qwertyuiop12", "1q2w3e4r5t6y", "letmein12345",
@@ -143,11 +148,23 @@ std::string password_problem(const std::string &password) {
   if (std::find(common.begin(), common.end(), lowered) != common.end() ||
       lowered.find("raspberry") != std::string::npos || lowered.find("password") != std::string::npos)
     return "the password is too easy to guess";
-  // Straight runs such as "abcdefghijkl" or "123456789012".
-  bool run = true;
-  for (std::size_t i = 1; i < password.size() && run; ++i)
-    run = static_cast<unsigned char>(password[i]) == static_cast<unsigned char>(password[i - 1]) + 1;
-  if (run) return "the password is too easy to guess";
+  // Straight runs such as "abcdefghijkl", "123456789012" or "4321".
+  bool ascending = true, descending = true;
+  for (std::size_t i = 1; i < password.size() && (ascending || descending); ++i) {
+    const auto previous = static_cast<unsigned char>(password[i - 1]);
+    const auto current = static_cast<unsigned char>(password[i]);
+    ascending = ascending && current == previous + 1;
+    descending = descending && previous == current + 1;
+  }
+  if (ascending || descending) return "the password or PIN is too easy to guess";
+  // Short repeating patterns such as "abababab" or "1212".
+  for (std::size_t period = 1; period * 2 <= password.size(); ++period) {
+    if (password.size() % period != 0) continue;
+    bool periodic = true;
+    for (std::size_t i = period; i < password.size() && periodic; ++i)
+      periodic = password[i] == password[i % period];
+    if (periodic) return "the password or PIN repeats a short pattern";
+  }
   return {};
 }
 

@@ -9,13 +9,18 @@ User=rapid
 Group=rapid
 StateDirectory=rapid-setup
 StateDirectoryMode=0700
-# /run/rapid-apply is the shared request/result queue. systemd creates it (and
-# makes it writable under ProtectSystem=strict) before it sets up the mount
-# namespace, so the service no longer fails with 226/NAMESPACE when the
-# directory is absent, including a live upgrade or a fresh /run at boot. It is
-# not created by tmpfiles.d, so it cannot depend on that trigger having run.
-# Group=rapid and mode 0770 must match rapid-apply/wifi/account.service;
-# CheckPackage enforces it.
+# /run/rapid-apply is the shared request/result queue and this service is its
+# single lifecycle owner. systemd creates it (and makes it writable under
+# ProtectSystem=strict) before this unit's mount namespace, so there is no
+# 226/NAMESPACE when it is absent, including on a live upgrade or a fresh /run
+# at boot; and it removes it only when this server stops. It is not created by
+# tmpfiles.d, so it cannot depend on that trigger having run.
+# rapid-apply/wifi/account.service must NOT declare RuntimeDirectory=rapid-apply:
+# systemd removes a unit's RuntimeDirectory when that unit stops even while other
+# active units still use it, so a transient consumer deleting the queue out from
+# under this server was the bug (#25). Those consumers are ordered after this
+# unit and granted ReadWritePaths=/run/rapid-apply instead. CheckPackage enforces
+# the single owner, Group=rapid and RuntimeDirectoryMode=0770.
 RuntimeDirectory=rapid-apply
 RuntimeDirectoryMode=0770
 WorkingDirectory=/var/lib/rapid-setup

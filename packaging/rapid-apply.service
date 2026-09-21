@@ -1,15 +1,19 @@
 [Unit]
 Description=raPId constrained setup settings application
+# rapid-setup.service is the single lifecycle owner of the shared /run/rapid-apply
+# request/result queue. This transient consumer must not declare RuntimeDirectory
+# for it: systemd removes a unit's RuntimeDirectory when that unit stops even
+# while rapid-setup is still active, which deleted the queue after the first
+# request and broke later requests (#25). Ordering after the owner plus an
+# explicit ReadWritePaths grant gives this unit the queue without owning it.
+Requires=rapid-setup.service
+After=rapid-setup.service
 
 [Service]
 Type=oneshot
 User=root
 Group=rapid
 Environment=DISPLAY=:0
-# Shared request/result queue; systemd creates it before the mount namespace
-# (#25). Must match rapid-setup/wifi/account.service (Group=rapid, mode 0770).
-RuntimeDirectory=rapid-apply
-RuntimeDirectoryMode=0770
 ExecStart=/usr/lib/rapid/rapid-apply --request-file /run/rapid-apply/request.json --result-file /run/rapid-apply/result.json --display-recovery /usr/lib/rapid/rapid-display-recovery --display-state-file /var/lib/rapid/display-recovery.json --display-output default --display-calibration-file /var/lib/rapid-setup/touch-calibration.conf --display-confirm-file /run/rapid-apply/display-confirm.json
 # Bounded: hostname, preview, the 30-second owner confirmation and rollback.
 TimeoutStartSec=120
@@ -20,3 +24,6 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 ReadWritePaths=/var/lib/rapid
+# The queue itself is owned by rapid-setup.service; this grant is the consumer
+# side of that ownership (systemd accumulates repeated ReadWritePaths=).
+ReadWritePaths=/run/rapid-apply

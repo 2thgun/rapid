@@ -11,10 +11,16 @@ label{display:block;margin-bottom:8px}input,select,button{box-sizing:border-box;
 input,select{padding:12px;background:#10151c;border:1px solid #62758e;color:inherit}button{margin-top:16px;background:#69d9b3;border:0;color:#10251e;font-weight:650;cursor:pointer}
 button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margin:4px 0;overflow-wrap:anywhere}
 [hidden]{display:none!important}#message{min-height:24px;color:#f9cc85}#access-public-key,#access-ssh-command{display:block;overflow-wrap:anywhere;color:#edf2f7;margin:4px 0 12px}
+.category{border:1px solid #2c3b4d;border-radius:12px;padding:18px;margin-top:20px;background:#151d28}
+.category h3{margin:0 0 10px;font-size:1.02rem}.category h4{margin:18px 0 8px;font-size:.98rem}
+.status{min-height:22px;margin:10px 0 0;font-weight:600}.status.ok{color:#8fe3b8}.status.error{color:#f6a6a6}
+.hint{font-size:.9rem;color:#9fb0c3;margin:-2px 0 12px}
+.hint .req,.hint .rec{font-weight:650;border-radius:4px;padding:1px 6px;margin-right:5px}
+.hint .req{background:#3a2528;color:#f3b0b0}.hint .rec{background:#213039;color:#9fd3f0}
 </style>
 <h1>raPId setup</h1>
-<p>Manage your device.</p>
-<p id="message" role="status" aria-live="polite"></p>
+<p>Manage your device. Each category below saves on its own.</p>
+<p id="message" class="status" role="status" aria-live="polite"></p>
 <section id="device-identity" hidden>
 <h2>Confirm this device</h2>
 <p>Setup Wi-Fi network: <strong id="device-ssid">rapid</strong> (open, no
@@ -24,8 +30,8 @@ password). If this device's own physical display shows a different
 <p>Address: <strong id="device-address"></strong></p>
 <p>TLS fingerprint: <strong id="device-fingerprint">unavailable</strong></p>
 <p>More than one raPId device in range broadcasts the same Wi-Fi name.
-Before entering an activation token, match the fingerprint above against the
-one shown on this device's own physical display.</p>
+Before entering an activation token, compare the fingerprint above with the
+first block shown on this device's own physical display.</p>
 </section>
 <section id="companion-download" hidden>
 <h2>Windows companion</h2>
@@ -41,7 +47,8 @@ PC, and the downloaded file is the same one this Pi's protocol was built for.</p
 <form id="enrollment-form">
 <label for="activation-token">Device activation token</label>
 <input id="activation-token" type="password" autocomplete="off" required minlength="64" maxlength="64" pattern="[0-9a-f]{64}">
-<label for="new-password">New owner password (at least 12 characters)</label>
+<label for="new-password">New owner password</label>
+<p class="hint"><span class="req">Required</span>at least 12 characters. <span class="rec">Recommended</span>a longer passphrase. This password protects the setup page itself.</p>
 <input id="new-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
 <label for="confirm-password">Confirm password</label>
 <input id="confirm-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
@@ -57,59 +64,87 @@ PC, and the downloaded file is the same one this Pi's protocol was built for.</p
 </form>
 </section>
 <section id="profile" hidden>
-<h2>Device profile</h2>
+<h2>Device settings</h2>
+<div class="category" id="category-profile">
+<h3>Device profile</h3>
 <form id="settings-form">
 <label for="hostname">Device name</label>
+<p class="hint"><span class="req">Required</span>lowercase letters, digits and dashes.</p>
 <input id="hostname" autocomplete="off" required maxlength="63" pattern="[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?">
 <label for="rotation">Orientation</label>
 <select id="rotation"><option value="0">Landscape</option><option value="180">Upside-down landscape</option></select>
-<button id="save-settings" type="submit">Save and apply hostname</button>
+<button id="save-settings" type="submit">Save device profile</button>
 <button id="retry-settings" type="button" hidden>Retry settings application</button>
 <button id="confirm-rotation" type="button" hidden>Keep the new orientation</button>
 </form>
+<p id="settings-status" class="status" role="status" aria-live="polite"></p>
 <dl><dt>Startup preference</dt><dd>Saved Wi-Fi, then access point</dd></dl>
-<p>Saving applies the device name shortly after submission. Home Wi-Fi joining
-may return to the setup access point if it fails.</p>
+</div>
+<div class="category" id="category-wifi">
+<h3>Home Wi-Fi</h3>
+<form id="wifi-form">
+<label for="wifi-ssid">Home Wi-Fi name</label>
+<p class="hint"><span class="req">Required</span>the network the Pi should join.</p>
+<input id="wifi-ssid" required maxlength="32" autocomplete="off">
+<label for="wifi-password">Home Wi-Fi password</label>
+<p class="hint"><span class="req">Required</span>at least 8 characters, as set on your router.</p>
+<input id="wifi-password" type="password" required minlength="8" maxlength="64" autocomplete="new-password">
+<button id="save-wifi" type="submit">Save home Wi-Fi credentials</button>
+</form>
+<p id="wifi-status" class="status" role="status" aria-live="polite"></p>
+</div>
+<div class="category" id="category-calibration">
+<h3>Touchscreen</h3>
+<p>Calibration runs on the Pi's own display, not in this browser. Start it here,
+then tap the targets on the display.</p>
 <button id="start-calibration" type="button">Calibrate touch on the Pi display</button>
 <button id="reset-calibration" type="button">Reset touchscreen calibration</button>
-<form id="wifi-form"><label for="wifi-ssid">Home Wi-Fi name</label><input id="wifi-ssid" required maxlength="32" autocomplete="off"><label for="wifi-password">Home Wi-Fi password</label><input id="wifi-password" type="password" required minlength="8" maxlength="64" autocomplete="new-password"><button id="join-wifi" type="submit">Join Home Wi-Fi</button></form>
-<h3>Remembered PCs</h3><div id="peers">No paired PCs.</div>
-<h3>Pair a PC</h3>
+<p id="calibration-status" class="status" role="status" aria-live="polite"></p>
+</div>
+<div class="category" id="category-peers">
+<h3>Paired PCs</h3>
+<div id="peers">No paired PCs.</div>
+<h4>Pair a PC</h4>
 <p id="pairing-state">Pairing window is closed.</p>
 <button id="pairing-open" type="button">Open pairing window</button>
 <button id="pairing-cancel" type="button" hidden>Cancel pairing window</button>
 <div id="pairing-pending" hidden><p>Compare this code with the requesting PC, then approve it on the Pi:</p><strong id="pairing-code"></strong><p id="pairing-label"></p><button id="pairing-approve" type="button">Approve displayed PC</button></div>
+<p id="pairing-status" class="status" role="status" aria-live="polite"></p>
+</div>
 <button id="sign-out" type="button">Sign out</button>
 </section>
 <section id="device-access" hidden>
 <h2>Device access (SSH and sudo)</h2>
-<p>Choose the password for the <code>rapid</code> account on the Pi. It is used to sign in over SSH and for
+<p>Choose the password or PIN for the <code>rapid</code> account on the Pi. It is used to sign in over SSH and for
 <code>sudo</code>. The device ships without one, and SSH stays off until you set a password or add a key.
-The password is hashed on the Pi before it is stored and is never shown again.</p>
+The password or PIN is hashed on the Pi before it is stored and is never shown again.</p>
+<p><span class="req">Required</span>a device password or PIN, or an SSH public key.</p>
 <p>TLS fingerprint of this connection: <strong id="access-fingerprint">unavailable</strong></p>
 <p>The setup network is open, so this could be a lookalike device. Before typing a password below, compare
-the fingerprint above with the one shown on this device's own physical display; if they don't match, stop
+the fingerprint above with the first block shown on this device's own physical display; if they don't match, stop
 and do not enter a password or key.</p>
-<p id="access-state">Checking device access…</p>
 <form id="access-form">
-<label for="access-password">New device password (at least 12 characters; mix letters with digits or symbols, or use 20+ characters)</label>
-<input id="access-password" type="password" autocomplete="new-password" minlength="12" maxlength="128">
-<label for="access-confirm">Confirm device password</label>
-<input id="access-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128">
+<label for="access-password">Device password or PIN</label>
+<p class="hint"><span class="req">Required</span>unless you add an SSH key: at least 4 characters, so a 4-digit PIN is fine. <span class="rec">Recommended</span>12+ characters, a passphrase, or key-only access.</p>
+<input id="access-password" type="password" autocomplete="new-password" minlength="4" maxlength="128">
+<label for="access-confirm">Confirm device password or PIN</label>
+<input id="access-confirm" type="password" autocomplete="new-password" minlength="4" maxlength="128">
 <label for="access-key">SSH public key (optional, one line such as <code>ssh-ed25519 AAAA… name</code>)</label>
+<p class="hint"><span class="rec">Recommended</span>key-only sign-in does not need a password at all.</p>
 <input id="access-key" autocomplete="off" spellcheck="false" maxlength="3072">
 <label id="access-replace-label" hidden><input id="access-replace" type="checkbox" style="width:auto;min-height:0"> Replace the password this account already has</label>
-<label><input id="access-fingerprint-confirm" type="checkbox" required style="width:auto;min-height:0"> I compared the TLS fingerprint above with the one on the Pi's own display, and they match.</label>
-<button id="access-save" type="submit">Set device access</button>
+<label><input id="access-fingerprint-confirm" type="checkbox" required style="width:auto;min-height:0"> I compared the TLS fingerprint above with the first block on the Pi's own display, and they match.</label>
+<button id="access-save" type="submit">Save device access</button>
 </form>
+<p id="access-status" class="status" role="status" aria-live="polite"></p>
 <h3>Generate a key for this computer</h3>
 <p>Generate an SSH key here and this page downloads the private key to this
 computer and fills its public key into the field above, so only the public half
 is installed on the Pi. The private key never leaves this computer.</p>
 <button id="access-generate" type="button">Generate a key and download it</button>
-<p id="access-generate-state" role="status" aria-live="polite"></p>
+<p id="access-generate-state" class="status" role="status" aria-live="polite"></p>
 <div id="access-generated" hidden>
-<p>Public key (installed when you press Set device access):</p>
+<p>Public key (installed when you press Save device access):</p>
 <code id="access-public-key"></code>
 <p>Sign in from this computer with:</p>
 <code id="access-ssh-command"></code>
@@ -128,8 +163,23 @@ let pairing_poll = null;
 let certificateFingerprint = '';
 let companionInfo = null;
 const message = document.getElementById('message');
+/* #setup-page-pure:start */
+// The Pi panel prints the full 64-hex TLS fingerprint in 16-character blocks.
+// The browser shows the first 16 characters (64 bits, enough that a lookalike
+// certificate cannot realistically repeat them) grouped in fours, so the owner
+// compares one short line against the first block on the panel.
 function formatFingerprint(fp) {
-  return (fp.match(/.{1,16}/g) || [fp]).join(' ');
+  const hex = String(fp || '').replace(/[^0-9a-f]/gi, '').toLowerCase().slice(0, 16);
+  return hex ? hex.match(/.{1,4}/g).join(' ') : 'unavailable';
+}
+/* #setup-page-pure:end */
+// A per-category result line: explicit success or failure, never mixed with
+// another category's state.
+function setStatus(element, text, kind) {
+  if (!element) return;
+  element.textContent = text;
+  element.classList.remove('ok', 'error');
+  if (kind) element.classList.add(kind);
 }
 /* #28-key-format:start */
 // OpenSSH key encoding for the browser-generated key (#28). WebCrypto exports
@@ -253,7 +303,7 @@ document.getElementById('enrollment-form').addEventListener('submit', async even
   const confirmation = document.getElementById('confirm-password');
   const button = document.getElementById('create-owner');
   if (password.value !== confirmation.value) {
-    message.textContent = 'The passwords do not match.';
+    setStatus(message, 'The passwords do not match.', 'error');
     return;
   }
   button.disabled = true;
@@ -262,10 +312,10 @@ document.getElementById('enrollment-form').addEventListener('submit', async even
     await api('/api/v1/auth/enroll', 'POST', {token: token.value, password: password.value});
     token.value = '';
     showLogin();
-    message.textContent = 'Owner account created. Sign in to continue setup.';
+    setStatus(message, 'Owner account created. Sign in to continue setup.', 'ok');
   } catch (error) {
     if (error.status === 409) showLogin();
-    message.textContent = error.message;
+    setStatus(message, error.message, 'error');
   } finally {
     password.value = '';
     confirmation.value = '';
@@ -335,7 +385,7 @@ async function showAccess() {
     document.getElementById('access-fingerprint').textContent =
         certificateFingerprint ? formatFingerprint(certificateFingerprint) : 'unavailable';
     const result = data.result;
-    document.getElementById('access-state').textContent = data.queued ? 'Applying device access…' : describeAccess(result);
+    setStatus(document.getElementById('access-status'), data.queued ? 'Applying device access…' : describeAccess(result));
     if (result && (result.password_set || result.status === 'confirmation_required'))
       document.getElementById('access-replace-label').hidden = false;
     return data;
@@ -361,31 +411,33 @@ document.getElementById('access-form').addEventListener('submit', async event =>
   const replace = document.getElementById('access-replace');
   const fingerprintConfirm = document.getElementById('access-fingerprint-confirm');
   const button = document.getElementById('access-save');
+  const status = document.getElementById('access-status');
   // Belt and braces alongside the checkbox's own `required` attribute (#23):
   // don't apply device access without an explicit fingerprint check.
-  if (!fingerprintConfirm.checked) { message.textContent = 'Compare the TLS fingerprint above with the Pi\'s own display first.'; return; }
-  if (!password.value && !key.value.trim()) { message.textContent = 'Enter a device password or an SSH public key.'; return; }
-  if (password.value !== confirmation.value) { message.textContent = 'The device passwords do not match.'; return; }
+  if (!fingerprintConfirm.checked) { setStatus(status, 'Compare the TLS fingerprint above with the Pi\'s own display first.', 'error'); return; }
+  if (!password.value && !key.value.trim()) { setStatus(status, 'Enter a device password or PIN, or an SSH public key.', 'error'); return; }
+  if (password.value !== confirmation.value) { setStatus(status, 'The device passwords do not match.', 'error'); return; }
   const body = {};
   if (password.value) { body.password = password.value; body.replace_existing_password = replace.checked; }
   if (key.value.trim()) body.ssh_public_key = key.value.trim();
   button.disabled = true;
-  message.textContent = '';
+  status.textContent = '';
+  status.classList.remove('ok', 'error');
   try {
     const queued = await api('/api/v1/account', 'POST', body);
     password.value = ''; confirmation.value = '';
-    message.textContent = 'Applying device access…';
+    setStatus(status, 'Saving device access…');
     const result = await waitForAccessResult(queued.request_id);
-    if (!result) { message.textContent = 'Device access is still being applied.'; return; }
+    if (!result) { setStatus(status, 'Device access is still being saved.', 'error'); return; }
     if (result.status === 'confirmation_required') {
       document.getElementById('access-replace-label').hidden = false;
-      message.textContent = 'This account already has a password. Nothing was changed. Tick "Replace the password" and enter it again to change it.';
+      setStatus(status, 'This account already has a password. Nothing was changed. Tick "Replace the password" and enter it again to change it.', 'error');
       return;
     }
     if (result.status === 'applied') key.value = '';
     replace.checked = false;
-    message.textContent = describeAccess(result);
-  } catch (error) { message.textContent = error.message; }
+    setStatus(status, describeAccess(result), result.status === 'applied' ? 'ok' : 'error');
+  } catch (error) { setStatus(status, error.message, 'error'); }
   finally { password.value = ''; confirmation.value = ''; body.password = ''; button.disabled = false; }
 });
 // #28: the browser-generated key. The private key is only ever in this page's
@@ -408,7 +460,7 @@ async function generateAccessKey() {
   const button = document.getElementById('access-generate');
   const state = document.getElementById('access-generate-state');
   button.disabled = true;
-  state.textContent = 'Generating a key…';
+  setStatus(state, 'Generating a key…');
   try {
     const host = location.hostname || 'the-pi';
     const key = await generateSshKey('rapid@' + host);
@@ -420,11 +472,11 @@ async function generateAccessKey() {
     document.getElementById('access-ssh-command').textContent =
         'ssh -i ' + accessPrivateKeyName + ' rapid@' + host;
     document.getElementById('access-generated').hidden = false;
-    state.textContent = 'Generated a ' + key.type + ' key. The private key file ' + accessPrivateKeyName +
-        ' was downloaded to this computer; keep it safe. Add a device password if you want one, then press ' +
-        'Set device access to install the public key on the Pi.';
+    setStatus(state, 'Generated a ' + key.type + ' key. The private key file ' + accessPrivateKeyName +
+        ' was downloaded to this computer; keep it safe. Press Save device access to install the public ' +
+        'key on the Pi.', 'ok');
   } catch (error) {
-    state.textContent = error.message;
+    setStatus(state, error.message, 'error');
   } finally { button.disabled = false; }
 }
 document.getElementById('access-generate').addEventListener('click', generateAccessKey);
@@ -432,11 +484,12 @@ document.getElementById('access-download').addEventListener('click', downloadAcc
 document.getElementById('retry-settings').addEventListener('click', async event => {
   const button = event.currentTarget;
   button.disabled = true;
+  const status = document.getElementById('settings-status');
   try {
     await api('/api/v1/settings/retry', 'POST', {revision});
-    message.textContent = 'Retry queued. The device name is being applied.';
+    setStatus(status, 'Retry queued. The device name is being applied.');
     await waitForHostnameApplication(revision);
-  } catch (error) { message.textContent = error.message; }
+  } catch (error) { setStatus(status, error.message, 'error'); }
   finally { button.disabled = false; }
 });
 
@@ -451,8 +504,8 @@ async function showPeers() {
     revoke.type = 'button'; revoke.textContent = 'Revoke ' + peer.label;
     revoke.addEventListener('click', async () => {
       revoke.disabled = true;
-      try { await api('/api/v1/peers/revoke', 'POST', {id: peer.id}); await showPeers(); message.textContent = 'Paired PC revoked.'; }
-      catch (error) { message.textContent = error.message; revoke.disabled = false; }
+      try { await api('/api/v1/peers/revoke', 'POST', {id: peer.id}); await showPeers(); setStatus(document.getElementById('pairing-status'), 'Paired PC revoked.', 'ok'); }
+      catch (error) { setStatus(document.getElementById('pairing-status'), error.message, 'error'); revoke.disabled = false; }
     });
     row.textContent = peer.label + ' (' + peer.id.slice(0, 8) + ') ';
     row.appendChild(revoke); container.appendChild(row);
@@ -497,13 +550,13 @@ async function showPairing() {
 }
 document.getElementById('pairing-open').addEventListener('click', async event => {
   event.currentTarget.disabled = true;
-  try { await api('/api/v1/pairing/window', 'POST', {open: true}); await showPairing(); }
-  catch (error) { message.textContent = error.message; event.currentTarget.disabled = false; }
+  try { await api('/api/v1/pairing/window', 'POST', {open: true}); setStatus(document.getElementById('pairing-status'), 'Pairing window opened.', 'ok'); await showPairing(); }
+  catch (error) { setStatus(document.getElementById('pairing-status'), error.message, 'error'); event.currentTarget.disabled = false; }
 });
 document.getElementById('pairing-cancel').addEventListener('click', async event => {
   event.currentTarget.disabled = true;
-  try { await api('/api/v1/pairing/window', 'POST', {open: false}); await showPairing(); }
-  catch (error) { message.textContent = error.message; }
+  try { await api('/api/v1/pairing/window', 'POST', {open: false}); setStatus(document.getElementById('pairing-status'), 'Pairing window cancelled.', 'ok'); await showPairing(); }
+  catch (error) { setStatus(document.getElementById('pairing-status'), error.message, 'error'); }
   finally { event.currentTarget.disabled = false; }
 });
 document.getElementById('pairing-approve').addEventListener('click', async event => {
@@ -511,13 +564,14 @@ document.getElementById('pairing-approve').addEventListener('click', async event
   try {
     const pending = await api('/api/v1/pairing/pending');
     await api('/api/v1/pairing/approve', 'POST', {transaction_id: pending.transaction_id, code: pending.code});
-    message.textContent = 'PC approved. The companion can now finish pairing.';
+    setStatus(document.getElementById('pairing-status'), 'PC approved. The companion can now finish pairing.', 'ok');
     await showPeers(); await showPairing();
-  } catch (error) { message.textContent = error.message; }
+  } catch (error) { setStatus(document.getElementById('pairing-status'), error.message, 'error'); }
   finally { event.currentTarget.disabled = false; }
 });
 
 async function waitForHostnameApplication(targetRevision) {
+  const status = document.getElementById('settings-status');
   // Long enough for a changed orientation's 30-second confirmation window.
   for (let attempt = 0; attempt < 80; ++attempt) {
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -526,52 +580,53 @@ async function waitForHostnameApplication(targetRevision) {
     const application = profile.application;
     if (!application) continue;
     if (application.hostname_applied === false) {
-      message.textContent = 'Profile saved, but the device name could not be applied. Save again to retry.';
+      setStatus(status, 'Device profile saved, but the device name could not be applied. Save again to retry.', 'error');
       return;
     }
     if (application.rotation === 'awaiting_confirmation') {
-      message.textContent = 'Device name applied. Keep the new orientation on the Pi screen or with the button below within 30 seconds, or it will be restored.';
+      setStatus(status, 'Device name applied. Keep the new orientation on the Pi screen or with the button below within 30 seconds, or it will be restored.', 'ok');
       continue;
     }
     if (application.rotation === 'rolled_back') {
-      message.textContent = 'Device name applied. The new orientation was not kept, so the previous one was restored. Retry to preview it again.';
+      setStatus(status, 'Device name applied. The new orientation was not kept, so the previous one was restored. Retry to preview it again.', 'error');
       return;
     }
     if (application.rotation === 'failed') {
-      message.textContent = 'Device name applied, but the orientation could not be changed. Retry to try again.';
+      setStatus(status, 'Device name applied, but the orientation could not be changed. Retry to try again.', 'error');
       return;
     }
     if (application.hostname_applied) {
-      message.textContent = application.rotation === 'confirmed' ? 'Device name and new orientation applied.' : 'Device name applied.';
+      setStatus(status, application.rotation === 'confirmed' ? 'Device profile saved: name and orientation applied.' : 'Device profile saved: device name applied.', 'ok');
       return;
     }
   }
-  message.textContent = 'Profile saved. The device name is still waiting to be applied.';
+  setStatus(status, 'Device profile saved. The device name is still waiting to be applied.');
 }
 document.getElementById('confirm-rotation').addEventListener('click', async event => {
   const button = event.currentTarget;
   button.disabled = true;
   try {
     await api('/api/v1/settings/confirm-display', 'POST', {revision});
-    message.textContent = 'Keeping the new orientation.';
-  } catch (error) { message.textContent = error.message; }
+    setStatus(document.getElementById('settings-status'), 'Keeping the new orientation.', 'ok');
+  } catch (error) { setStatus(document.getElementById('settings-status'), error.message, 'error'); }
   finally { button.disabled = false; }
 });
 async function waitForWifiApplication(targetRevision) {
+  const status = document.getElementById('wifi-status');
   for (let attempt = 0; attempt < 70; ++attempt) {
     await new Promise(resolve => setTimeout(resolve, 500));
     const profile = await showProfile();
     if (profile.revision !== targetRevision) return;
     if (profile.wifi && profile.wifi.connected === true) {
-      message.textContent = 'Home Wi-Fi connected. Reopen setup at the device address if this access point disconnects.';
+      setStatus(status, 'Home Wi-Fi credentials saved and connected. Reopen setup at the device address if this access point disconnects.', 'ok');
       return;
     }
     if (profile.wifi && profile.wifi.connected === false) {
-      message.textContent = 'Home Wi-Fi could not connect. The setup access point has been restored.';
+      setStatus(status, 'Home Wi-Fi credentials saved, but the connection failed. The setup access point has been restored.', 'error');
       return;
     }
   }
-  message.textContent = 'Home Wi-Fi is still being checked. The setup access point remains available if it fails.';
+  setStatus(status, 'Home Wi-Fi credentials saved; still checking. The setup access point remains available if it fails.');
 }
 document.getElementById('login-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -585,54 +640,60 @@ document.getElementById('login-form').addEventListener('submit', async event => 
     const session = await api('/api/v1/auth/login', 'POST', {password});
     csrf = session.csrf_token;
     await showProfile();
-  } catch (error) { message.textContent = error.message; }
+  } catch (error) { setStatus(message, error.message, 'error'); }
   finally { button.disabled = false; }
 });
 document.getElementById('settings-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = document.getElementById('save-settings');
+  const status = document.getElementById('settings-status');
   button.disabled = true;
-  message.textContent = '';
+  setStatus(status, 'Saving device profile…');
   try {
     const settings = {hostname: document.getElementById('hostname').value,
       rotation: Number(document.getElementById('rotation').value), boot_network: 'home_then_ap'};
     const saved = await api('/api/v1/settings', 'POST', {revision, settings});
     revision = saved.revision;
     if (saved.apply_queued) {
-      message.textContent = 'Profile saved. The device name is being applied.';
+      setStatus(status, 'Device profile saved. The device name is being applied.');
       await waitForHostnameApplication(saved.revision);
     } else {
-      message.textContent = 'Profile saved.';
+      setStatus(status, 'Device profile saved.', 'ok');
     }
   } catch (error) {
     if (error.status === 409) await showProfile();
-    message.textContent = error.message;
+    setStatus(status, error.message, 'error');
   } finally { button.disabled = false; }
 });
 document.getElementById('wifi-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = document.getElementById('join-wifi');
+  const button = document.getElementById('save-wifi');
   const password = document.getElementById('wifi-password');
+  const status = document.getElementById('wifi-status');
   button.disabled = true;
-  message.textContent = '';
+  setStatus(status, 'Saving home Wi-Fi credentials…');
   try {
     await api('/api/v1/wifi', 'POST', {revision, ssid: document.getElementById('wifi-ssid').value, password: password.value});
     password.value = '';
-    message.textContent = 'Joining Home Wi-Fi. The setup access point returns if it cannot connect.';
+    setStatus(status, 'Home Wi-Fi credentials saved. Connecting; the setup access point returns if it cannot connect.');
     await waitForWifiApplication(revision);
-  } catch (error) { message.textContent = error.message; }
+  } catch (error) { setStatus(status, error.message, 'error'); }
   finally { password.value = ''; button.disabled = false; }
 });
 document.getElementById('start-calibration').addEventListener('click', async event => {
-  const button = event.currentTarget; button.disabled = true; message.textContent = '';
-  try { await api('/api/v1/calibration/start', 'POST', {}); message.textContent = 'Calibration started. Tap each target on the Pi display, then tap the final target to keep the result.'; }
-  catch (error) { message.textContent = error.message; }
+  const button = event.currentTarget; button.disabled = true;
+  const status = document.getElementById('calibration-status');
+  setStatus(status, '');
+  try { await api('/api/v1/calibration/start', 'POST', {}); setStatus(status, 'Calibration started. Tap each target on the Pi display, then tap the final target to keep the result.', 'ok'); }
+  catch (error) { setStatus(status, error.message, 'error'); }
   finally { button.disabled = false; }
 });
 document.getElementById('reset-calibration').addEventListener('click', async event => {
-  const button = event.currentTarget; button.disabled = true; message.textContent = '';
-  try { await api('/api/v1/calibration/reset', 'POST', {}); message.textContent = 'Touchscreen calibration reset. To recalibrate, open the Wi-Fi menu on the Pi display and choose Calibrate touch.'; }
-  catch (error) { message.textContent = error.message; }
+  const button = event.currentTarget; button.disabled = true;
+  const status = document.getElementById('calibration-status');
+  setStatus(status, '');
+  try { await api('/api/v1/calibration/reset', 'POST', {}); setStatus(status, 'Touchscreen calibration reset. To recalibrate, open the Wi-Fi menu on the Pi display and choose Calibrate touch.', 'ok'); }
+  catch (error) { setStatus(status, error.message, 'error'); }
   finally { button.disabled = false; }
 });
 document.getElementById('sign-out').addEventListener('click', async () => {
@@ -640,10 +701,10 @@ document.getElementById('sign-out').addEventListener('click', async () => {
     await api('/api/v1/auth/logout', 'POST', {});
     showLogin();
     if (pairing_poll !== null) { clearTimeout(pairing_poll); pairing_poll = null; }
-    message.textContent = 'Signed out.';
+    setStatus(message, 'Signed out.', 'ok');
   } catch (error) {
     if (error.status === 401) showLogin();
-    message.textContent = error.message;
+    setStatus(message, error.message, 'error');
   }
 });
 (async () => {
@@ -663,7 +724,7 @@ document.getElementById('sign-out').addEventListener('click', async () => {
       if (status.capabilities.browser_owner_enrollment) {
         document.getElementById('enrollment').hidden = false;
       } else {
-        message.textContent = 'Setup needs to be activated on this device.';
+        setStatus(message, 'Setup needs to be activated on this device.', 'error');
       }
       return;
     }
@@ -675,7 +736,7 @@ document.getElementById('sign-out').addEventListener('click', async () => {
       if (error.status !== 401) throw error;
       showLogin();
     }
-  } catch (error) { message.textContent = error.message; }
+  } catch (error) { setStatus(message, error.message, 'error'); }
 })();
 </script>
 </html>

@@ -142,12 +142,12 @@ replace_in "$units/rapid-setup.service" '^ReadWritePaths=/run/rapid$' 'ReadWrite
 expect_fail "a setup server that cannot write /run/rapid" "does not grant write access to /run/rapid/calibration-request.json"
 
 stage_package
-replace_in "$units/rapid-wifi.service" '^RuntimeDirectory=rapid-apply$' ''
-expect_fail "a Wi-Fi helper that cannot create its result directory" "does not grant write access to /run/rapid-apply/wifi-result.json"
+replace_in "$units/rapid-wifi.service" '^ReadWritePaths=/run/rapid-apply$' ''
+expect_fail "a Wi-Fi helper that cannot write its shared queue result" "does not grant write access to /run/rapid-apply/wifi-result.json"
 
 stage_package
 replace_in "$units/rapid-wifi.service" '^ProtectSystem=strict$' ''
-expect_fail "a Wi-Fi helper with a widened sandbox" "rapid-wifi.service must keep ProtectSystem=strict and declare RuntimeDirectory=rapid-apply"
+expect_fail "a Wi-Fi helper with a widened sandbox" "rapid-wifi.service must keep ProtectSystem=strict"
 
 stage_package
 replace_in "$units/rapid-display-recovery.service" '^ReadWritePaths=/var/lib/rapid$' ''
@@ -190,6 +190,12 @@ stage_package
 replace_in "$units/rapid-provision.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
 expect_fail "a provisioner whose /run/rapid mode disagrees with first boot's" "must declare the exact same RuntimeDirectoryMode"
 
+# #22: the setup AP is open; the root provisioner unit must not carry an AP
+# passphrase or key-management setting.
+stage_package
+printf '\nEnvironment=RAPID_AP_PSK=secret\n' >> "$units/rapid-provision.service"
+expect_fail "a provisioner carrying an AP passphrase" "must not carry an AP passphrase"
+
 stage_package
 mkdir -p "$work/stage/etc/ssh/sshd_config.d"
 printf 'PasswordAuthentication yes\n' > "$work/stage/etc/ssh/sshd_config.d/10-rapid-owner.conf"
@@ -219,20 +225,39 @@ stage_package
 printf 'v1\n' > "$work/stage/usr/share/rapid/rapid-image-ready-v1"
 EXPECT_IMAGE_READY=ON expect_pass "a release package that declares the image ready"
 
-# /run/rapid-apply lifecycle: the shared queue must be created by the services
-# that use it (RuntimeDirectory), not by tmpfiles.d, or a live upgrade/restart
-# fails with 226/NAMESPACE when the directory is absent.
+# /run/rapid-apply lifecycle (#25 follow-up): the shared queue has exactly one
+# lifecycle owner, rapid-setup.service, through RuntimeDirectory=. A shared
+# RuntimeDirectory is not reference counted: systemd removes it whenever any
+# declaring unit stops, so a transient consumer that also declared it deleted the
+# queue while rapid-setup was still active. The consumers must not declare it;
+# they must instead be ordered after the owner and granted ReadWritePaths.
 stage_package
 replace_in "$units/rapid-setup.service" '^RuntimeDirectory=rapid-apply$' ''
-expect_fail "a setup server that does not create the shared queue directory" "must declare RuntimeDirectory=rapid-apply"
+expect_fail "a setup server that does not own the shared queue" "must declare RuntimeDirectory=rapid-apply as the single lifecycle owner"
 
 stage_package
-replace_in "$units/rapid-wifi.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
-expect_fail "a helper that narrows the shared queue directory" "must declare RuntimeDirectoryMode=0770"
+replace_in "$units/rapid-setup.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
+expect_fail "a setup server whose shared queue mode is too narrow" "must declare RuntimeDirectoryMode=0770 for the shared"
 
 stage_package
-replace_in "$units/rapid-apply.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0755'
-expect_fail "a helper whose queue mode disagrees" "must declare RuntimeDirectoryMode=0770"
+printf '\nRuntimeDirectory=rapid-apply\n' >> "$units/rapid-wifi.service"
+expect_fail "a transient helper that also claims the shared queue directory" "must not declare RuntimeDirectory=rapid-apply"
+
+stage_package
+printf '\nRuntimeDirectory=rapid-apply\nRuntimeDirectoryMode=0770\n' >> "$units/rapid-apply.service"
+expect_fail "a second queue owner among the transient helpers" "must not declare RuntimeDirectory=rapid-apply"
+
+stage_package
+replace_in "$units/rapid-wifi.service" '^Requires=rapid-setup[.]service$' ''
+expect_fail "a helper with no dependency on the queue owner" "must require rapid-setup.service"
+
+stage_package
+replace_in "$units/rapid-apply.service" '^After=rapid-setup[.]service$' ''
+expect_fail "a helper not ordered after the queue owner" "must be ordered After=rapid-setup.service"
+
+stage_package
+replace_in "$units/rapid-account.service" '^ReadWritePaths=/run/rapid-apply$' ''
+expect_fail "a helper that cannot write the shared queue" "does not grant write access to /run/rapid-apply/account-request.json"
 
 stage_package
 replace_in "$units/rapid-account.service" '^Group=rapid$' ''

@@ -27,6 +27,17 @@ if (!qmlSource.includes('steering_lock_deg')) {
   throw new Error('Main.qml steering wheel must derive degrees from the steering lock channel');
 }
 
+// steering-display-motion: the wheel must read the model's presentation-only
+// smoothed value, not the raw channel, so a ~30 Hz push renders as continuous
+// motion. The raw channel is still used for the "no telemetry" marker.
+if (!qmlSource.includes('dashboard.steeringDisplay')) {
+  throw new Error('Main.qml steering wheel must use the smoothed dashboard.steeringDisplay');
+}
+if (qmlSource.includes('root.number("steering_angle") * root.steeringLockToLockDeg()') ||
+    qmlSource.includes('root.number("steering_angle")*root.steeringLockToLockDeg()')) {
+  throw new Error('Main.qml steering wheel must not bind directly to the raw steering channel');
+}
+
 // #13: the physical orientation is a Qt scene rotation driven by the value the
 // panel reads from the display-recovery state file, not an xrandr call.
 if (!qmlSource.includes('dashboard.displayRotation') ||
@@ -38,4 +49,14 @@ if (/xrandr/i.test(qmlSource)) {
   throw new Error('Main.qml must not invoke or reference xrandr for rotation (#13)');
 }
 
-console.log('Main.qml wheel-speed unit, steering-lock degrees and scene-rotation checks passed');
+// #13: the X cursor is not part of the rotated scene, so the panel entry point
+// must re-orient it from the same rotation value instead of leaving it upside
+// down over the rotated picture.
+const entrySource = fs.readFileSync(path.join(__dirname, '../qt_dashboard_main.cpp'), 'utf8');
+if (!entrySource.includes('displayRotation') ||
+    !entrySource.includes('setOverrideCursor') ||
+    !entrySource.includes('rotation_cursor')) {
+  throw new Error('qt_dashboard_main.cpp must rotate the X cursor with the scene (#13)');
+}
+
+console.log('Main.qml wheel-speed unit, steering-lock degrees, scene-rotation and panel-cursor checks passed');

@@ -55,6 +55,12 @@ if(BUILD_TESTING)
   add_test(NAME rapid-openssh-key-tests
            COMMAND ${NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/openssh_key_tests.mjs
                    ${CMAKE_SOURCE_DIR}/assets/setup.html)
+  # Setup-page UX rework: separated categories with a Save action and status
+  # line each, the Wi-Fi wording, required vs recommended, and the shortened
+  # TLS fingerprint, all loaded/checked out of the real setup.html.
+  add_test(NAME rapid-setup-page-tests
+           COMMAND ${NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/setup_page_tests.mjs
+                   ${CMAKE_SOURCE_DIR}/assets/setup.html)
   add_executable(rapid-setup-tests tests/setup_tests.cpp)
   target_link_libraries(rapid-setup-tests PRIVATE rapid_native)
   add_test(NAME rapid-setup-tests COMMAND rapid-setup-tests $<TARGET_FILE:rapid-firstboot> $<TARGET_FILE:rapid-provision> $<TARGET_FILE:rapid-apply> $<TARGET_FILE:rapid-wifi>)

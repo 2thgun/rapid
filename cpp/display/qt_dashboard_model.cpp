@@ -49,9 +49,13 @@ QUrl live_socket_endpoint(QUrl endpoint) {
 // #22: the setup AP is the open network "rapid" (or a disambiguated
 // "rapid-NNNN" when another one is already in range, chosen once by the
 // provisioner for this boot). It carries no passphrase, so the card/panel no
-// longer shows one. Two Pis can broadcast the same SSID, so the panel must
-// show enough to tell them apart: the address (in the URL) and the TLS
-// certificate fingerprint the client's browser should match.
+// longer shows one. The activation token is what lets the owner enroll without
+// reading a file over SSH, so it must never be hidden behind another file:
+// when the provisioner has not yet published the resolved SSID the card still
+// shows the token (and the address/fingerprint), with the name falling back to
+// "rapid". Two Pis can broadcast the same SSID, so the panel also shows the
+// address and the TLS certificate fingerprint the client's browser should
+// match.
 QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_contents) {
   const auto document = QJsonDocument::fromJson(status_contents);
   if (!document.isObject()) return {};
@@ -61,9 +65,10 @@ QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_c
   const auto url = values.value("setup_url").toString();
   const auto fingerprint = values.value("certificate_fingerprint").toString();
   const auto token = values.value("activation_token").toString();
-  const auto ssid = QString::fromUtf8(ssid_contents).trimmed();
-  if (ssid.isEmpty() || url.isEmpty() || fingerprint.size() != 64 || token.size() != 64)
+  if (url.isEmpty() || fingerprint.size() != 64 || token.size() != 64)
     return {};
+  const auto resolved = QString::fromUtf8(ssid_contents).trimmed();
+  const auto ssid = resolved.isEmpty() ? QStringLiteral("rapid") : resolved;
   auto grouped = [](const QString &value, const QString &indent) {
     return QStringLiteral("%1 %2\n%3%4 %5")
         .arg(value.sliced(0, 16), value.sliced(16, 16), indent, value.sliced(32, 16), value.sliced(48, 16));
@@ -108,6 +113,12 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   network_->setTransferTimeout(1800);
   calibration_timeout_->setSingleShot(true);
   connect(calibration_timeout_, &QTimer::timeout, this, &DashboardModel::calibrationTimedOut);
+  // ~60 Hz presentation tick for the smoothed steering wheel. It only runs
+  // while the wheel is moving (updateSteeringDisplay/advanceSteeringDisplay),
+  // so an idle or straight-line car costs nothing.
+  steering_timer_ = new QTimer(this);
+  steering_timer_->setInterval(16);
+  connect(steering_timer_, &QTimer::timeout, this, &DashboardModel::advanceSteeringDisplay);
   QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayRotation);
@@ -505,6 +516,7 @@ void DashboardModel::applyLiveState(QVariantMap state) {
   state_ = std::move(state);
   updateStatus();
   updateGraphHistory();
+  updateSteeringDisplay();
   bump();
 }
 
@@ -558,6 +570,40 @@ void DashboardModel::updateGraphHistory() {
          graph_samples_.front().toMap().value("time").toLongLong() < now - kWindowMilliseconds) {
     graph_samples_.removeFirst();
   }
+}
+
+void DashboardModel::updateSteeringDisplay() {
+  // Presentation-only: state_ keeps the raw steering_angle for value() and the
+  // recorder; only the wheel reads the smoothed copy. Feed the newest target
+  // and let the ~60 Hz timer interpolate, so a 30 Hz push becomes continuous
+  // motion without queueing anything.
+  const auto raw = state_.value("steering_angle");
+  bool ok = false;
+  const double target = raw.toDouble(&ok);
+  const bool present = raw.isValid() && !raw.isNull() && ok && qIsFinite(target);
+  if (!present) {
+    // Telemetry gone (disconnect/stale): finish any in-flight move so a frozen
+    // wheel never sits mid-sweep, then hold the last position.
+    const bool changed = steering_smoother_.settle();
+    steering_timer_->stop();
+    if (changed) emit steeringDisplayChanged();
+    return;
+  }
+  if (steering_smoother_.set_target(target)) emit steeringDisplayChanged();
+  if (steering_smoother_.moving()) {
+    if (!steering_timer_->isActive()) {
+      steering_tick_.start();
+      steering_timer_->start();
+    }
+  } else {
+    steering_timer_->stop();
+  }
+}
+
+void DashboardModel::advanceSteeringDisplay() {
+  const bool changed = steering_smoother_.advance(steering_tick_.restart() / 1000.0);
+  if (changed) emit steeringDisplayChanged();
+  if (!steering_smoother_.moving()) steering_timer_->stop();
 }
 
 void DashboardModel::updateStatus() {
