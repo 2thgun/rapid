@@ -445,6 +445,9 @@ struct Options {
     std::wstring pairing_url;
     std::string pairing_label;
     fs::path pairing_credential_file;
+    // #10 portable model: a bare, unpaired run offers pairing and then keeps
+    // going as the daemon in the same launch instead of exiting once paired.
+    bool run_after_pairing = false;
 };
 
 std::string wide_to_utf8(std::wstring_view input) {
@@ -708,6 +711,58 @@ fs::path default_config_path() {
         return result;
     }
     return fs::current_path() / L"daemon.conf";
+}
+
+// #10 portable model: the paired credential lives under the current Windows
+// user's profile, never next to the executable. Copying the same .exe to a
+// flash drive and running it on another PC opens first-run pairing again; a
+// different account on the same PC also simply pairs once. No plaintext key
+// file is ever written beside the exe.
+fs::path default_pairing_credential_path() {
+    PWSTR known = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &known))) {
+        fs::path result = fs::path(known) / L"raPId" / L"pairing.key.dpapi";
+        CoTaskMemFree(known);
+        return result;
+    }
+    return fs::current_path() / L"pairing.key.dpapi";
+}
+
+// Startup plan for a bare run with no key on the command line, in the config
+// or in RAPID_TELEMETRY_KEY. Kept as a pure function so the self-test can pin
+// every branch. `offline` is the deliberate no-Pi recording mode; it never
+// pairs. A stored credential means run; its absence on an otherwise bare run
+// means offer pairing first.
+struct PortableStartup {
+    fs::path credential;          // Load this DPAPI credential before running.
+    bool offer_pairing = false;   // First run: pair, then run in the same launch.
+};
+
+PortableStartup plan_portable_startup(bool have_key, bool offline,
+                                      const fs::path& explicit_credential,
+                                      const fs::path& default_credential,
+                                      bool default_credential_exists) {
+    if (offline || have_key || !explicit_credential.empty()) return {};
+    if (default_credential_exists) return {default_credential, false};
+    return {{}, true};
+}
+
+// #42: an implicit first run must never open a prompt that can block on a host
+// with no input source at all (a scheduled task or automation harness). A
+// console or an explicitly redirected stdin (pipe/file) is a real input
+// source; an explicit --pair is always allowed to wait for the user.
+bool stdin_has_input_source() {
+    const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    if (input == nullptr || input == INVALID_HANDLE_VALUE) return false;
+    const DWORD type = GetFileType(input);
+    return type == FILE_TYPE_CHAR || type == FILE_TYPE_PIPE || type == FILE_TYPE_DISK;
+}
+
+// #42: a blocking MessageBox may only appear on a run that has an attached
+// console and dialogs enabled. A console-less host (scheduled task, automation
+// harness) fails fast with the stderr line and a non-zero exit instead.
+bool error_dialog_allowed(bool dialogs_enabled, bool console_attached) {
+    return dialogs_enabled && console_attached;
 }
 
 std::string trim_ascii(std::string value) {
@@ -998,6 +1053,9 @@ Options parse_options(int argc, wchar_t** argv) {
             options.pairing_credential_file = option_value(i, argc, argv, L"--pairing-credential-file");
         } else if (raw == L"--help" || raw == L"-?" || raw == L"/?") {
             std::puts("raPId native telemetry daemon\n"
+                      "  (no arguments)            Run. On first use it pairs with the Pi and stores the\n"
+                      "                             credential for this Windows user (DPAPI), so a copied .exe\n"
+                      "                             needs no config, key file or launcher.\n"
                       "  --pi-host HOST            Pi hostname/address (default: rapid)\n"
                       "  --pi-port PORT            Pi UDP port (default: 9001)\n"
                       "  --sample-rate HZ          Capture rate 1-100 (default: 50)\n"
@@ -1006,11 +1064,12 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --auth-key-file PATH      Read the v4 HMAC key from a file\n"
                       "  --auth-key-dpapi-file PATH  Read a per-user DPAPI-protected pairing key\n"
                       "  --store-auth-key-dpapi PATH Protect the selected key for this user and exit\n"
-                      "  --config PATH             key=value config (default: %LOCALAPPDATA%\\raPId\\daemon.conf)\n"
+                      "  --config PATH             Optional key=value config (default: %LOCALAPPDATA%\\raPId\\daemon.conf)\n"
                       "  --local-recording         Opt in to the PC-side emergency .ld fallback\n"
                       "  --output-directory PATH   Local fallback/log directory\n"
-                      "  --no-forward              Disable Pi forwarding\n"
-                      "  --headless --self-test\n"
+                      "  --no-forward              Offline recording only: no Pi, no pairing, no key\n"
+                      "  --headless                No tray/console UI; automation fails fast on error\n"
+                      "  --self-test\n"
                       "  --pairing-pi-seals-fixtures PATH  With --self-test: decrypt the real\n"
                       "                              Pi-sealed pairing fixture at PATH (#14)\n"
                       "  --verify-setup-url URL       Verify an HTTPS setup certificate fingerprint and exit\n"
@@ -1037,19 +1096,40 @@ Options parse_options(int argc, wchar_t** argv) {
         if (!options.pairing_url.empty() &&
             (options.pairing_label.empty() || options.pinned_certificate_fingerprint.size() != 64))
             throw std::runtime_error("pairing requires --pairing-label and --certificate-fingerprint");
-        if (options.pairing_credential_file.empty()) {
-            PWSTR known = nullptr;
-            if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &known))) {
-                options.pairing_credential_file = fs::path(known) / L"raPId" / L"pairing.key.dpapi"; CoTaskMemFree(known);
-            } else options.pairing_credential_file = fs::current_path() / L"pairing.key.dpapi";
+        if (options.pairing_credential_file.empty())
+            options.pairing_credential_file = default_pairing_credential_path();
+    }
+    // #10 portable model: a bare run needs no config, no key file and no
+    // command line. When no key source was supplied, adopt the per-user DPAPI
+    // credential if it exists; otherwise this is an unpaired first run, so
+    // offer pairing (and then run) instead of failing with a key error. An
+    // explicit key source, --headless automation, or the offline recording
+    // mode (--no-forward) is left exactly as before.
+    if (!options.pairing && !options.headless && options.auth_key.empty() &&
+        options.auth_key_dpapi_file.empty() && options.store_auth_key_dpapi_file.empty() &&
+        options.verify_setup_url.empty() && !options.self_test) {
+        const auto default_credential = default_pairing_credential_path();
+        const auto plan = plan_portable_startup(false, options.no_forward, {},
+                                                default_credential, fs::exists(default_credential));
+        if (!plan.credential.empty()) {
+            const auto protected_key = read_dpapi_credential(plan.credential);
+            if (protected_key.size() != 32)
+                throw std::runtime_error("DPAPI pairing credential is not a 256-bit key");
+            options.auth_key = protected_key;
+            options.auth_key_dpapi_file = plan.credential;
+        } else if (plan.offer_pairing) {
+            options.pairing = true;
+            options.run_after_pairing = true;
+            options.pairing_credential_file = default_credential;
         }
     }
     if (!options.no_forward && options.auth_key.empty() &&
         !options.self_test && options.verify_setup_url.empty() && !options.pairing) {
         throw std::runtime_error(
-            "Protocol v4 requires a 256-bit HMAC key. Set --auth-key, --auth-key-file, "
-            "RAPID_TELEMETRY_KEY, or auth_key in the daemon config. New installations "
-            "should pair with the Pi (run --pair) instead of configuring a key by hand.");
+            "Protocol v4 requires a 256-bit HMAC key. Pair this Windows account first by "
+            "running this executable with no arguments (or with --pair) and approving it on "
+            "the Pi. Automation can pass --auth-key, --auth-key-file or set "
+            "RAPID_TELEMETRY_KEY; --no-forward selects offline recording with no Pi.");
     }
     return options;
 }
@@ -3230,11 +3310,46 @@ void build_identity_self_test() {
     std::cout << "Build identity self-test passed: status reports Version: " << kBuildVersion << '\n';
 }
 
+// #10 portable model and #42 fail-fast policy, pinned branch by branch.
+void portable_startup_self_test() {
+    const fs::path default_credential = default_pairing_credential_path();
+    // The credential is per-user and named for DPAPI; it is never a plaintext
+    // key beside the executable, which may sit on a read-only flash drive.
+    if (!default_credential.is_absolute() ||
+        default_credential.filename() != L"pairing.key.dpapi" ||
+        default_credential.parent_path().filename() != L"raPId")
+        throw std::runtime_error("default pairing credential is not the per-user DPAPI path");
+    // A bare run with no stored credential offers pairing...
+    const auto first_run = plan_portable_startup(false, false, {}, default_credential, false);
+    if (!first_run.offer_pairing || !first_run.credential.empty())
+        throw std::runtime_error("an unpaired bare run must offer first-run pairing");
+    // ...and resumes from the stored credential once it exists...
+    const auto paired = plan_portable_startup(false, false, {}, default_credential, true);
+    if (paired.offer_pairing || paired.credential != default_credential)
+        throw std::runtime_error("a paired bare run must load the stored credential");
+    // ...an explicit credential path is never second-guessed...
+    const fs::path explicit_credential = fs::path(L"C:\\example\\custom.dpapi");
+    const auto explicit_plan = plan_portable_startup(false, false, explicit_credential, default_credential, false);
+    if (explicit_plan.offer_pairing || !explicit_plan.credential.empty())
+        throw std::runtime_error("an explicit credential must not trigger first-run pairing");
+    // ...and the deliberate no-Pi recording mode never pairs.
+    const auto offline = plan_portable_startup(false, true, {}, default_credential, false);
+    if (offline.offer_pairing || !offline.credential.empty())
+        throw std::runtime_error("offline recording must not require pairing");
+    // #42: a console-less host never gets a blocking error dialog.
+    if (error_dialog_allowed(true, false) || !error_dialog_allowed(true, true) ||
+        error_dialog_allowed(false, true))
+        throw std::runtime_error("error dialog policy must fail fast without a console");
+    std::cout << "Portable startup self-test passed: a bare run pairs once then resumes, an explicit "
+                 "credential or offline mode never pairs, and console-less hosts fail fast (#10, #42)\n";
+}
+
 bool run_self_test(const fs::path& directory, int sample_rate,
                     const fs::path& pairing_pi_seals_fixtures = {}) {
     pairing_crypto_self_test();
     manual_pairing_entry_self_test();
     build_identity_self_test();
+    portable_startup_self_test();
     // The legacy JSON v3 transport is retired: selecting it on the command
     // line or in a config file must fail with an actionable pairing hint, not
     // silently fall back to anything unauthenticated.
@@ -3405,10 +3520,13 @@ BOOL WINAPI console_handler(DWORD signal) {
 int wmain(int argc, wchar_t** argv) {
     using namespace rapid;
     try {
-        const Options options = parse_options(argc, argv);
-        g_show_error_dialog = !options.headless && !options.self_test &&
-                              options.verify_setup_url.empty() &&
-                              options.store_auth_key_dpapi_file.empty() && !options.pairing;
+        Options options = parse_options(argc, argv);
+        const auto dialogs_allowed = [&options] {
+            return !options.headless && !options.self_test &&
+                   options.verify_setup_url.empty() &&
+                   options.store_auth_key_dpapi_file.empty();
+        };
+        g_show_error_dialog = dialogs_allowed() && !options.pairing;
         if (!options.verify_setup_url.empty())
             return verify_setup_certificate(options.verify_setup_url,
                                             options.pinned_certificate_fingerprint);
@@ -3421,14 +3539,34 @@ int wmain(int argc, wchar_t** argv) {
             return 0;
         }
         if (options.pairing) {
-            // #10: a bare --pair prompts (or reads piped stdin) for the Pi
-            // address and pinned fingerprint, then takes the same run_pairing()
-            // path as --pairing-url. Explicit flags are left untouched.
+            // #10: a bare --pair (or an unpaired first run) prompts -- or reads
+            // piped stdin -- for the Pi address and pinned fingerprint, then
+            // takes the same run_pairing() path as --pairing-url. Explicit flags
+            // are left untouched.
             Options pairing_options = options;
-            if (pairing_options.pairing_url.empty() &&
-                !complete_pairing_options(pairing_options, std::cin, std::cout))
-                throw std::runtime_error("pairing needs a Pi address and its TLS fingerprint");
-            return run_pairing(pairing_options);
+            if (pairing_options.pairing_url.empty()) {
+                // #42: an implicit first run with no console and no redirected
+                // stdin has no way to answer the prompt, so fail fast instead
+                // of blocking. An explicit --pair (even with piped stdin) and a
+                // first run with a real input source proceed normally.
+                if (options.run_after_pairing && !GetConsoleWindow() && !stdin_has_input_source())
+                    throw std::runtime_error(
+                        "This companion is not paired and no input source is available. Run it "
+                        "from a terminal to pair, or pass --pairing-url and --certificate-fingerprint.");
+                if (!complete_pairing_options(pairing_options, std::cin, std::cout))
+                    throw std::runtime_error("pairing needs a Pi address and its TLS fingerprint");
+            }
+            const int status = run_pairing(pairing_options);
+            if (!options.run_after_pairing) return status;
+            // First run: the credential is now stored for this Windows user;
+            // load it and fall through to start the daemon in the same launch.
+            options.auth_key_dpapi_file = options.pairing_credential_file;
+            const auto paired_key = read_dpapi_credential(options.auth_key_dpapi_file);
+            if (paired_key.size() != 32)
+                throw std::runtime_error("the stored pairing credential is not a 256-bit key");
+            options.auth_key = paired_key;
+            options.pairing = false;
+            g_show_error_dialog = dialogs_allowed();
         }
         if (!options.auth_key_dpapi_file.empty())
             verify_paired_identity(options.auth_key_dpapi_file);
@@ -3473,7 +3611,12 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "raPId native daemon: %s\n", error.what());
-        if (g_show_error_dialog && !GetConsoleWindow())
+        // #42: a console-less host (scheduled task, automation harness) must
+        // fail fast. Only show the blocking dialog when a console window is
+        // attached and dialogs are enabled (a double-click launch), so an
+        // unattended run gets the stderr line and a non-zero exit instead of
+        // an undismissable prompt.
+        if (error_dialog_allowed(g_show_error_dialog, GetConsoleWindow() != nullptr))
             MessageBoxA(nullptr, error.what(), "raPId native daemon", MB_OK | MB_ICONERROR);
         return 1;
     }
