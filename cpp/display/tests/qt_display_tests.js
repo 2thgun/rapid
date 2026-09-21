@@ -26,6 +26,23 @@ if (qmlSource.includes('root.number("steering_angle")*180/Math.PI') ||
 if (!qmlSource.includes('steering_lock_deg')) {
   throw new Error('Main.qml steering wheel must derive degrees from the steering lock channel');
 }
+// #18: the lock-to-lock is user-settable on the panel (AC1/ACC/ACE expose
+// none), while iRacing's own value still wins and AUTO clears the override.
+if (!qmlSource.includes('dashboard.steeringLockKnown') ||
+    !qmlSource.includes('dashboard.effectiveSteeringLockDeg') ||
+    !qmlSource.includes('dashboard.userSteeringLockDeg') ||
+    !qmlSource.includes('dashboard.setUserSteeringLockDeg')) {
+  throw new Error('Main.qml must expose the user-settable steering lock (#18)');
+}
+// The deprecated PWR indicator is gone (#remove-power-status).
+if (qmlSource.includes('PWR') || qmlSource.includes('power_status_available') ||
+    qmlSource.includes('power_limited')) {
+  throw new Error('Main.qml must not render the deprecated power-status indicator');
+}
+// #43: the panel shows whether the push or the poll fallback is active.
+if (!qmlSource.includes('dashboard.livePushActive')) {
+  throw new Error('Main.qml must surface dashboard.livePushActive (#43)');
+}
 
 // steering-display-motion: the wheel must read the model's presentation-only
 // smoothed value, not the raw channel, so a ~30 Hz push renders as continuous
