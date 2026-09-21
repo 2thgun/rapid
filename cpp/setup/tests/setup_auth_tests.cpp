@@ -69,7 +69,9 @@ int main() {
       const auto bootstrap_status = root.path / "bootstrap-status.json";
       atomic_file(bootstrap_status, Json{{"owner_configured", false},
           {"state", "owner_enrollment_required"},
-          {"bootstrap", {{"activation_token", token}}}}.dump());
+          {"bootstrap", {{"setup_address", "192.168.50.1"},
+                         {"certificate_fingerprint", std::string(64, 'a')},
+                         {"activation_token", token}}}}.dump());
       SetupAuth ap(fresh, 8002, [&] { return enrollment_time; }, token, "192.168.50.1",
                    {}, {}, bootstrap_status);
       auto ap_request = enroll_request;
@@ -80,8 +82,11 @@ int main() {
       const auto cleared_status = Json::parse(read_file(bootstrap_status));
       require(cleared_status["owner_configured"] == true &&
                   cleared_status["state"] == "settings_application_required" &&
-                  !cleared_status.contains("bootstrap"),
-              "owner enrollment clears physical bootstrap details immediately");
+                  cleared_status["bootstrap"].is_object() &&
+                  !cleared_status["bootstrap"].contains("activation_token") &&
+                  cleared_status["bootstrap"]["setup_address"] == "192.168.50.1",
+              "#59: owner enrollment clears the activation token but keeps the setup AP "
+              "address/fingerprint for the panel's setup card");
       require(mode_of(bootstrap_status) == 0640,
               "owner enrollment rewrites the bootstrap status owner/group-readable only");
       require(ap.handle(enroll_request).status == 403,

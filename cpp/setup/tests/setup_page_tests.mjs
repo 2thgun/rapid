@@ -87,5 +87,26 @@ require(!/id="access-password"[^>]*minlength="12"/.test(html),
 require(/id="new-password"[^>]*minlength="12"/.test(html),
         'the owner setup password keeps its 12-character minimum');
 
-console.log('ok: setup page categories, per-category Save actions, wording and ' +
-            'the shortened fingerprint match the reworked policy');
+// 6. SSH-key management (#28) is its own category, separate from the device
+//    password, and only ever deals in public material.
+require(html.includes('<h3>Device password or PIN</h3>') && html.includes('<h3>SSH keys</h3>'),
+        'the device password and SSH keys must be separate categories');
+for (const id of ['category-password', 'category-ssh-keys'])
+  require(html.includes('id="' + id + '"'), 'missing category: ' + id);
+for (const id of ['ssh-keys', 'ssh-key-form', 'ssh-key-input', 'ssh-key-save', 'ssh-key-cancel'])
+  require(html.includes('id="' + id + '"'), 'missing SSH-key element: ' + id);
+require(html.includes('id="ssh-key-status" class="status"'),
+        'the SSH-key category must have its own status line');
+require(html.includes('action: \'remove_key\'') && html.includes('remove_key'),
+        'the page must be able to remove an enrolled key');
+require(html.includes('remove_fingerprint'),
+        'an edit must replace the identified key through the same endpoint');
+require(!html.includes('id="access-key"'),
+        'the old combined password+key field must be gone');
+// The browser-generated key download (#28) legitimately builds a private-key
+// PEM in memory, so assert only that no private-key *field* can be posted.
+require(!/ssh_private_key|private_key_pem|private_key:/.test(html),
+        'the page must never post a private-key field');
+
+console.log('ok: setup page categories, per-category Save actions, wording, the ' +
+            'shortened fingerprint and the separate SSH-key category match the reworked policy');

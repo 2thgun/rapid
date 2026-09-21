@@ -3,8 +3,10 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <iomanip>
 #include <openssl/evp.h>
 #include <set>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -170,6 +172,22 @@ std::string password_problem(const std::string &password) {
 
 std::string PublicKey::line() const {
   return comment.empty() ? type + " " + blob_base64 : type + " " + blob_base64 + " " + comment;
+}
+
+// #28 management: a stable, public identifier for an enrolled key. It hashes
+// only the decoded public blob, so it is identical to what `ssh-keygen -lf`
+// would show (without the base64) and cannot reveal private material.
+std::string key_fingerprint(const std::string &blob_base64) {
+  const auto blob = decode_base64(blob_base64);
+  if (!blob) return {};
+  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+  unsigned int length = 0;
+  if (EVP_Digest(blob->data(), blob->size(), digest.data(), &length, EVP_sha256(), nullptr) != 1)
+    return {};
+  std::ostringstream out;
+  for (unsigned int i = 0; i < length; ++i)
+    out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(digest[i]);
+  return out.str();
 }
 
 std::optional<PublicKey> parse_public_key(const std::string &text, std::string *problem) {

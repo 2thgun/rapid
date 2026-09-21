@@ -56,7 +56,15 @@ QUrl live_socket_endpoint(QUrl endpoint) {
 // "rapid". Two Pis can broadcast the same SSID, so the panel also shows the
 // address and the TLS certificate fingerprint the client's browser should
 // match.
-QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_contents) {
+//
+// #59 / setup-page-ux: first boot now publishes the address and fingerprint
+// even on an enrolled device, so the panel can show the setup card whenever
+// Access Point mode is up (the owner can still choose AP mode after setup).
+// On an enrolled device there is no activation token, so the card shows no
+// TOKEN line, and it stays hidden outside AP mode so it cannot cover the
+// dashboard during normal driving.
+QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_contents,
+                     bool ap_mode) {
   const auto document = QJsonDocument::fromJson(status_contents);
   if (!document.isObject()) return {};
   const auto bootstrap = document.object().value("bootstrap");
@@ -65,8 +73,10 @@ QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_c
   const auto url = values.value("setup_url").toString();
   const auto fingerprint = values.value("certificate_fingerprint").toString();
   const auto token = values.value("activation_token").toString();
-  if (url.isEmpty() || fingerprint.size() != 64 || token.size() != 64)
-    return {};
+  if (url.isEmpty() || fingerprint.size() != 64) return {};
+  if (!token.isEmpty() && token.size() != 64) return {};
+  // An enrolled device (no token) only shows the card in Access Point mode.
+  if (token.isEmpty() && !ap_mode) return {};
   const auto resolved = QString::fromUtf8(ssid_contents).trimmed();
   const auto ssid = resolved.isEmpty() ? QStringLiteral("rapid") : resolved;
   // #54: the browser's setup page shows the first 16 hex (64 bits, the
@@ -83,8 +93,11 @@ QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_c
     return QStringLiteral("%1 %2\n%3%4 %5")
         .arg(value.sliced(0, 16), value.sliced(16, 16), indent, value.sliced(32, 16), value.sliced(48, 16));
   };
-  return QStringLiteral("SETUP AP  %1  (open network)\n%2\nFINGERPRINT (first 16)  %3\nTOKEN  %4")
-      .arg(ssid, url, short_fingerprint(fingerprint), grouped(token, QStringLiteral("       ")));
+  QString notice = QStringLiteral("SETUP AP  %1  (open network)\n%2\nFINGERPRINT (first 16)  %3")
+      .arg(ssid, url, short_fingerprint(fingerprint));
+  if (token.size() == 64)
+    notice += QStringLiteral("\nTOKEN  %1").arg(grouped(token, QStringLiteral("       ")));
+  return notice;
 }
 
 // Inset targets avoid the bezel, where resistive panels are least linear.
@@ -228,11 +241,25 @@ void DashboardModel::pollSetupStatus() {
                                        "/run/rapid/network-ssid"));
   const auto status_contents = file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
   const auto ssid_contents = ssid_file.open(QIODevice::ReadOnly) ? ssid_file.readAll() : QByteArray{};
-  const QString next = setup_notice(status_contents, ssid_contents);
+  // #59: the setup page URL is shown on the panel's settings page. It is the
+  // same first-boot bootstrap the setup card reads; empty until first boot has
+  // published it.
+  QString next_url;
+  {
+    const auto document = QJsonDocument::fromJson(status_contents);
+    if (document.isObject()) {
+      const auto bootstrap = document.object().value("bootstrap");
+      if (bootstrap.isObject()) next_url = bootstrap.toObject().value("setup_url").toString();
+    }
+  }
+  bool changed = false;
+  if (setup_url_ != next_url) { setup_url_ = next_url; changed = true; }
+  const QString next = setup_notice(status_contents, ssid_contents, network_mode_ == "ap");
   if (setup_notice_ != next) {
     setup_notice_ = next;
-    bump();
+    changed = true;
   }
+  if (changed) bump();
   QTimer::singleShot(1000, this, &DashboardModel::pollSetupStatus);
 }
 
@@ -736,6 +763,21 @@ void DashboardModel::setNetworkMode(const QString &mode) {
   request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
   auto *reply = network_->post(request, QJsonDocument(QJsonObject{{"mode", mode}}).toJson(QJsonDocument::Compact));
   connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
+}
+
+void DashboardModel::restartSetupService() {
+  // The panel runs as the rapid user, which may write the mode controller's
+  // request directory; the root rapid-network-mode worker owns the actual
+  // restart of rapid-setup.service. This is the same file hand-off the Wi-Fi
+  // mode buttons use, so the panel needs no privilege of its own.
+  const auto directory = qEnvironmentVariable("RAPID_NETWORK_CONTROL", "/run/rapid-network");
+  QFile file(QDir(directory).filePath("request"));
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+  file.write(QJsonDocument(QJsonObject{{"action", "restart-setup"}}).toJson(QJsonDocument::Compact));
+  file.close();
+  log_notice_ = "Restarting setup…";
+  bump();
+  QTimer::singleShot(3000, this, [this] { log_notice_.clear(); bump(); });
 }
 
 void DashboardModel::pollLogStatus() {

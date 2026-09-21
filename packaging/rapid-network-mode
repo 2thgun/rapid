@@ -88,7 +88,14 @@ fi
 while :; do
   if [ -f "$request" ]; then
     mode=$(sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\(off\|ap\|home\)".*/\1/p' "$request" | head -n 1)
+    action=$(sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\(restart-setup\)".*/\1/p' "$request" | head -n 1)
     rm -f "$request"
+    if [ -n "$action" ]; then
+      # The panel's settings page starts/restarts the local setup server so the
+      # browser setup page becomes reachable again without a reboot. The panel
+      # only writes the request file; this root worker owns the restart.
+      systemctl restart rapid-setup.service || true
+    fi
     if [ -n "$mode" ]; then
       if ! apply_mode "$mode"; then
         write_state error

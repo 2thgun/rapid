@@ -1,5 +1,6 @@
 #include "../qt_dashboard_model.hpp"
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -71,6 +72,9 @@ int main(int argc, char **argv) {
   const auto display_confirm = helper_directory.filePath("display-confirm.json");
   qputenv("RAPID_APPLY_RESULT", apply_result.toUtf8());
   qputenv("RAPID_DISPLAY_CONFIRM", display_confirm.toUtf8());
+  const auto network_control = helper_directory.filePath("network-control");
+  QDir().mkpath(network_control);
+  qputenv("RAPID_NETWORK_CONTROL", network_control.toUtf8());
   QJsonObject state{{"companion_connected", true}, {"companion_daemon_state", "driving"},
                     {"telemetry_fresh", true}, {"session_id", "qt-test"},
                     {"samples_received", 1}, {"throttle", 0.75}, {"brake", 0.25},
@@ -84,7 +88,11 @@ int main(int argc, char **argv) {
       auto buffer = socket->property("request").toByteArray() + socket->readAll();
       if (!buffer.contains("\r\n\r\n")) { socket->setProperty("request", buffer); return; }
       const bool live = buffer.startsWith("GET /api/live ");
-      const auto body = QJsonDocument(live ? state : QJsonObject{{"available", false}}).toJson(QJsonDocument::Compact);
+      const bool network_mode = buffer.startsWith("GET /api/v1/network/mode ");
+      const QJsonObject reply = live ? state
+          : network_mode ? QJsonObject{{"available", true}, {"mode", "ap"}}
+                         : QJsonObject{{"available", false}};
+      const auto body = QJsonDocument(reply).toJson(QJsonDocument::Compact);
       socket->write(QByteArray(fail && live ? "HTTP/1.1 503 Unavailable\r\n" : "HTTP/1.1 200 OK\r\n") +
                     "Content-Type: application/json\r\nContent-Length: " + QByteArray::number(body.size()) +
                     "\r\nConnection: close\r\n\r\n" + body);
@@ -269,6 +277,34 @@ int main(int argc, char **argv) {
   spin(1200);
   require(model.setupNotice().contains("SETUP AP  rapid  (open network)"),
           "Setup card returns to the published SSID once it exists");
+  // #59: an enrolled device publishes the address/fingerprint but no token.
+  // The card still appears while Access Point mode is up, with no TOKEN line.
+  {
+    const QByteArray enrolled =
+        "{\"bootstrap\":{\"setup_address\":\"192.168.1.64\",\"setup_port\":8002,"
+        "\"setup_url\":\"http://192.168.1.64:8002/setup\","
+        "\"certificate_fingerprint\":\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"}}";
+    require(setup_status.resize(0) && setup_status.seek(0) &&
+                setup_status.write(enrolled) == enrolled.size(),
+            "rewrite the first-boot status without an activation token");
+    setup_status.flush();
+    spin(2200);
+    require(model.setupNotice().contains("SETUP AP  rapid  (open network)") &&
+                model.setupNotice().contains("fedcba9876543210 fedcba9876543210") &&
+                !model.setupNotice().contains("TOKEN"),
+            "#59: an enrolled device in AP mode shows the SSID/address/fingerprint without a token");
+  }
+  // setup-page-ux: the settings page shows the setup page URL and can ask the
+  // root Wi-Fi mode worker to start/restart the setup service.
+  require(model.setupUrl() == "http://192.168.1.64:8002/setup",
+          "the panel settings page shows the published setup page URL");
+  model.restartSetupService();
+  {
+    QFile request(QDir(network_control).filePath("request"));
+    require(request.open(QIODevice::ReadOnly), "the setup-service restart request is written");
+    require(request.readAll().contains("\"action\":\"restart-setup\""),
+            "the panel asks the root worker to restart the setup service");
+  }
   require(model.pairingPending() && model.pairingLabel() == "Test PC" &&
               model.pairingCode() == "12345678" && model.approvePairing(),
           "Pairing panel metadata and approval action are exposed");

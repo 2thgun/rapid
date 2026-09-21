@@ -113,6 +113,9 @@ class DashboardModel final : public QObject {
   Q_PROPERTY(bool networkAvailable READ networkAvailable NOTIFY changed)
   Q_PROPERTY(QString logNotice READ logNotice NOTIFY changed)
   Q_PROPERTY(QString setupNotice READ setupNotice NOTIFY changed)
+  // #59 / setup-page-ux: the setup page URL first boot publishes, shown on the
+  // panel's settings page so the owner can open it without guessing.
+  Q_PROPERTY(QString setupUrl READ setupUrl NOTIFY changed)
   Q_PROPERTY(bool pairingPending READ pairingPending NOTIFY changed)
   Q_PROPERTY(QString pairingLabel READ pairingLabel NOTIFY changed)
   Q_PROPERTY(QString pairingCode READ pairingCode NOTIFY changed)
@@ -152,6 +155,7 @@ public:
   bool networkAvailable() const { return network_available_; }
   QString logNotice() const { return log_notice_; }
   QString setupNotice() const { return setup_notice_; }
+  QString setupUrl() const { return setup_url_; }
   bool pairingPending() const { return pairing_pending_; }
   QString pairingLabel() const { return pairing_label_; }
   QString pairingCode() const { return pairing_code_; }
@@ -174,6 +178,9 @@ public:
   // are clamped to [kMinSteeringLockDeg, kMaxSteeringLockDeg]. Returns whether
   // the value was written.
   Q_INVOKABLE bool setUserSteeringLockDeg(int degrees);
+  // Asks the root Wi-Fi mode worker to start/restart rapid-setup.service; the
+  // panel writes the same request file the Wi-Fi mode buttons use.
+  Q_INVOKABLE void restartSetupService();
   Q_INVOKABLE bool approvePairing();
   Q_INVOKABLE bool confirmDisplay();
   Q_INVOKABLE void startCalibration();
@@ -227,6 +234,7 @@ private:
   QString network_mode_;
   QString log_notice_;
   QString setup_notice_;
+  QString setup_url_;
   bool pairing_pending_ = false;
   QString pairing_label_;
   QString pairing_code_;

@@ -272,15 +272,18 @@ Window {
         Card { visible: dashboard.logNotice.length > 0; x: 165; y: 241; width: 135; height: 19; z: 2
             Label { anchors.centerIn: parent; text: dashboard.logNotice; color: "#20cf75" }
         }
+        // The panel's settings page (opened by the SETTINGS button in the top
+        // bar): Wi-Fi mode, touch calibration, the setup page address and a way
+        // to start/restart the local setup service.
         Rectangle {
             visible: root.wifiMenu; anchors.fill: parent; color: "#b0000000"; z: 10
             MouseArea { anchors.fill: parent; onClicked: root.wifiMenu = false }
-            Card { x: 30; y: 24; width: 420; height: 272
-                Label { x: 14; y: 12; text: "SETTINGS"; font.pixelSize: 14 }
-                Label { x: 14; y: 36; text: "WI-FI MODE" }
-                Row { x: 12; y: 50; spacing: 8
+            Card { x: 20; y: 16; width: 440; height: 288
+                Label { x: 14; y: 10; text: "SETTINGS"; font.pixelSize: 14 }
+                Label { x: 14; y: 32; text: "WI-FI MODE" }
+                Row { x: 12; y: 46; spacing: 8
                     Repeater { model: [["home","HOME"],["ap","ACCESS POINT"],["off","WI-FI OFF"]]
-                        Rectangle { required property var modelData; width: 126; height: 50; radius: 4
+                        Rectangle { required property var modelData; width: 130; height: 46; radius: 4
                             color: "#19242b"; border.width: 2; border.color: dashboard.networkMode === modelData[0] ? root.accent : "#52616b"
                             Label { anchors.centerIn: parent; text: modelData[1]; color: "#f4f7f9"; font.pixelSize: 12 }
                             MouseArea { anchors.fill: parent; onClicked: { dashboard.setNetworkMode(modelData[0]); root.wifiMenu = false } }
@@ -290,8 +293,8 @@ Window {
                 // #18: user-settable steering lock. AC1/ACC/ACE expose no lock,
                 // so the owner sets one here; iRacing's own value still wins and
                 // AUTO clears the override. Held buttons repeat the step.
-                Label { x: 14; y: 110; text: "STEERING LOCK  " + root.steeringLockSource() }
-                Row { x: 12; y: 124; spacing: 6
+                Label { x: 14; y: 98; text: "STEERING LOCK  " + root.steeringLockSource() }
+                Row { x: 12; y: 110; spacing: 6
                     Rectangle { width: 54; height: 52; radius: 4
                         color: lockMinus.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                         Label { anchors.centerIn: parent; text: "−"; color: "#f4f7f9"; font.pixelSize: 22 }
@@ -318,12 +321,20 @@ Window {
                     }
                 }
                 Timer { id: lockRepeat; property int step: 0; interval: 120; repeat: true; onTriggered: root.adjustSteeringLock(step) }
-                Rectangle { x: 12; y: 192; width: 394; height: 52; radius: 4
+                Rectangle { x: 12; y: 168; width: 408; height: 42; radius: 4
                     color: calibrateTouch.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                     Label { anchors.centerIn: parent; text: "CALIBRATE TOUCH"; color: "#f4f7f9"; font.pixelSize: 12 }
                     MouseArea { id: calibrateTouch; anchors.fill: parent; onClicked: { root.wifiMenu = false; dashboard.startCalibration() } }
                 }
-                // Seam: lane C's Pi pairing button belongs here, below CALIBRATE.
+                Label { x: 14; y: 214; width: 404; elide: Text.ElideRight
+                    text: dashboard.setupUrl.length > 0 ? "SETUP PAGE  " + dashboard.setupUrl : "SETUP PAGE  not published yet"
+                    color: root.muted }
+                Rectangle { x: 12; y: 232; width: 408; height: 46; radius: 4
+                    color: restartSetup.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                    Label { anchors.centerIn: parent; text: "START / RESTART SETUP SERVICE"; color: "#f4f7f9"; font.pixelSize: 12 }
+                    MouseArea { id: restartSetup; anchors.fill: parent; onClicked: { dashboard.restartSetupService(); root.wifiMenu = false } }
+                }
+                // Seam: lane C's Pi pairing button belongs here, below the setup controls.
             }
         }
         Rectangle {
