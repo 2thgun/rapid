@@ -1,5 +1,12 @@
 [Unit]
 Description=raPId constrained device access (account password, SSH key, SSH enablement)
+# rapid-setup.service is the single lifecycle owner of the shared /run/rapid-apply
+# request/result queue. This transient consumer must not declare RuntimeDirectory
+# for it, or systemd removes the queue when the consumer stops even while
+# rapid-setup is still active (#25). Ordering after the owner plus an explicit
+# ReadWritePaths grant gives this unit the queue without owning it.
+Requires=rapid-setup.service
+After=rapid-setup.service
 
 [Service]
 Type=oneshot
@@ -7,10 +14,6 @@ User=root
 Group=rapid
 # The request holds only a yescrypt hash and is consumed on start. No password
 # or hash is ever passed on a command line.
-# Shared request/result queue; systemd creates it before the mount namespace
-# (#25). Must match rapid-setup/apply/wifi.service (Group=rapid, mode 0770).
-RuntimeDirectory=rapid-apply
-RuntimeDirectoryMode=0770
 ExecStart=/usr/lib/rapid/rapid-account --request-file /run/rapid-apply/account-request.json --result-file /run/rapid-apply/account-result.json --user rapid
 TimeoutStartSec=60
 LimitCORE=0
@@ -22,6 +25,8 @@ ProtectSystem=strict
 # written only by a child process that has dropped to the account's own uid.
 ProtectHome=read-only
 ReadWritePaths=/etc -/home/rapid
+# Consumer-side grant for the queue owned by rapid-setup.service (#25).
+ReadWritePaths=/run/rapid-apply
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
