@@ -56,12 +56,17 @@
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
-// Fallback for a build that does not inject RAPID_BUILD_VERSION (a direct
-// compiler invocation outside companion/build-native-daemon.ps1). The identity
-// must trace to source, so no Git metadata is the literal "unknown", never a
-// guessed revision or a build timestamp.
+// The identity is injected through a generated header on the include path
+// (companion/build-native-daemon.ps1 writes rapid_build_identity.h). A direct
+// compiler invocation without it falls back to the literal "unknown": the
+// identity must trace to source, never a guessed revision or a build timestamp.
+#if defined(__has_include)
+#  if __has_include("rapid_build_identity.h")
+#    include "rapid_build_identity.h"
+#  endif
+#endif
 #ifndef RAPID_BUILD_VERSION
-#define RAPID_BUILD_VERSION "unknown"
+#  define RAPID_BUILD_VERSION "unknown"
 #endif
 
 namespace rapid {

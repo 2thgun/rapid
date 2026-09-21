@@ -56,10 +56,15 @@ $buildVersion = Resolve-RapidBuildVersion -RepositoryRoot $repositoryRoot -Overr
 if ($buildVersion -notmatch '^[0-9A-Za-z.+~-]+$') {
     throw "Invalid build version '$buildVersion'; expected only [0-9A-Za-z.+~-]."
 }
-# Escaped quotes survive the CRT argument parser as one C string literal: the
-# compiler sees -DRAPID_BUILD_VERSION="<version>".
-$versionDefine = '-DRAPID_BUILD_VERSION=\"' + $buildVersion + '\"'
-$msvcVersionDefine = '/DRAPID_BUILD_VERSION=\"' + $buildVersion + '\"'
+# The identity reaches the compiler through a generated header, not a
+# -DRAPID_BUILD_VERSION="..." define: cl.exe keeps the backslash escapes that
+# clang/gcc/zig strip, which is an invalid string literal (C7772). A generated
+# header is quoting-neutral across every toolchain.
+$generatedHeader = Join-Path $OutputDirectory 'rapid_build_identity.h'
+Set-Content -LiteralPath $generatedHeader -Encoding ascii `
+    -Value "#pragma once`n#define RAPID_BUILD_VERSION `"$buildVersion`""
+$versionInclude = "-I$OutputDirectory"
+$msvcVersionInclude = "/I$OutputDirectory"
 Write-Host "raPId companion build identity: $buildVersion"
 
 $commonLibraries = @('-lws2_32', '-lshell32', '-lole32', '-luuid', '-lbcrypt', '-lcrypt32', '-luser32', '-lwinhttp')
@@ -84,11 +89,11 @@ if ($Compiler -eq 'Zig') {
 
 if ($clang) {
     & $clang.Source -std=c++20 -O2 -DNDEBUG -municode -static-libgcc -static-libstdc++ `
-        $versionDefine $source -o $output @commonLibraries
+        $versionInclude $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } elseif ($gcc) {
     & $gcc.Source -std=c++20 -O2 -DNDEBUG -municode -static -s `
-        $versionDefine $source -o $output @commonLibraries
+        $versionInclude $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } elseif ($zig) {
     $zigCommand = if ($zig -is [Management.Automation.CommandInfo]) { $zig.Source } else { $zig.FullName }
@@ -96,7 +101,7 @@ if ($clang) {
     $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $zigCacheRoot 'global'
     $env:ZIG_LOCAL_CACHE_DIR = Join-Path $zigCacheRoot 'local'
     & $zigCommand c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG -municode `
-        $versionDefine $source -o $output @commonLibraries
+        $versionInclude $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } else {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -108,7 +113,7 @@ if ($clang) {
             Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
             $objectOutput = Join-Path $OutputDirectory 'rapid-telemetry-daemon.obj'
             & cl.exe /nologo /std:c++20 /O2 /DNDEBUG /EHsc /W4 /DUNICODE /D_UNICODE `
-                $msvcVersionDefine $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib crypt32.lib user32.lib winhttp.lib
+                $msvcVersionInclude $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib crypt32.lib user32.lib winhttp.lib
             $built = $LASTEXITCODE -eq 0
         }
     }
