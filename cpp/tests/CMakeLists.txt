@@ -12,4 +12,7 @@ if(BUILD_TESTING)
   add_test(NAME rapid-package-verifier-tests COMMAND sh
     "${CMAKE_CURRENT_SOURCE_DIR}/package_verifier_tests.sh"
     "${CMAKE_SOURCE_DIR}/..")
+  add_test(NAME rapid-version-tests COMMAND sh
+    "${CMAKE_CURRENT_SOURCE_DIR}/rapid_version_tests.sh"
+    "${CMAKE_SOURCE_DIR}/..")
 endif()

@@ -34,10 +34,20 @@ last completed checks, not a guarantee of current device state.
   password and optionally adds an SSH key on the setup page; `rapid-account`
   applies it and only then enables SSH.
 - Added the 0.9.9 release pipeline: the package version derives from a git tag
-  (`0.9.9`, or `0.9.9~dev+<sha>` untagged), hosted ARM64 CI builds and verifies
-  the `.deb` with `-Werror`, and a `v*` tag assembles a flashable `.img.xz` with
-  a checksum and attaches it, the ARM64 `.deb` and the Windows companion to a
-  draft GitHub release.
+  (`0.9.9`, or `0.9.9~dev.<commit-count>+<sha>` untagged), hosted ARM64 CI builds
+  and verifies the `.deb` with `-Werror`, and a `v*` tag assembles a flashable
+  `.img.xz` with a checksum and attaches it, the ARM64 `.deb` and the Windows
+  companion to a draft GitHub release.
+- Dev package versions now carry a monotonic commit count
+  (`0.9.9~dev.<count>+<sha>`), so installing a newer untagged commit is an
+  upgrade rather than a downgrade and no longer needs `--allow-downgrades`. A
+  build with no git metadata and no explicit `-DRAPID_PACKAGE_VERSION` now fails
+  loudly instead of producing an untraceable `0.9.9~dev+unknown` package.
+- `/run/rapid` now has a single lifecycle owner (`rapid-firstboot.service`), so
+  stopping or restarting `rapid-provision.service` no longer deletes the shared
+  directory while `rapid-setup.service` and `rapid.service` still need it.
+  `rapid-apply.service` and `rapid-display-recovery.service` are ordered after
+  `rapid.service`, which creates `/var/lib/rapid`, instead of re-owning it.
 
 - Added code-confirmed PC pairing. `rapid-pi` serves an HTTPS pairing listener,
   the owner approves the matching code on the Pi panel or setup page, and the
