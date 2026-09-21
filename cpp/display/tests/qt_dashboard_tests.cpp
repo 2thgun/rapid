@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
     setup_status.flush();
     spin(2200);
     require(model.setupNotice().contains("SETUP AP  rapid  (open network)") &&
-                model.setupNotice().contains("fedcba9876543210 fedcba9876543210") &&
+                model.setupNotice().contains("FINGERPRINT (first 16)  fedc ba98 7654 3210") &&
                 !model.setupNotice().contains("TOKEN"),
             "#59: an enrolled device in AP mode shows the SSID/address/fingerprint without a token");
   }
