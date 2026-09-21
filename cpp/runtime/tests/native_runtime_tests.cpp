@@ -202,6 +202,40 @@ int main(int argc, char **argv) {
       require(live.snapshot()["recording"] == false,
               "an explicit non-open status still finalizes immediately, unlike paused (#15)");
     }
+    {
+      // #47: a session-identity change while still connected must drop the
+      // previous session's steering lock, exactly like a disconnect does, so a
+      // car/session change cannot show the old lock for a tick.
+      Config lock_config = c;
+      lock_config.database = root / "steering-lock.db";
+      lock_config.telemetry = root / "steering-lock-telemetry";
+      lock_config.queue = root / "steering-lock-queue.db";
+      Runtime live(lock_config);
+      Wire wire(v4_run_id());
+      require(live.receive(wire.metadata(), "127.0.0.1"),
+              "lock-test metadata with a 900 deg lock");
+      require(live.receive(wire.telemetry(1, 100), "127.0.0.1"),
+              "lock-test telemetry sample");
+      require(live.snapshot()["steering_lock_deg"] == 900,
+              "metadata lock exposed before the session change");
+      // A waiting status arrives on a new run id: the identity changes with no
+      // fresh metadata, so the retained lock must be dropped rather than shown
+      // for the next tick.
+      V4Stream next(v4_run_id());
+      require(live.receive(next.status(0, 20000), "127.0.0.1"),
+              "new-session waiting status accepted");
+      require(live.snapshot()["steering_lock_deg"].is_null(),
+              "steering lock cleared on session-identity change (#47)");
+      // The next car/session opens a fresh run whose metadata supplies the new
+      // lock; the change must not leave it null once fresh metadata arrives.
+      V4Stream fresh(v4_run_id());
+      require(live.receive(fresh.metadata(20000, "Spa", "GT3", "Test driver",
+                                          "Race", "540"),
+                           "127.0.0.1"),
+              "new-session metadata accepted");
+      require(live.snapshot()["steering_lock_deg"] == 540,
+              "new session's lock replaces the previous session's (#47)");
+    }
     // A datagram that is not authenticated v4 is rejected and counted, exactly
     // like malformed v4 -- the retired unauthenticated path is gone.
     require(!runtime.receive("[]", "127.0.0.1"), "non-object rejected");
