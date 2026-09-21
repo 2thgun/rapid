@@ -143,6 +143,21 @@ int main(int argc, char **argv) {
               !model.setupNotice().contains("PASSWORD"),
           "Setup card/panel shows the open network's SSID, address, TLS fingerprint and "
           "activation token, with no passphrase");
+  // The activation token must be visible even before the privileged
+  // provisioner has published the resolved SSID: hiding the whole card until
+  // /run/rapid/network-ssid exists left the owner with no on-screen token.
+  network_ssid.resize(0);
+  network_ssid.flush();
+  spin(1200);
+  require(model.setupNotice().contains("SETUP AP  rapid  (open network)") &&
+              model.setupNotice().contains("0123456789abcdef 0123456789abcdef"),
+          "Setup card still shows the activation token before the provisioner publishes the SSID");
+  network_ssid.seek(0);
+  network_ssid.write("rapid\n");
+  network_ssid.flush();
+  spin(1200);
+  require(model.setupNotice().contains("SETUP AP  rapid  (open network)"),
+          "Setup card returns to the published SSID once it exists");
   require(model.pairingPending() && model.pairingLabel() == "Test PC" &&
               model.pairingCode() == "12345678" && model.approvePairing(),
           "Pairing panel metadata and approval action are exposed");

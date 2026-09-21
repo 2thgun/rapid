@@ -108,6 +108,13 @@ if(NOT provision_service MATCHES "User=root" OR
    NOT provision_service MATCHES "RuntimeDirectory=rapid")
   message(FATAL_ERROR "Only the provisioner may run as root for the generated setup-AP state, and it must share /run/rapid with the rapid group")
 endif()
+# #22: the setup AP is the fixed, open network "rapid" (or "rapid-NNNN" only
+# on an SSID collision); its NetworkManager profile has no wifi-security.
+# rapid-provision is the only unit that creates/modifies that profile as root,
+# so it must never be handed a passphrase or key-management setting either.
+if(provision_service MATCHES "[Pp][Ss][Kk]|wifi-sec|wireless-security|password")
+  message(FATAL_ERROR "rapid-provision.service must not carry an AP passphrase or security setting; the setup AP is open")
+endif()
 # Checked against firstboot's own required value (rather than hard-coding 0770
 # again here) so this rule stays meaningful even if that value ever changes:
 # the two units must agree, whatever the value is.
