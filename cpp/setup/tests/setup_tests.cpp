@@ -121,11 +121,16 @@ int main(int argc, char **argv) {
     const auto nmcli_calls = read_file(nmcli_log);
     require(nmcli_calls.find("connection add type wifi ifname wlan0 con-name rapid-setup autoconnect yes ssid rapid") !=
                 std::string::npos &&
+                nmcli_calls.find("connection modify rapid-setup remove 802-11-wireless-security") !=
+                std::string::npos &&
+                nmcli_calls.find("connection modify rapid-setup 802-11-wireless.ssid rapid 802-11-wireless.mode ap") !=
+                std::string::npos &&
                 nmcli_calls.find("wifi-sec") == std::string::npos &&
                 nmcli_calls.find("psk") == std::string::npos &&
                 nmcli_calls.find("ipv4.addresses 192.168.50.1/24") != std::string::npos &&
                 nmcli_calls.find("connection up rapid-setup ifname wlan0") != std::string::npos,
-            "AP provisioner creates an open profile (no key management or PSK) with no collision seen");
+            "AP provisioner creates an open profile (no key management or PSK), removes any legacy "
+            "security, re-sets the SSID on the existing profile and leaves no passphrase");
     require(read_file(ssid_file) == "rapid\n",
             "AP provisioner publishes the resolved SSID for the panel/card to display");
     // #22 edge case: two Pis in range would both try "rapid". A one-shot scan
@@ -187,6 +192,57 @@ int main(int argc, char **argv) {
     require(read_file(nmcli_no_rescan_log).find("-t -f SSID") == std::string::npos &&
                 read_file(nmcli_no_rescan_log).find("connection add") == std::string::npos,
             "an already-provisioned session neither re-scans nor re-creates the connection");
+    // #22 upgrade path: an upgraded device can carry a secured access-point
+    // profile from a scheme that predates the open network (the old
+    // "rapid-demo", with an old WPA-PSK "rapid-setup"). Updating the owned
+    // connection does not remove the extra profile, so the provisioner must
+    // delete every unowned access-point profile for the setup SSID. It has to
+    // run even when the owner is already configured (the panel can still
+    // select AP mode later), without forcing the AP up and without touching
+    // Home Wi-Fi or the owned profile.
+    const auto fake_nmcli_legacy = root.path / "nmcli-legacy";
+    const auto nmcli_legacy_log = root.path / "nmcli-legacy.log";
+    {
+      std::ofstream script(fake_nmcli_legacy);
+      script << "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_NMCLI_LOG\"\n"
+                "if [ \"$1 $2 $3 $4\" = \"-t -f NAME,TYPE connection\" ]; then "
+                "printf 'rapid-demo:802-11-wireless\\nrapid-home:802-11-wireless\\nrapid-setup:802-11-wireless\\n'; exit 0; fi\n"
+                "if [ \"$1\" = \"-g\" ] && [ \"$5\" = \"rapid-demo\" ]; then "
+                "case \"$2\" in 802-11-wireless.mode) printf 'ap\\n';; 802-11-wireless.ssid) printf 'rapid\\n';; esac; exit 0; fi\n"
+                "if [ \"$1\" = \"-g\" ] && [ \"$5\" = \"rapid-home\" ]; then printf 'infrastructure\\n'; exit 0; fi\n"
+                "exit 0\n";
+    }
+    fs::permissions(fake_nmcli_legacy, fs::perms::owner_all);
+    const auto owner_status = root.path / "firstboot-owner.json";
+    atomic_file(owner_status, Json{{"owner_configured", true}, {"schema_version", 3}}.dump());
+    const auto owner_ssid_file = root.path / "network-ssid-owner";
+    setenv("RAPID_TEST_NMCLI_LOG", nmcli_legacy_log.c_str(), 1);
+    const auto owner_provision = fork();
+    require(owner_provision >= 0, "fork upgrade AP migration");
+    if (owner_provision == 0) {
+      execl(argv[2], argv[2], "--status-file", owner_status.c_str(), "--ssid-file",
+            owner_ssid_file.c_str(), "--nmcli", fake_nmcli_legacy.c_str(), nullptr);
+      _exit(127);
+    }
+    int owner_status_code = 0;
+    require(waitpid(owner_provision, &owner_status_code, 0) == owner_provision &&
+                WIFEXITED(owner_status_code) && WEXITSTATUS(owner_status_code) == 0,
+            "the upgrade AP migration runs on an already-configured device");
+    unsetenv("RAPID_TEST_NMCLI_LOG");
+    const auto legacy_calls = read_file(nmcli_legacy_log);
+    require(legacy_calls.find("connection delete rapid-demo") != std::string::npos &&
+                legacy_calls.find("connection delete rapid-home") == std::string::npos &&
+                legacy_calls.find("connection delete rapid-setup") == std::string::npos,
+            "upgrade migration removes only the unowned secured access-point profile");
+    require(legacy_calls.find("connection modify rapid-setup remove 802-11-wireless-security") !=
+                std::string::npos &&
+                legacy_calls.find("wifi-sec") == std::string::npos &&
+                legacy_calls.find("psk") == std::string::npos,
+            "upgrade migration keeps the owned profile open and writes no passphrase");
+    require(legacy_calls.find("connection up rapid-setup") == std::string::npos &&
+                !fs::exists(owner_ssid_file),
+            "an already-configured device neither forces the AP up nor publishes a new SSID");
     const auto apply_request = root.path / "apply-request.json";
     const auto apply_result = root.path / "apply-result.json";
     const auto fake_hostnamectl = root.path / "hostnamectl";

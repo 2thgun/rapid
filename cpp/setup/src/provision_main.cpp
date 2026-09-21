@@ -129,6 +129,42 @@ std::string resolve_ssid(const fs::path &nmcli, const fs::path &ssid_file) {
     throw std::runtime_error("cannot publish setup SSID");
   return ssid;
 }
+// #22 upgrade migration. A device that predates the open setup AP can still
+// carry a secured access-point profile for the setup SSID -- the pre-firstboot
+// worker used the name "rapid-demo", and the first first-boot scheme wrote a
+// WPA-PSK "rapid-setup" -- and neither is repaired by creating or updating the
+// owned connection, because NetworkManager keeps the old profile alongside it.
+// Left in place, either can be activated by the Wi-Fi mode controller or by
+// autoconnect and bring the password-protected AP back after an upgrade. Remove
+// every unowned access-point profile for the setup SSID. Best-effort: a query
+// failure must not stop provisioning, and only profiles that are actually
+// access points for "rapid"/"rapid-NNNN" are touched.
+void remove_legacy_ap_profiles(const fs::path &nmcli, const std::string &connection) {
+  std::string listing;
+  try {
+    listing = capture(nmcli, {"-t", "-f", "NAME,TYPE", "connection", "show"});
+  } catch (const std::exception &) {
+    return;
+  }
+  std::istringstream lines(listing);
+  for (std::string line; std::getline(lines, line);) {
+    const auto separator = line.find(':');
+    if (separator == std::string::npos || separator + 1 >= line.size()) continue;
+    const auto name = line.substr(0, separator);
+    if (name == connection || line.substr(separator + 1) != "802-11-wireless") continue;
+    std::string mode, ssid;
+    try {
+      mode = trimmed(capture(nmcli, {"-g", "802-11-wireless.mode", "connection", "show", name}));
+      if (mode != "ap") continue;
+      ssid = trimmed(capture(nmcli, {"-g", "802-11-wireless.ssid", "connection", "show", name}));
+    } catch (const std::exception &) {
+      continue;
+    }
+    if (!valid_ssid(ssid)) continue;
+    if (command(nmcli, {"connection", "delete", name}) == 0)
+      log("INFO provision: removed legacy secured setup AP profile " + name);
+  }
+}
 void ipv4(const std::string &address) {
   in_addr parsed{};
   require(::inet_pton(AF_INET, address.c_str(), &parsed) == 1,
@@ -157,10 +193,21 @@ int main(int argc, char **argv) {
     require(connection == "rapid-setup", "only the rapid-setup connection may be provisioned");
     const auto status = Json::parse(read_file(status_file));
     require(status.is_object(), "invalid first-boot status");
+    require(fs::is_regular_file(nmcli) && ::access(nmcli.c_str(), X_OK) == 0,
+            "NetworkManager executable is unavailable");
+    // #22 upgrade migration: this runs whether or not the owner is already
+    // configured. A secured legacy AP profile can otherwise be reactivated
+    // from the panel's AP mode after an upgrade, not only on the first boot.
+    // It runs before the SSID scan so the provisioner cannot mistake its own
+    // still-configured legacy AP for a colliding network in range.
+    remove_legacy_ap_profiles(nmcli, connection);
     if (!status.contains("bootstrap")) {
       require(status.value("owner_configured", false),
               "first-boot status has no setup credentials");
-      log("INFO provision: owner already configured; retaining existing network profile");
+      // No access point is started here, but the profile the Wi-Fi mode
+      // controller may activate later must be open on an upgraded device too.
+      command(nmcli, {"connection", "modify", connection, "remove", "802-11-wireless-security"});
+      log("INFO provision: owner already configured; retaining the open setup AP profile");
       return 0;
     }
     require(status["bootstrap"].is_object(), "first-boot setup credentials are invalid");
@@ -172,8 +219,6 @@ int main(int argc, char **argv) {
     require(hex(bootstrap.at("certificate_fingerprint").get<std::string>(), 64),
             "invalid setup certificate fingerprint");
     ipv4(address);
-    require(fs::is_regular_file(nmcli) && ::access(nmcli.c_str(), X_OK) == 0,
-            "NetworkManager executable is unavailable");
     const bool exists = command(nmcli, {"connection", "show", connection}) == 0;
     const auto ssid = resolve_ssid(nmcli, ssid_file);
     require(valid_ssid(ssid), "invalid setup SSID");
@@ -185,7 +230,12 @@ int main(int argc, char **argv) {
     // WPA-PSK setting, which this drops rather than leaving it configured
     // alongside (or instead of) the open profile below.
     command(nmcli, {"connection", "modify", connection, "remove", "802-11-wireless-security"});
-    run(nmcli, {"connection", "modify", connection, "802-11-wireless.mode", "ap",
+    // The SSID is set on every run, not just on `connection add`: an upgraded
+    // device already has a profile, and the old scheme's name differed (a
+    // device-specific "rapid-<hex>"), so the open profile must be renamed to
+    // the name the panel and the setup card publish.
+    run(nmcli, {"connection", "modify", connection, "802-11-wireless.ssid", ssid,
+                "802-11-wireless.mode", "ap",
                 "ipv4.method", "shared", "ipv4.addresses", address + "/24",
                 "ipv6.method", "disabled", "connection.autoconnect", "yes"});
     run(nmcli, {"radio", "wifi", "on"});

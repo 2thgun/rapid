@@ -190,6 +190,12 @@ stage_package
 replace_in "$units/rapid-provision.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
 expect_fail "a provisioner whose /run/rapid mode disagrees with first boot's" "must declare the exact same RuntimeDirectoryMode"
 
+# #22: the setup AP is open; the root provisioner unit must not carry an AP
+# passphrase or key-management setting.
+stage_package
+printf '\nEnvironment=RAPID_AP_PSK=secret\n' >> "$units/rapid-provision.service"
+expect_fail "a provisioner carrying an AP passphrase" "must not carry an AP passphrase"
+
 stage_package
 mkdir -p "$work/stage/etc/ssh/sshd_config.d"
 printf 'PasswordAuthentication yes\n' > "$work/stage/etc/ssh/sshd_config.d/10-rapid-owner.conf"

@@ -49,9 +49,13 @@ QUrl live_socket_endpoint(QUrl endpoint) {
 // #22: the setup AP is the open network "rapid" (or a disambiguated
 // "rapid-NNNN" when another one is already in range, chosen once by the
 // provisioner for this boot). It carries no passphrase, so the card/panel no
-// longer shows one. Two Pis can broadcast the same SSID, so the panel must
-// show enough to tell them apart: the address (in the URL) and the TLS
-// certificate fingerprint the client's browser should match.
+// longer shows one. The activation token is what lets the owner enroll without
+// reading a file over SSH, so it must never be hidden behind another file:
+// when the provisioner has not yet published the resolved SSID the card still
+// shows the token (and the address/fingerprint), with the name falling back to
+// "rapid". Two Pis can broadcast the same SSID, so the panel also shows the
+// address and the TLS certificate fingerprint the client's browser should
+// match.
 QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_contents) {
   const auto document = QJsonDocument::fromJson(status_contents);
   if (!document.isObject()) return {};
@@ -61,9 +65,10 @@ QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_c
   const auto url = values.value("setup_url").toString();
   const auto fingerprint = values.value("certificate_fingerprint").toString();
   const auto token = values.value("activation_token").toString();
-  const auto ssid = QString::fromUtf8(ssid_contents).trimmed();
-  if (ssid.isEmpty() || url.isEmpty() || fingerprint.size() != 64 || token.size() != 64)
+  if (url.isEmpty() || fingerprint.size() != 64 || token.size() != 64)
     return {};
+  const auto resolved = QString::fromUtf8(ssid_contents).trimmed();
+  const auto ssid = resolved.isEmpty() ? QStringLiteral("rapid") : resolved;
   auto grouped = [](const QString &value, const QString &indent) {
     return QStringLiteral("%1 %2\n%3%4 %5")
         .arg(value.sliced(0, 16), value.sliced(16, 16), indent, value.sliced(32, 16), value.sliced(48, 16));
