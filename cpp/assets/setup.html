@@ -17,6 +17,8 @@ button:disabled{opacity:.6;cursor:wait}dt{color:#b8c4d2;margin-top:16px}dd{margi
 .hint{font-size:.9rem;color:#9fb0c3;margin:-2px 0 12px}
 .hint .req,.hint .rec{font-weight:650;border-radius:4px;padding:1px 6px;margin-right:5px}
 .hint .req{background:#3a2528;color:#f3b0b0}.hint .rec{background:#213039;color:#9fd3f0}
+.key-row{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+.key-row span{overflow-wrap:anywhere}.key-row button{width:auto;margin-top:0;min-height:36px;padding:6px 12px}
 </style>
 <h1>raPId setup</h1>
 <p>Manage your device. Each category below saves on its own.</p>
@@ -115,40 +117,55 @@ then tap the targets on the display.</p>
 </section>
 <section id="device-access" hidden>
 <h2>Device access (SSH and sudo)</h2>
-<p>Choose the password or PIN for the <code>rapid</code> account on the Pi. It is used to sign in over SSH and for
-<code>sudo</code>. The device ships without one, and SSH stays off until you set a password or add a key.
-The password or PIN is hashed on the Pi before it is stored and is never shown again.</p>
-<p><span class="req">Required</span>a device password or PIN, or an SSH public key.</p>
+<p>The <code>rapid</code> account's login password or PIN, and the SSH keys allowed to sign in. The device ships
+without either, and SSH stays off until you set a password or add a key. A password or PIN is hashed on the Pi
+before it is stored and is never shown again.</p>
 <p>TLS fingerprint of this connection: <strong id="access-fingerprint">unavailable</strong></p>
-<p>The setup network is open, so this could be a lookalike device. Before typing a password below, compare
-the fingerprint above with the first block shown on this device's own physical display; if they don't match, stop
-and do not enter a password or key.</p>
+<p>The setup network is open, so this could be a lookalike device. Before typing a password or key below,
+compare the fingerprint above with the first block shown on this device's own physical display; if they don't
+match, stop and do not enter a password or key.</p>
+<div class="category" id="category-password">
+<h3>Device password or PIN</h3>
+<p class="hint"><span class="req">Required</span>unless you add an SSH key: at least 4 characters, so a 4-digit PIN is fine. <span class="rec">Recommended</span>12+ characters, a passphrase, or key-only access.</p>
 <form id="access-form">
 <label for="access-password">Device password or PIN</label>
-<p class="hint"><span class="req">Required</span>unless you add an SSH key: at least 4 characters, so a 4-digit PIN is fine. <span class="rec">Recommended</span>12+ characters, a passphrase, or key-only access.</p>
 <input id="access-password" type="password" autocomplete="new-password" minlength="4" maxlength="128">
 <label for="access-confirm">Confirm device password or PIN</label>
 <input id="access-confirm" type="password" autocomplete="new-password" minlength="4" maxlength="128">
-<label for="access-key">SSH public key (optional, one line such as <code>ssh-ed25519 AAAA… name</code>)</label>
-<p class="hint"><span class="rec">Recommended</span>key-only sign-in does not need a password at all.</p>
-<input id="access-key" autocomplete="off" spellcheck="false" maxlength="3072">
 <label id="access-replace-label" hidden><input id="access-replace" type="checkbox" style="width:auto;min-height:0"> Replace the password this account already has</label>
 <label><input id="access-fingerprint-confirm" type="checkbox" required style="width:auto;min-height:0"> I compared the TLS fingerprint above with the first block on the Pi's own display, and they match.</label>
-<button id="access-save" type="submit">Save device access</button>
+<button id="access-save" type="submit">Save device password</button>
 </form>
 <p id="access-status" class="status" role="status" aria-live="polite"></p>
-<h3>Generate a key for this computer</h3>
+</div>
+<div class="category" id="category-ssh-keys">
+<h3>SSH keys</h3>
+<p>Keys allowed to sign in as <code>rapid</code> without a password. Only public keys are ever shown, sent or
+stored here; a private key never leaves the computer that made it.</p>
+<div id="ssh-keys">No SSH keys enrolled.</div>
+<h4 id="ssh-key-form-title">Add a key</h4>
+<form id="ssh-key-form">
+<label for="ssh-key-input">SSH public key (one line such as <code>ssh-ed25519 AAAA… name</code>)</label>
+<p class="hint"><span class="rec">Recommended</span>key-only sign-in does not need a password at all.</p>
+<input id="ssh-key-input" autocomplete="off" spellcheck="false" maxlength="3072">
+<label><input id="ssh-fingerprint-confirm" type="checkbox" required style="width:auto;min-height:0"> I compared the TLS fingerprint above with the first block on the Pi's own display, and they match.</label>
+<button id="ssh-key-save" type="submit">Save SSH key</button>
+<button id="ssh-key-cancel" type="button" hidden>Cancel edit</button>
+</form>
+<p id="ssh-key-status" class="status" role="status" aria-live="polite"></p>
+<h4>Generate a key for this computer</h4>
 <p>Generate an SSH key here and this page downloads the private key to this
 computer and fills its public key into the field above, so only the public half
 is installed on the Pi. The private key never leaves this computer.</p>
 <button id="access-generate" type="button">Generate a key and download it</button>
 <p id="access-generate-state" class="status" role="status" aria-live="polite"></p>
 <div id="access-generated" hidden>
-<p>Public key (installed when you press Save device access):</p>
+<p>Public key (installed when you press Save SSH key):</p>
 <code id="access-public-key"></code>
 <p>Sign in from this computer with:</p>
 <code id="access-ssh-command"></code>
 <button id="access-download" type="button">Download the private key again</button>
+</div>
 </div>
 </section>
 <script>
@@ -362,20 +379,105 @@ function showCompanion() {
       'Serve this file to the PC that will send telemetry.';
 }
 
-// Device access (#23): the rapid account's SSH/sudo password and an optional SSH key.
-function describeAccess(result) {
+// Device access (#23/#28): the rapid account's SSH/sudo password or PIN, and
+// the SSH keys allowed to sign in. They are two separate categories: the
+// password form never touches keys, and the key list/add/edit/remove never
+// touches the password. Both reuse the same authenticated /api/v1/account
+// queue and the same rapid-account helper; only public key material is ever
+// listed, sent or shown.
+let sshKeyEditFingerprint = '';
+let keysListRequested = false;
+function describePassword(result) {
   if (!result) return 'No device password has been set from this page yet. SSH is off until one is set.';
   if (result.status === 'confirmation_required')
     return 'This account already has a password. Tick "Replace the password" to change it.';
   const parts = [];
   if (result.password_changed) parts.push('Password set.');
   else if (result.password_set) parts.push('A password is set.');
-  if (result.ssh_key === 'installed') parts.push('SSH key added.');
-  if (result.ssh_key === 'already_present') parts.push('SSH key was already present.');
   if (result.ssh === 'enabled') parts.push(result.ssh_password_login ? 'SSH is on (password and key sign-in).' : 'SSH is on (key sign-in only).');
   if (result.ssh === 'unavailable') parts.push('SSH is not installed on this device.');
-  if (result.status === 'failed') parts.push(result.error ? result.error + '.' : 'Device access could not be applied.');
-  return parts.join(' ') || 'Device access unchanged.';
+  if (result.status === 'failed') parts.push(result.error ? result.error + '.' : 'Device password could not be applied.');
+  return parts.join(' ') || 'Device password unchanged.';
+}
+// The enrolled-key list. Each row shows the public comment and a shortened
+// SHA-256 fingerprint (the full value stays in the DOM data, never a private
+// key). Edit and Remove act on that fingerprint through the same queue.
+function renderKeys(keys) {
+  const container = document.getElementById('ssh-keys');
+  container.replaceChildren();
+  if (!keys || !keys.length) { container.textContent = 'No SSH keys enrolled.'; return; }
+  for (const key of keys) {
+    const row = document.createElement('p');
+    row.className = 'key-row';
+    const label = document.createElement('span');
+    label.textContent = (key.comment || key.type) + '  ' + formatFingerprint(key.fingerprint);
+    row.appendChild(label);
+    const edit = document.createElement('button');
+    edit.type = 'button'; edit.textContent = 'Edit';
+    edit.addEventListener('click', () => beginKeyEdit(key));
+    row.appendChild(edit);
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.textContent = 'Remove';
+    remove.addEventListener('click', async () => {
+      const status = document.getElementById('ssh-key-status');
+      if (!document.getElementById('ssh-fingerprint-confirm').checked) {
+        setStatus(status, 'Compare the TLS fingerprint above with the Pi\'s own display first.', 'error');
+        return;
+      }
+      remove.disabled = true;
+      try {
+        const queued = await api('/api/v1/account', 'POST', {action: 'remove_key', fingerprint: key.fingerprint});
+        setStatus(status, 'Removing the SSH key…');
+        const result = await waitForAccountResult(queued.request_id);
+        if (!result) { setStatus(status, 'The key change is still being applied.', 'error'); return; }
+        renderKeys(result.keys);
+        setStatus(status, result.status === 'applied' ? 'SSH key removed.'
+                                                      : (result.error || 'The SSH key could not be removed.'),
+                  result.status === 'applied' ? 'ok' : 'error');
+      } catch (error) { setStatus(status, error.message, 'error'); }
+      finally { remove.disabled = false; }
+    });
+    row.appendChild(remove);
+    container.appendChild(row);
+  }
+}
+function beginKeyEdit(key) {
+  sshKeyEditFingerprint = key.fingerprint;
+  document.getElementById('ssh-key-input').value = key.key || '';
+  document.getElementById('ssh-key-form-title').textContent = 'Edit key';
+  document.getElementById('ssh-key-cancel').hidden = false;
+  setStatus(document.getElementById('ssh-key-status'),
+            'Editing ' + (key.comment || key.type) + '. Change the comment or line, then save.');
+}
+function cancelKeyEdit() {
+  sshKeyEditFingerprint = '';
+  document.getElementById('ssh-key-input').value = '';
+  document.getElementById('ssh-key-form-title').textContent = 'Add a key';
+  document.getElementById('ssh-key-cancel').hidden = true;
+}
+document.getElementById('ssh-key-cancel').addEventListener('click', () => { cancelKeyEdit(); setStatus(document.getElementById('ssh-key-status'), ''); });
+async function refreshKeys() {
+  try {
+    const queued = await api('/api/v1/account', 'POST', {action: 'list_keys'});
+    const result = await waitForAccountResult(queued.request_id);
+    if (result) renderKeys(result.keys);
+  } catch (error) { setStatus(document.getElementById('ssh-key-status'), error.message, 'error'); }
+}
+function showPassword(data) {
+  const result = data.result;
+  setStatus(document.getElementById('access-status'),
+            data.queued ? 'Applying device password…' : describePassword(result));
+  if (result && (result.password_set || result.status === 'confirmation_required'))
+    document.getElementById('access-replace-label').hidden = false;
+}
+async function showKeys(data) {
+  if (data && data.result && Array.isArray(data.result.keys)) {
+    renderKeys(data.result.keys);
+    keysListRequested = true;
+    return;
+  }
+  renderKeys([]);
+  if (!keysListRequested) { keysListRequested = true; await refreshKeys(); }
 }
 async function showAccess() {
   const section = document.getElementById('device-access');
@@ -384,10 +486,8 @@ async function showAccess() {
     section.hidden = false;
     document.getElementById('access-fingerprint').textContent =
         certificateFingerprint ? formatFingerprint(certificateFingerprint) : 'unavailable';
-    const result = data.result;
-    setStatus(document.getElementById('access-status'), data.queued ? 'Applying device access…' : describeAccess(result));
-    if (result && (result.password_set || result.status === 'confirmation_required'))
-      document.getElementById('access-replace-label').hidden = false;
+    showPassword(data);
+    await showKeys(data);
     return data;
   } catch (error) {
     // Unavailable (for example without HTTPS): keep the section hidden.
@@ -395,7 +495,7 @@ async function showAccess() {
     return null;
   }
 }
-async function waitForAccessResult(requestId) {
+async function waitForAccountResult(requestId) {
   for (let attempt = 0; attempt < 60; ++attempt) {
     await new Promise(resolve => setTimeout(resolve, 500));
     const data = await showAccess();
@@ -407,38 +507,62 @@ document.getElementById('access-form').addEventListener('submit', async event =>
   event.preventDefault();
   const password = document.getElementById('access-password');
   const confirmation = document.getElementById('access-confirm');
-  const key = document.getElementById('access-key');
   const replace = document.getElementById('access-replace');
   const fingerprintConfirm = document.getElementById('access-fingerprint-confirm');
   const button = document.getElementById('access-save');
   const status = document.getElementById('access-status');
   // Belt and braces alongside the checkbox's own `required` attribute (#23):
-  // don't apply device access without an explicit fingerprint check.
+  // don't apply a credential without an explicit fingerprint check.
   if (!fingerprintConfirm.checked) { setStatus(status, 'Compare the TLS fingerprint above with the Pi\'s own display first.', 'error'); return; }
-  if (!password.value && !key.value.trim()) { setStatus(status, 'Enter a device password or PIN, or an SSH public key.', 'error'); return; }
+  if (!password.value) { setStatus(status, 'Enter a device password or PIN.', 'error'); return; }
   if (password.value !== confirmation.value) { setStatus(status, 'The device passwords do not match.', 'error'); return; }
-  const body = {};
-  if (password.value) { body.password = password.value; body.replace_existing_password = replace.checked; }
-  if (key.value.trim()) body.ssh_public_key = key.value.trim();
+  const body = {password: password.value, replace_existing_password: replace.checked};
   button.disabled = true;
   status.textContent = '';
   status.classList.remove('ok', 'error');
   try {
     const queued = await api('/api/v1/account', 'POST', body);
     password.value = ''; confirmation.value = '';
-    setStatus(status, 'Saving device access…');
-    const result = await waitForAccessResult(queued.request_id);
-    if (!result) { setStatus(status, 'Device access is still being saved.', 'error'); return; }
+    setStatus(status, 'Saving device password…');
+    const result = await waitForAccountResult(queued.request_id);
+    if (!result) { setStatus(status, 'The device password is still being saved.', 'error'); return; }
     if (result.status === 'confirmation_required') {
       document.getElementById('access-replace-label').hidden = false;
       setStatus(status, 'This account already has a password. Nothing was changed. Tick "Replace the password" and enter it again to change it.', 'error');
       return;
     }
-    if (result.status === 'applied') key.value = '';
     replace.checked = false;
-    setStatus(status, describeAccess(result), result.status === 'applied' ? 'ok' : 'error');
+    setStatus(status, describePassword(result), result.status === 'applied' ? 'ok' : 'error');
   } catch (error) { setStatus(status, error.message, 'error'); }
   finally { password.value = ''; confirmation.value = ''; body.password = ''; button.disabled = false; }
+});
+document.getElementById('ssh-key-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const key = document.getElementById('ssh-key-input');
+  const fingerprintConfirm = document.getElementById('ssh-fingerprint-confirm');
+  const button = document.getElementById('ssh-key-save');
+  const status = document.getElementById('ssh-key-status');
+  if (!fingerprintConfirm.checked) { setStatus(status, 'Compare the TLS fingerprint above with the Pi\'s own display first.', 'error'); return; }
+  if (!key.value.trim()) { setStatus(status, 'Paste an SSH public key.', 'error'); return; }
+  const edited = Boolean(sshKeyEditFingerprint);
+  const body = {ssh_public_key: key.value.trim()};
+  if (edited) body.remove_fingerprint = sshKeyEditFingerprint;
+  button.disabled = true;
+  setStatus(status, 'Saving SSH key…');
+  try {
+    const queued = await api('/api/v1/account', 'POST', body);
+    const result = await waitForAccountResult(queued.request_id);
+    if (!result) { setStatus(status, 'The SSH key is still being saved.', 'error'); return; }
+    renderKeys(result.keys);
+    if (result.status === 'applied') {
+      cancelKeyEdit();
+      setStatus(status, edited ? 'SSH key updated.'
+                               : (result.ssh_key === 'already_present' ? 'That key was already enrolled.' : 'SSH key added.'), 'ok');
+    } else {
+      setStatus(status, result.error || 'The SSH key could not be saved.', 'error');
+    }
+  } catch (error) { setStatus(status, error.message, 'error'); }
+  finally { button.disabled = false; }
 });
 // #28: the browser-generated key. The private key is only ever in this page's
 // memory and the download; the public line is filled into #access-key and sent
@@ -467,13 +591,13 @@ async function generateAccessKey() {
     accessPrivateKey = key.privateKeyPem;
     accessPrivateKeyName = key.type === 'ssh-ed25519' ? 'rapid_ed25519' : 'rapid_ecdsa';
     downloadAccessPrivateKey();
-    document.getElementById('access-key').value = key.publicLine;
+    document.getElementById('ssh-key-input').value = key.publicLine;
     document.getElementById('access-public-key').textContent = key.publicLine;
     document.getElementById('access-ssh-command').textContent =
         'ssh -i ' + accessPrivateKeyName + ' rapid@' + host;
     document.getElementById('access-generated').hidden = false;
     setStatus(state, 'Generated a ' + key.type + ' key. The private key file ' + accessPrivateKeyName +
-        ' was downloaded to this computer; keep it safe. Press Save device access to install the public ' +
+        ' was downloaded to this computer; keep it safe. Press Save SSH key to install the public ' +
         'key on the Pi.', 'ok');
   } catch (error) {
     setStatus(state, error.message, 'error');

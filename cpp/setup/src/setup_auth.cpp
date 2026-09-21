@@ -253,7 +253,12 @@ Response SetupAuth::handle(const Request &request) {
       try {
         auto status = Json::parse(read_file(firstboot_status_file_));
         if (status.is_object()) {
-          status.erase("bootstrap");
+          // #59 / setup-page-ux: the activation token is the secret that
+          // authorizes owner creation, so enrollment removes it immediately.
+          // The AP address and TLS fingerprint stay: the panel still shows its
+          // setup card while Access Point mode is up on an enrolled device.
+          if (status.contains("bootstrap") && status["bootstrap"].is_object())
+            status["bootstrap"].erase("activation_token");
           status["owner_configured"] = true;
           status["state"] = "settings_application_required";
           // #31: this file can still hold bootstrap/activation material, and

@@ -31,6 +31,11 @@ struct PublicKey {
 // key of the stated type and RSA keys must be at least 2048 bits.
 std::optional<PublicKey> parse_public_key(const std::string &text, std::string *problem = nullptr);
 
+// Lowercase hex SHA-256 of the decoded key blob, used to identify an enrolled
+// key for listing and removal without ever handling private material. Empty
+// when the base64 is not a decodable key blob.
+std::string key_fingerprint(const std::string &blob_base64);
+
 // A yescrypt ($y$) or sha512-crypt ($6$) hash with only crypt(3) characters,
 // so it can never inject another chpasswd line or field.
 bool valid_crypt_hash(const std::string &hash);

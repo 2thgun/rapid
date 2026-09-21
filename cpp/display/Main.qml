@@ -260,24 +260,35 @@ Window {
         Card { visible: dashboard.logNotice.length > 0; x: 165; y: 241; width: 135; height: 19; z: 2
             Label { anchors.centerIn: parent; text: dashboard.logNotice; color: "#20cf75" }
         }
+        // The panel's settings page (opened by the SETTINGS button in the top
+        // bar): Wi-Fi mode, touch calibration, the setup page address and a way
+        // to start/restart the local setup service.
         Rectangle {
             visible: root.wifiMenu; anchors.fill: parent; color: "#b0000000"; z: 10
             MouseArea { anchors.fill: parent; onClicked: root.wifiMenu = false }
-            Card { x: 30; y: 58; width: 420; height: 196
-                Label { x: 14; y: 14; text: "WI-FI MODE"; font.pixelSize: 14 }
-                Row { x: 12; y: 48; spacing: 8
+            Card { x: 24; y: 34; width: 432; height: 248
+                Label { x: 14; y: 12; text: "SETTINGS"; font.pixelSize: 14 }
+                Row { x: 12; y: 40; spacing: 8
                     Repeater { model: [["home","HOME"],["ap","ACCESS POINT"],["off","WI-FI OFF"]]
-                        Rectangle { required property var modelData; width: 126; height: 62; radius: 4
+                        Rectangle { required property var modelData; width: 130; height: 54; radius: 4
                             color: "#19242b"; border.width: 2; border.color: dashboard.networkMode === modelData[0] ? root.accent : "#52616b"
                             Label { anchors.centerIn: parent; text: modelData[1]; color: "#f4f7f9"; font.pixelSize: 12 }
                             MouseArea { anchors.fill: parent; onClicked: { dashboard.setNetworkMode(modelData[0]); root.wifiMenu = false } }
                         }
                     }
                 }
-                Rectangle { x: 12; y: 120; width: 394; height: 62; radius: 4
+                Rectangle { x: 12; y: 102; width: 408; height: 44; radius: 4
                     color: calibrateTouch.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                     Label { anchors.centerIn: parent; text: "CALIBRATE TOUCH"; color: "#f4f7f9"; font.pixelSize: 12 }
                     MouseArea { id: calibrateTouch; anchors.fill: parent; onClicked: { root.wifiMenu = false; dashboard.startCalibration() } }
+                }
+                Label { x: 14; y: 154; width: 404; elide: Text.ElideRight
+                    text: dashboard.setupUrl.length > 0 ? "SETUP PAGE  " + dashboard.setupUrl : "SETUP PAGE  not published yet"
+                    color: root.muted }
+                Rectangle { x: 12; y: 176; width: 408; height: 54; radius: 4
+                    color: restartSetup.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                    Label { anchors.centerIn: parent; text: "START / RESTART SETUP SERVICE"; color: "#f4f7f9"; font.pixelSize: 12 }
+                    MouseArea { id: restartSetup; anchors.fill: parent; onClicked: { dashboard.restartSetupService(); root.wifiMenu = false } }
                 }
             }
         }

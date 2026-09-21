@@ -88,12 +88,24 @@ Response SetupAuth::handle_account(const Request &request, const std::string &,
     try {
       const auto result = Json::parse(read_file(account_result_file_));
       if (result.is_object()) {
-        // Allowlist: only status fields ever reach the browser.
+        // Allowlist: only status fields ever reach the browser. `keys` carries
+        // public key material only (type/comment/line/fingerprint).
         Json status = Json::object();
         for (const char *key : {"request_id", "status", "password_set", "password_changed", "ssh_key", "ssh",
                                 "ssh_password_login", "error"})
           if (result.contains(key) && (result[key].is_string() || result[key].is_boolean()))
             status[key] = result[key];
+        if (result.contains("keys") && result["keys"].is_array()) {
+          Json keys = Json::array();
+          for (const auto &entry : result["keys"]) {
+            if (!entry.is_object()) continue;
+            Json item = Json::object();
+            for (const char *field : {"fingerprint", "type", "comment", "key"})
+              if (entry.contains(field) && entry[field].is_string()) item[field] = entry[field];
+            keys.push_back(item);
+          }
+          status["keys"] = keys;
+        }
         response["result"] = status;
       }
     } catch (const std::exception &) {}
@@ -102,16 +114,23 @@ Response SetupAuth::handle_account(const Request &request, const std::string &,
 
   if (!header_equal(request, "x-csrf-token", csrf))
     return json_reply(403, {{"detail", "invalid CSRF token"}});
+  auto body = Json::parse(request.body, nullptr, false);
+  // Listing enrolled keys is a read; it must not consume the change rate
+  // limit, or a page that refreshes its list could lock out real changes.
+  const bool list_action = body.is_object() && body.contains("action") &&
+                           body["action"].is_string() &&
+                           body["action"].get<std::string>() == "list_keys";
   while (!account_attempts_.empty() && account_attempts_.front() <= time - kAccountWindowSeconds)
     account_attempts_.pop_front();
-  if (account_attempts_.size() >= kAccountAttempts)
-    return {429, "{\"detail\":\"too many device access changes; try again in a few minutes\"}",
-            "application/json", {{"Retry-After", "600"}}};
-  account_attempts_.push_back(time);
+  if (!list_action) {
+    if (account_attempts_.size() >= kAccountAttempts)
+      return {429, "{\"detail\":\"too many device access changes; try again in a few minutes\"}",
+              "application/json", {{"Retry-After", "600"}}};
+    account_attempts_.push_back(time);
+  }
   if (queued)
     return json_reply(409, {{"detail", "a device access change is still being applied"}});
 
-  auto body = Json::parse(request.body, nullptr, false);
   const auto scrub = [&] {
     if (body.is_object() && body.contains("password") && body["password"].is_string())
       cleanse(body["password"].get_ref<std::string &>());
@@ -120,15 +139,50 @@ Response SetupAuth::handle_account(const Request &request, const std::string &,
     scrub();
     return json_reply(400, {{"detail", detail}});
   };
+  const auto queue_action = [&](Json &action_request) -> Response {
+    const auto id = action_request["request_id"].get<std::string>();
+    auto serialized = action_request.dump();
+    try {
+      write_private_request(account_request_file_, serialized);
+    } catch (const std::exception &) {
+      return json_reply(503, {{"detail", "device access queue is unavailable"}});
+    }
+    return json_reply(202, {{"queued", true}, {"request_id", id}});
+  };
+  // #28 management: view/remove enrolled SSH keys through the same queue and
+  // the same root helper as enrollment; there is no second authorized_keys
+  // write path and no private material is ever accepted or returned.
+  if (body.is_object() && body.contains("action")) {
+    if (!body["action"].is_string()) return reject("invalid action");
+    const auto action = body["action"].get<std::string>();
+    if (action == "list_keys") {
+      if (body.size() != 1) return reject("unexpected field");
+      Json action_request{{"request_id", unique_id()}, {"action", "list_keys"}};
+      return queue_action(action_request);
+    }
+    if (action == "remove_key") {
+      if (body.size() != 2 || !body.contains("fingerprint") || !body["fingerprint"].is_string())
+        return reject("fingerprint required");
+      const auto fingerprint = body["fingerprint"].get<std::string>();
+      if (fingerprint.size() != 64 ||
+          fingerprint.find_first_not_of("0123456789abcdef") != std::string::npos)
+        return reject("invalid SSH key fingerprint");
+      Json action_request{{"request_id", unique_id()}, {"action", "remove_key"},
+                          {"remove_fingerprint", fingerprint}};
+      return queue_action(action_request);
+    }
+    return reject("unexpected action");
+  }
   if (!body.is_object() || body.empty()) return reject("password or SSH public key required");
   for (const auto &item : body.items())
     if (item.key() != "password" && item.key() != "ssh_public_key" &&
-        item.key() != "replace_existing_password")
+        item.key() != "replace_existing_password" && item.key() != "remove_fingerprint")
       return reject("unexpected field");
   const bool has_password = body.contains("password");
   const bool has_key = body.contains("ssh_public_key");
   if ((has_password && !body["password"].is_string()) || (has_key && !body["ssh_public_key"].is_string()) ||
-      (body.contains("replace_existing_password") && !body["replace_existing_password"].is_boolean()))
+      (body.contains("replace_existing_password") && !body["replace_existing_password"].is_boolean()) ||
+      (body.contains("remove_fingerprint") && !body["remove_fingerprint"].is_string()))
     return reject("invalid field type");
   if (!has_password && !has_key) return reject("password or SSH public key required");
 
@@ -138,6 +192,14 @@ Response SetupAuth::handle_account(const Request &request, const std::string &,
     const auto key = account::parse_public_key(body["ssh_public_key"].get<std::string>(), &problem);
     if (!key) return reject(problem);
     queued_request["authorized_key"] = key->line();
+  }
+  // #28 edit: replace the identified key in the same request as the new line.
+  if (body.contains("remove_fingerprint")) {
+    const auto fingerprint = body["remove_fingerprint"].get<std::string>();
+    if (fingerprint.size() != 64 ||
+        fingerprint.find_first_not_of("0123456789abcdef") != std::string::npos)
+      return reject("invalid SSH key fingerprint");
+    queued_request["remove_fingerprint"] = fingerprint;
   }
   if (has_password) {
     auto &password = body["password"].get_ref<std::string &>();

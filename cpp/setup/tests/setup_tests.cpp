@@ -192,14 +192,16 @@ int main(int argc, char **argv) {
     require(read_file(nmcli_no_rescan_log).find("-t -f SSID") == std::string::npos &&
                 read_file(nmcli_no_rescan_log).find("connection add") == std::string::npos,
             "an already-provisioned session neither re-scans nor re-creates the connection");
-    // #22 upgrade path: an upgraded device can carry a secured access-point
+    // #22/#59 upgrade path: an upgraded device can carry a secured access-point
     // profile from a scheme that predates the open network (the old
     // "rapid-demo", with an old WPA-PSK "rapid-setup"). Updating the owned
     // connection does not remove the extra profile, so the provisioner must
     // delete every unowned access-point profile for the setup SSID. It has to
     // run even when the owner is already configured (the panel can still
     // select AP mode later), without forcing the AP up and without touching
-    // Home Wi-Fi or the owned profile.
+    // Home Wi-Fi. #59: the open "rapid-setup" profile the old flow never
+    // created must be created here, and the resolved SSID published, or the
+    // upgraded device has no working setup AP at all.
     const auto fake_nmcli_legacy = root.path / "nmcli-legacy";
     const auto nmcli_legacy_log = root.path / "nmcli-legacy.log";
     {
@@ -208,6 +210,7 @@ int main(int argc, char **argv) {
                 "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_NMCLI_LOG\"\n"
                 "if [ \"$1 $2 $3 $4\" = \"-t -f NAME,TYPE connection\" ]; then "
                 "printf 'rapid-demo:802-11-wireless\\nrapid-home:802-11-wireless\\nrapid-setup:802-11-wireless\\n'; exit 0; fi\n"
+                "if [ \"$1 $2 $3\" = \"connection show rapid-setup\" ]; then exit 1; fi\n"
                 "if [ \"$1\" = \"-g\" ] && [ \"$5\" = \"rapid-demo\" ]; then "
                 "case \"$2\" in 802-11-wireless.mode) printf 'ap\\n';; 802-11-wireless.ssid) printf 'rapid\\n';; esac; exit 0; fi\n"
                 "if [ \"$1\" = \"-g\" ] && [ \"$5\" = \"rapid-home\" ]; then printf 'infrastructure\\n'; exit 0; fi\n"
@@ -240,9 +243,71 @@ int main(int argc, char **argv) {
                 legacy_calls.find("wifi-sec") == std::string::npos &&
                 legacy_calls.find("psk") == std::string::npos,
             "upgrade migration keeps the owned profile open and writes no passphrase");
-    require(legacy_calls.find("connection up rapid-setup") == std::string::npos &&
-                !fs::exists(owner_ssid_file),
-            "an already-configured device neither forces the AP up nor publishes a new SSID");
+    // #59: the profile is created when the old scheme never made it, and the
+    // SSID is published so the panel's setup card and Access Point mode work.
+    require(legacy_calls.find("connection add type wifi ifname wlan0 con-name rapid-setup "
+                              "autoconnect yes ssid rapid") != std::string::npos &&
+                legacy_calls.find("connection modify rapid-setup 802-11-wireless.ssid rapid "
+                                  "802-11-wireless.mode ap") != std::string::npos &&
+                legacy_calls.find("ipv4.addresses 192.168.1.64/24") != std::string::npos &&
+                legacy_calls.find("connection up rapid-setup") == std::string::npos,
+            "the upgrade path creates the missing open profile and never forces the AP up");
+    require(read_file(owner_ssid_file) == "rapid\n",
+            "#59: the upgrade path publishes the resolved SSID even when the owner is configured");
+    // A later boot of the configured device must keep the profile open and not
+    // bring the AP up either (Home Wi-Fi, or an explicit panel choice, decides).
+    const auto owner_status_again = root.path / "firstboot-owner-again.json";
+    atomic_file(owner_status_again, Json{{"owner_configured", true}, {"schema_version", 3},
+                                        {"bootstrap", {{"setup_address", "192.168.1.64"},
+                                                       {"certificate_fingerprint", std::string(64, 'a')}}}}.dump());
+    const auto owner_ssid_again = root.path / "network-ssid-owner-again";
+    setenv("RAPID_TEST_NMCLI_LOG", nmcli_legacy_log.c_str(), 1);
+    const auto owner_again = fork();
+    require(owner_again >= 0, "fork repeat upgrade AP migration");
+    if (owner_again == 0) {
+      execl(argv[2], argv[2], "--status-file", owner_status_again.c_str(), "--ssid-file",
+            owner_ssid_again.c_str(), "--nmcli", fake_nmcli_legacy.c_str(), nullptr);
+      _exit(127);
+    }
+    int owner_again_code = 0;
+    require(waitpid(owner_again, &owner_again_code, 0) == owner_again &&
+                WIFEXITED(owner_again_code) && WEXITSTATUS(owner_again_code) == 0,
+            "the upgrade migration is idempotent on a configured device");
+    unsetenv("RAPID_TEST_NMCLI_LOG");
+    require(read_file(owner_ssid_again) == "rapid\n" &&
+                read_file(nmcli_legacy_log).find("connection up rapid-setup") == std::string::npos,
+            "a repeat run keeps the SSID published and the AP down");
+    // #59 / setup-page-ux: an enrolled device still publishes the setup AP
+    // address and TLS fingerprint so the panel can show its setup card while
+    // the AP is up, but never the activation token (which would re-open owner
+    // enrollment).
+    const auto enrolled_directory = root.path / "firstboot-enrolled";
+    const auto enrolled_status = root.path / "firstboot-enrolled.json";
+    {
+      SetupStore store(enrolled_directory);
+      require(store.claim_owner("$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA"),
+              "claim owner for the enrolled first-boot test");
+    }
+    const auto run_enrolled_firstboot = [&] {
+      const auto child = fork();
+      require(child >= 0, "fork enrolled first boot");
+      if (child == 0) {
+        execl(argv[1], argv[1], "--state-directory", enrolled_directory.c_str(),
+              "--status-file", enrolled_status.c_str(), "--setup-address", "192.168.50.1", nullptr);
+        _exit(127);
+      }
+      int result = 0;
+      require(waitpid(child, &result, 0) == child && WIFEXITED(result) && WEXITSTATUS(result) == 0,
+              "enrolled first boot succeeds");
+    };
+    run_enrolled_firstboot();
+    const auto enrolled = Json::parse(read_file(enrolled_status));
+    require(enrolled.value("owner_configured", false) &&
+                enrolled["bootstrap"].is_object() &&
+                enrolled["bootstrap"].value("setup_address", std::string{}) == "192.168.50.1" &&
+                enrolled["bootstrap"].value("certificate_fingerprint", std::string{}).size() == 64 &&
+                !enrolled["bootstrap"].contains("activation_token"),
+            "#59: enrolled first boot publishes the AP address/fingerprint but never the activation token");
     const auto apply_request = root.path / "apply-request.json";
     const auto apply_result = root.path / "apply-result.json";
     const auto fake_hostnamectl = root.path / "hostnamectl";

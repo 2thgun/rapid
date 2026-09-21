@@ -33,6 +33,18 @@ last completed checks, not a guarantee of current device state.
   `rapid-####` when `rapid` is already in range). The owner chooses the SSH/sudo
   password and optionally adds an SSH key on the setup page; `rapid-account`
   applies it and only then enables SSH.
+- An upgraded device now gets the open `rapid-setup` access point profile
+  created and its SSID published even when the owner is already configured, so
+  Access Point mode works after an upgrade from the old secured-profile scheme.
+- The setup page's SSH keys are now their own category, separate from the
+  device password/PIN: enrolled keys can be listed, added, edited (comment) and
+  removed through the same authenticated `/api/v1/account` endpoint and
+  `rapid-account` helper as enrollment; only public key material is ever shown
+  or sent.
+- The panel's Wi-Fi menu is now a settings page: Wi-Fi mode, touch calibration,
+  the setup page address and a Start/Restart setup service button. Its setup
+  card (SSID, address, TLS fingerprint) also shows in Access Point mode on an
+  already-enrolled device, without the activation token.
 - Added the 0.9.9 release pipeline: the package version derives from a git tag
   (`0.9.9`, or `0.9.9~dev+<sha>` untagged), hosted ARM64 CI builds and verifies
   the `.deb` with `-Werror`, and a `v*` tag assembles a flashable `.img.xz` with

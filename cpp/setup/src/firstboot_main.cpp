@@ -189,16 +189,24 @@ int main(int argc, char **argv) {
     auto status = provisioning_status(store.snapshot(), owner_configured);
     // The status file is consumed locally by the AP provisioner and physical
     // panel. It is never an HTTP response or journal entry.
+    //
+    // #59 / setup-page-ux: the panel must be able to show the open setup AP's
+    // name, address and TLS fingerprint even on an enrolled device, because the
+    // owner can still choose Access Point mode (or recovery can restore it)
+    // after setup. The activation token is the only secret here and is
+    // published only while the owner is unenrolled, so a later boot of a
+    // configured device cannot resurrect owner enrollment.
+    status["bootstrap"] = {{"setup_address", address}, {"setup_port", port},
+                           {"setup_url", "https://" + address + ":" + std::to_string(port) + "/setup"},
+                           {"certificate_fingerprint", certificate_fingerprint(tls_certificate)}};
     if (!owner_configured) {
       if (token_file.empty()) token_file = directory / "enrollment.token";
       // #22: the AP's SSID (fixed "rapid", or a disambiguated "rapid-NNNN" if
       // another one is already in range) is resolved by the privileged
       // provisioner, which alone can scan for it; it is published to the
       // panel from its own file, not from this status document.
-      status["bootstrap"] = {{"setup_address", address}, {"setup_port", port},
-                             {"setup_url", "https://" + address + ":" + std::to_string(port) + "/setup"},
-                             {"certificate_fingerprint", certificate_fingerprint(tls_certificate)},
-                             {"activation_token", private_hex_secret(token_file, 64, "activation token")}};
+      status["bootstrap"]["activation_token"] =
+          private_hex_secret(token_file, 64, "activation token");
     }
     if (!status_file.empty()) {
       // #31: can carry the bootstrap activation token, so it is created
