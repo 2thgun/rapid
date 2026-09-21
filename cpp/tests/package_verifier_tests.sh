@@ -105,9 +105,11 @@ stage_package
 replace_in "$units/rapid-account.service" '^ProtectHome=read-only$' 'ProtectHome=false'
 expect_fail "an unsandboxed home directory" "ProtectHome=read-only"
 
+# #56: NoNewPrivileges=true breaks the helper's setuid key install, so adding
+# it back must be rejected.
 stage_package
-replace_in "$units/rapid-account.service" '^NoNewPrivileges=true$' '#NoNewPrivileges=true'
-expect_fail "a helper that may gain privileges" "NoNewPrivileges=true"
+printf '\nNoNewPrivileges=true\n' >> "$units/rapid-account.service"
+expect_fail "a helper that may gain privileges" "must not set NoNewPrivileges=true"
 
 stage_package
 replace_in "$units/rapid-account.service" '^LimitCORE=0$' '#LimitCORE=0'

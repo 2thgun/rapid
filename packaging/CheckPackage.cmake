@@ -254,13 +254,19 @@ endif()
 # the setup service queues and a sandboxed, path-activated helper consumes.
 string(REGEX MATCH "ExecStart=[^${nl}]*" account_exec "${account_service}")
 string(REGEX MATCH "ExecStart=[^${nl}]*" setup_exec "${setup_service}")
-foreach(line IN ITEMS "User=root" "NoNewPrivileges=true" "ProtectSystem=strict" "ProtectHome=read-only"
+foreach(line IN ITEMS "User=root" "ProtectSystem=strict" "ProtectHome=read-only"
                       "LimitCORE=0" "ReadWritePaths=/etc -/home/rapid")
   string(FIND "${account_service}" "${nl}${line}${nl}" position)
   if(position EQUAL -1)
     message(FATAL_ERROR "rapid-account.service must keep '${line}'")
   endif()
 endforeach()
+# #56: NoNewPrivileges=true plus the rest of this unit's sandboxing makes the
+# helper's privilege-dropping child fail setuid() with EPERM, so SSH-key
+# enrollment never worked on the device. It must stay off.
+if(account_service MATCHES "${nl}NoNewPrivileges=true${nl}")
+  message(FATAL_ERROR "rapid-account.service must not set NoNewPrivileges=true: it breaks the helper's setuid key install (#56)")
+endif()
 if(NOT account_exec STREQUAL "ExecStart=/usr/lib/rapid/rapid-account --request-file /run/rapid-apply/account-request.json --result-file /run/rapid-apply/account-result.json --user rapid" OR
    account_service MATCHES "${nl}User=rapid" OR
    NOT account_path MATCHES "${nl}PathExists=/run/rapid-apply/account-request[.]json${nl}" OR

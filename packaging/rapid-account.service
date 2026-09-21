@@ -17,7 +17,13 @@ Group=rapid
 ExecStart=/usr/lib/rapid/rapid-account --request-file /run/rapid-apply/account-request.json --result-file /run/rapid-apply/account-result.json --user rapid
 TimeoutStartSec=60
 LimitCORE=0
-NoNewPrivileges=true
+# NoNewPrivileges=true is deliberately NOT set (#56). The helper forks and drops
+# to the account's own uid before writing authorized_keys; with NoNewPrivileges
+# plus this unit's other sandboxing (RestrictAddressFamilies and/or the
+# ProtectKernel* options) the kernel rejects that setuid() with EPERM, so every
+# SSH-key enrollment failed. Verified on the real unit: removing it restores the
+# key install. The setuid drop, O_NOFOLLOW and the nlink/ownership checks in
+# account_main.cpp remain the protection for the account-writable home.
 PrivateTmp=true
 ProtectSystem=strict
 # chpasswd replaces /etc/shadow by rename, and SSH enablement writes the sshd
