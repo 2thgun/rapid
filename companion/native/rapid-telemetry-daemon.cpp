@@ -56,9 +56,23 @@
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
+// Fallback for a build that does not inject RAPID_BUILD_VERSION (a direct
+// compiler invocation outside companion/build-native-daemon.ps1). The identity
+// must trace to source, so no Git metadata is the literal "unknown", never a
+// guessed revision or a build timestamp.
+#ifndef RAPID_BUILD_VERSION
+#define RAPID_BUILD_VERSION "unknown"
+#endif
+
 namespace rapid {
 
 std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key);
+
+// Build identity shown in the tray "Show status" dialog, injected at build
+// time by companion/build-native-daemon.ps1 using the package rule
+// (packaging/RapidVersion.cmake): a vX.Y.Z tag checkout is X.Y.Z, any other
+// commit is 0.9.9~dev+<short-sha>.
+constexpr const char* kBuildVersion = RAPID_BUILD_VERSION;
 
 // Pairing credentials are deliberately protected before they leave the
 // current Windows user's profile.  DPAPI binds the blob to that user's
@@ -2364,9 +2378,14 @@ std::unique_ptr<Daemon> g_daemon;
 NOTIFYICONDATAW g_tray{};
 fs::path g_output_directory;
 
-std::wstring status_text(const PublicStatus& status) {
+// The status dialog body, parameterised so the build-identity self-test can
+// prove a known injected version reaches the text without opening a tray
+// window. The version sits below the daemon status and before the runtime
+// counters (samples / forwarded packets).
+std::wstring status_text_with_version(const PublicStatus& status, std::string_view version) {
     std::wostringstream text;
     text << L"Status: " << utf8_to_wide(status.status)
+         << L"\nVersion: " << utf8_to_wide(version)
          << L"\nSimulator: " << utf8_to_wide(status.simulator)
          << L"\nRecording: " << (status.recording ? L"Yes" : L"No")
          << L"\nSamples: " << status.samples
@@ -2374,6 +2393,10 @@ std::wstring status_text(const PublicStatus& status) {
          << L"\nLast log: " << (status.last_log.empty() ? L"None yet" : status.last_log.wstring())
          << L"\nLast error: " << utf8_to_wide(status.last_error);
     return text.str();
+}
+
+std::wstring status_text(const PublicStatus& status) {
+    return status_text_with_version(status, kBuildVersion);
 }
 
 void show_status(HWND window) {
@@ -3172,10 +3195,41 @@ void manual_pairing_entry_self_test() {
                  "--pairing-url fields, and empty input fails closed\n";
 }
 
+// The tray "Show status" dialog must identify the exact build, and the identity
+// must come from build-time metadata rather than a clock. This proves a known
+// injected version reaches the status text through the same function the real
+// dialog uses (no tray window required), that it is placed below the daemon
+// status and before the runtime counters, and that the compiled-in identity is
+// the one surfaced.
+void build_identity_self_test() {
+    PublicStatus status;
+    status.status = "SELFTEST - identity";
+    status.simulator = "Identity";
+    status.samples = 1;
+    status.packets = 2;
+    const std::string probe = "0.0.0~selftest+abcdef0";
+    const std::wstring text = status_text_with_version(status, probe);
+    if (text.find(L"Version: " + utf8_to_wide(probe)) == std::wstring::npos)
+        throw std::runtime_error("a known injected version must reach the status text as 'Version: <version>'");
+    const auto status_at = text.find(L"Status:");
+    const auto version_at = text.find(L"Version:");
+    const auto samples_at = text.find(L"Samples:");
+    if (status_at == std::wstring::npos || version_at == std::wstring::npos || samples_at == std::wstring::npos ||
+        !(status_at < version_at && version_at < samples_at))
+        throw std::runtime_error("the version must sit below the daemon status and before the runtime counters");
+    if (kBuildVersion[0] == '\0')
+        throw std::runtime_error("the compiled-in build version must never be empty");
+    const std::wstring built = status_text(status);
+    if (built.find(L"Version: " + utf8_to_wide(kBuildVersion)) == std::wstring::npos)
+        throw std::runtime_error("the status dialog must show the compiled-in build version");
+    std::cout << "Build identity self-test passed: status reports Version: " << kBuildVersion << '\n';
+}
+
 bool run_self_test(const fs::path& directory, int sample_rate,
                     const fs::path& pairing_pi_seals_fixtures = {}) {
     pairing_crypto_self_test();
     manual_pairing_entry_self_test();
+    build_identity_self_test();
     // The legacy JSON v3 transport is retired: selecting it on the command
     // line or in a config file must fail with an actionable pairing hint, not
     // silently fall back to anything unauthenticated.

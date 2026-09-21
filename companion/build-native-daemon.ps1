@@ -3,7 +3,14 @@ param(
     [ValidateSet('Auto', 'Zig', 'MSVC')][string]$Compiler = 'Auto',
     [string]$ZigPath = '',
     [string]$OutputDirectory = $PSScriptRoot,
-    [string]$CacheDirectory = (Join-Path ([IO.Path]::GetTempPath()) 'rapid-zig-cache')
+    [string]$CacheDirectory = (Join-Path ([IO.Path]::GetTempPath()) 'rapid-zig-cache'),
+    # Build identity injected into the daemon and shown in the tray "Show
+    # status" dialog. Empty means derive it from Git with the package rule
+    # (packaging/RapidVersion.cmake): a vX.Y.Z tag checkout becomes X.Y.Z, any
+    # other commit becomes 0.9.9~dev+<short-sha>, and no Git metadata at all
+    # becomes the literal "unknown". The RAPID_BUILD_VERSION environment
+    # variable overrides it (source archives, CI); the value is never a clock.
+    [string]$BuildVersion = ''
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +27,40 @@ if ($Clean) {
 
 if (-not (Test-Path -LiteralPath $source)) { throw "Native source not found: $source" }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+
+# Resolve the build identity exactly as packaging/RapidVersion.cmake does, so
+# the companion and the Debian package report the same version for a revision.
+function Resolve-RapidBuildVersion {
+    param([string]$RepositoryRoot, [string]$Override)
+    if ($Override) { return $Override }
+    $fromEnvironment = [Environment]::GetEnvironmentVariable('RAPID_BUILD_VERSION')
+    if ($fromEnvironment) { return $fromEnvironment }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return 'unknown' }
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $sha = (& git -C $RepositoryRoot rev-parse --short=7 HEAD 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sha)) { return 'unknown' }
+        $tag = (& git -C $RepositoryRoot describe --exact-match --tags HEAD 2>$null | Out-String).Trim()
+        if ($tag -match '^v([0-9][0-9A-Za-z.+~-]*)$') { return $Matches[1] }
+        return "0.9.9~dev+$sha"
+    } catch {
+        return 'unknown'
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+$repositoryRoot = Split-Path $PSScriptRoot -Parent
+$buildVersion = Resolve-RapidBuildVersion -RepositoryRoot $repositoryRoot -Override $BuildVersion
+if ($buildVersion -notmatch '^[0-9A-Za-z.+~-]+$') {
+    throw "Invalid build version '$buildVersion'; expected only [0-9A-Za-z.+~-]."
+}
+# Escaped quotes survive the CRT argument parser as one C string literal: the
+# compiler sees -DRAPID_BUILD_VERSION="<version>".
+$versionDefine = '-DRAPID_BUILD_VERSION=\"' + $buildVersion + '\"'
+$msvcVersionDefine = '/DRAPID_BUILD_VERSION=\"' + $buildVersion + '\"'
+Write-Host "raPId companion build identity: $buildVersion"
 
 $commonLibraries = @('-lws2_32', '-lshell32', '-lole32', '-luuid', '-lbcrypt', '-lcrypt32', '-luser32', '-lwinhttp')
 $clang = Get-Command clang++ -ErrorAction SilentlyContinue
@@ -43,11 +84,11 @@ if ($Compiler -eq 'Zig') {
 
 if ($clang) {
     & $clang.Source -std=c++20 -O2 -DNDEBUG -municode -static-libgcc -static-libstdc++ `
-        $source -o $output @commonLibraries
+        $versionDefine $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } elseif ($gcc) {
     & $gcc.Source -std=c++20 -O2 -DNDEBUG -municode -static -s `
-        $source -o $output @commonLibraries
+        $versionDefine $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } elseif ($zig) {
     $zigCommand = if ($zig -is [Management.Automation.CommandInfo]) { $zig.Source } else { $zig.FullName }
@@ -55,7 +96,7 @@ if ($clang) {
     $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $zigCacheRoot 'global'
     $env:ZIG_LOCAL_CACHE_DIR = Join-Path $zigCacheRoot 'local'
     & $zigCommand c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG -municode `
-        $source -o $output @commonLibraries
+        $versionDefine $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } else {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -67,7 +108,7 @@ if ($clang) {
             Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
             $objectOutput = Join-Path $OutputDirectory 'rapid-telemetry-daemon.obj'
             & cl.exe /nologo /std:c++20 /O2 /DNDEBUG /EHsc /W4 /DUNICODE /D_UNICODE `
-                $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib crypt32.lib user32.lib winhttp.lib
+                $msvcVersionDefine $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib crypt32.lib user32.lib winhttp.lib
             $built = $LASTEXITCODE -eq 0
         }
     }
