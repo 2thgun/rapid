@@ -103,7 +103,7 @@ if ($clang) {
     $zigCacheRoot = [IO.Path]::GetFullPath($CacheDirectory)
     $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $zigCacheRoot 'global'
     $env:ZIG_LOCAL_CACHE_DIR = Join-Path $zigCacheRoot 'local'
-    & $zigCommand c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG -municode `
+    & $zigCommand c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG -municode -static `
         $versionInclude $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } else {
@@ -115,7 +115,9 @@ if ($clang) {
             Import-Module $devShell
             Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
             $objectOutput = Join-Path $OutputDirectory 'rapid-telemetry-daemon.obj'
-            & cl.exe /nologo /std:c++20 /O2 /DNDEBUG /EHsc /W4 /DUNICODE /D_UNICODE `
+            # /MT statically links the CRT so the single copied .exe needs no
+            # Visual C++ redistributable on the target PC (portable model, #10).
+            & cl.exe /nologo /std:c++20 /O2 /DNDEBUG /EHsc /W4 /MT /DUNICODE /D_UNICODE `
                 $msvcVersionInclude $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib crypt32.lib user32.lib winhttp.lib
             $built = $LASTEXITCODE -eq 0
         }
