@@ -11,6 +11,11 @@ namespace rapid::native::account {
 
 // Empty when the password is acceptable, otherwise a short reason that is safe
 // to show in the browser. The reason never contains the password.
+//
+// Device-access policy: the hard minimum is 4 characters, so a 4-digit PIN is
+// accepted for this local-only account; 12+ characters or an SSH key are
+// recommended, not required (see account_policy.cpp for the threat model).
+// The owner setup login has its own separate 12-character minimum.
 std::string password_problem(const std::string &password);
 
 struct PublicKey {
