@@ -76,60 +76,64 @@ constexpr std::size_t expected_channel_count = std::size(expected_channels);
 // the real MoTeC ADL identifiers the owner's ACC-derived workspace binds
 // (THROTTLE, BRAKE, GEAR, RPMS, SPEED, G_LAT, G_LON, SUS_TRAVEL_*,
 // TYRE_PRESS_*); the remaining channels keep canonical raPId/MoTeC names.
-// Rationale and per-sim sources: cpp/runtime/include/rapid/channels.md (#29).
+// dec is pinned 0 for every channel because the known-good ACC/MoTeC ADL
+// export writes dec=0 on all of its float32 channels, while the community
+// ldparser applies (raw/scale * 10^-dec + shift) * mul to every dtype; a
+// nonzero dec therefore risks i2 scaling the stored value. Rationale and
+// per-sim sources: cpp/runtime/include/rapid/channels.md (#29).
 struct PinnedChannel {
   const char *name, *short_name, *unit;
   int dec;
 };
 const PinnedChannel pinned_channels[] = {
-    {"Time", "Time", "s", 3},
-    {"THROTTLE", "Throttle", "%", 1},
-    {"BRAKE", "Brake", "%", 1},
-    {"Fuel Level", "Fuel", "l", 2},
+    {"Time", "Time", "s", 0},
+    {"THROTTLE", "Throttle", "%", 0},
+    {"BRAKE", "Brake", "%", 0},
+    {"Fuel Level", "Fuel", "l", 0},
     {"GEAR", "Gear", "", 0},
     {"RPMS", "RPM", "1/min", 0},
-    {"Steered Angle", "Steer", "", 3},
-    {"SPEED", "Speed", "km/h", 1},
-    {"Velocity Lat", "Vel Lat", "m/s", 2},
-    {"Velocity Vert", "Vel Vert", "m/s", 2},
-    {"Velocity Long", "Vel Long", "m/s", 2},
-    {"G_LAT", "G Lat", "g", 2},
-    {"G Force Vert", "G Vert", "g", 2},
-    {"G_LON", "G Long", "g", 2},
-    {"Wheel Slip FL", "Slip FL", "", 2},
-    {"Wheel Slip FR", "Slip FR", "", 2},
-    {"Wheel Slip RL", "Slip RL", "", 2},
-    {"Wheel Slip RR", "Slip RR", "", 2},
-    {"TYRE_PRESS_LF", "Press FL", "psi", 1},
-    {"TYRE_PRESS_FR", "Press FR", "psi", 1},
-    {"TYRE_PRESS_RL", "Press RL", "psi", 1},
-    {"TYRE_PRESS_RR", "Press RR", "psi", 1},
-    {"Wheel Speed FL", "WhlSp FL", "rad/s", 1},
-    {"Wheel Speed FR", "WhlSp FR", "rad/s", 1},
-    {"Wheel Speed RL", "WhlSp RL", "rad/s", 1},
-    {"Wheel Speed RR", "WhlSp RR", "rad/s", 1},
-    {"Tyre Temp FL", "Temp FL", "C", 1},
-    {"Tyre Temp FR", "Temp FR", "C", 1},
-    {"Tyre Temp RL", "Temp RL", "C", 1},
-    {"Tyre Temp RR", "Temp RR", "C", 1},
-    {"SUS_TRAVEL_LF", "Susp FL", "m", 3},
-    {"SUS_TRAVEL_FR", "Susp FR", "m", 3},
-    {"SUS_TRAVEL_RL", "Susp RL", "m", 3},
-    {"SUS_TRAVEL_RR", "Susp RR", "m", 3},
+    {"Steered Angle", "Steer", "", 0},
+    {"SPEED", "Speed", "km/h", 0},
+    {"Velocity Lat", "Vel Lat", "m/s", 0},
+    {"Velocity Vert", "Vel Vert", "m/s", 0},
+    {"Velocity Long", "Vel Long", "m/s", 0},
+    {"G_LAT", "G Lat", "g", 0},
+    {"G Force Vert", "G Vert", "g", 0},
+    {"G_LON", "G Long", "g", 0},
+    {"Wheel Slip FL", "Slip FL", "", 0},
+    {"Wheel Slip FR", "Slip FR", "", 0},
+    {"Wheel Slip RL", "Slip RL", "", 0},
+    {"Wheel Slip RR", "Slip RR", "", 0},
+    {"TYRE_PRESS_LF", "Press FL", "psi", 0},
+    {"TYRE_PRESS_RF", "Press FR", "psi", 0},
+    {"TYRE_PRESS_LR", "Press RL", "psi", 0},
+    {"TYRE_PRESS_RR", "Press RR", "psi", 0},
+    {"Wheel Speed FL", "WhlSp FL", "rad/s", 0},
+    {"Wheel Speed FR", "WhlSp FR", "rad/s", 0},
+    {"Wheel Speed RL", "WhlSp RL", "rad/s", 0},
+    {"Wheel Speed RR", "WhlSp RR", "rad/s", 0},
+    {"Tyre Temp FL", "Temp FL", "C", 0},
+    {"Tyre Temp FR", "Temp FR", "C", 0},
+    {"Tyre Temp RL", "Temp RL", "C", 0},
+    {"Tyre Temp RR", "Temp RR", "C", 0},
+    {"SUS_TRAVEL_LF", "Susp FL", "m", 0},
+    {"SUS_TRAVEL_RF", "Susp FR", "m", 0},
+    {"SUS_TRAVEL_LR", "Susp RL", "m", 0},
+    {"SUS_TRAVEL_RR", "Susp RR", "m", 0},
     {"TC", "TC", "", 0},
-    {"Heading", "Heading", "rad", 3},
-    {"Pitch", "Pitch", "rad", 3},
-    {"Roll", "Roll", "rad", 3},
-    {"Damage Front", "Dmg F", "", 2},
-    {"Damage Rear", "Dmg R", "", 2},
-    {"Damage Left", "Dmg L", "", 2},
-    {"Damage Right", "Dmg Rgt", "", 2},
-    {"Damage Center", "Dmg C", "", 2},
+    {"Heading", "Heading", "rad", 0},
+    {"Pitch", "Pitch", "rad", 0},
+    {"Roll", "Roll", "rad", 0},
+    {"Damage Front", "Dmg F", "", 0},
+    {"Damage Rear", "Dmg R", "", 0},
+    {"Damage Left", "Dmg L", "", 0},
+    {"Damage Right", "Dmg Rgt", "", 0},
+    {"Damage Center", "Dmg C", "", 0},
     {"Pit Limiter", "Pit Lim", "", 0},
     {"ABS", "ABS", "", 0},
     {"Lap Number", "Lap", "", 0},
-    {"Lap Time", "Lap Time", "s", 3},
-    {"Lap Position", "Lap Pos", "%", 1},
+    {"Lap Time", "Lap Time", "s", 0},
+    {"Lap Position", "Lap Pos", "%", 0},
 };
 static_assert(std::size(pinned_channels) == expected_channel_count,
               "pinned channel table must cover every channel.inc row");
@@ -278,6 +282,10 @@ void check_ld(const std::string &data, std::size_t sample_count,
     require(dtype_type == 7 && dtype == 4, ch + ": dtype");
     require(rate == kRate, ch + ": rate");
     require(shift == 0 && mul == 1 && scale_field == 1, ch + ": shift/mul/scale");
+    // Float32 channels must declare dec=0: the known-good ACC/MoTeC ADL export
+    // does on all 55 channels, and ldparser applies 10^-dec to every dtype, so
+    // a nonzero dec risks i2 scaling the stored value. See pinned_channels.
+    require(dtype_type != 7 || dec == 0, ch + ": float dec must be 0");
     require(dec == pinned_channels[i].dec, ch + ": decimal places");
     require(name == pinned_channels[i].name, ch + ": name");
     require(short_name == pinned_channels[i].short_name, ch + ": short name");
