@@ -166,42 +166,55 @@ endfunction()
 assert_writable_path("${firstboot_service}" "rapid-firstboot.service" "/run/rapid/firstboot.json")
 assert_writable_path("${provision_service}" "rapid-provision.service" "/run/rapid/network-ssid")
 assert_writable_path("${setup_service}" "rapid-setup.service" "/run/rapid/calibration-request.json")
+assert_writable_path("${apply_service}" "rapid-apply.service" "/run/rapid-apply/request.json")
+assert_writable_path("${account_service}" "rapid-account.service" "/run/rapid-apply/account-request.json")
 assert_writable_path("${wifi_service}" "rapid-wifi.service" "/run/rapid-apply/wifi-result.json")
 assert_writable_path("${display_recovery_service}" "rapid-display-recovery.service" "/var/lib/rapid/display-recovery.json")
 # /run/rapid-apply is the shared setup request/result queue. It used to be
 # created only by a tmpfiles.d line, which a live upgrade or a service restart
 # does not reliably apply; ReadWritePaths= requires the path to exist, so
-# rapid-setup failed with 226/NAMESPACE when it was absent. Every service that
-# uses the queue now declares it as its own RuntimeDirectory, so systemd creates
-# it (and adds it to the sandbox writable set) before the mount namespace.
-# Group=rapid keeps it usable by the unprivileged setup server and the root
-# helpers; the mode must be identical everywhere so a later start cannot narrow
-# it. The tmpfiles rule must NOT own this path, or a future edit could quietly
-# restore the old, unreliable lifecycle.
+# rapid-setup failed with 226/NAMESPACE when it was absent. rapid-setup.service
+# is now the single lifecycle owner through RuntimeDirectory=, so systemd
+# creates it (and adds it to the sandbox writable set) before its mount
+# namespace and, crucially, removes it only when the server itself stops.
+# A shared RuntimeDirectory is not reference counted: systemd removes it when
+# ANY declaring unit stops, even while others still use it. The transient
+# consumers (rapid-apply/wifi/account) therefore must NOT declare it, or they
+# delete the queue out from under the still-active server after the first
+# request (#25). They are ordered after the owner (Requires=/After=) and get the
+# queue through ReadWritePaths=/run/rapid-apply instead. Group=rapid and mode
+# 0770 keep it usable by the unprivileged server and the root helpers. The
+# tmpfiles rule must NOT own this path, or a future edit could quietly restore
+# the old, unreliable lifecycle.
 if(tmpfiles_file MATCHES "${nl}d /run/rapid-apply")
-  message(FATAL_ERROR "rapid.tmpfiles must not create /run/rapid-apply; the consuming services own it with RuntimeDirectory=")
+  message(FATAL_ERROR "rapid.tmpfiles must not create /run/rapid-apply; rapid-setup.service owns it with RuntimeDirectory=")
 endif()
 if(NOT tmpfiles_file MATCHES "d /etc/rapid 0750 root rapid")
   message(FATAL_ERROR "rapid.tmpfiles must keep the /etc/rapid rule")
 endif()
-set(rapid_apply_mode "")
-foreach(name IN ITEMS setup apply wifi account)
+if(NOT setup_service MATCHES "${nl}RuntimeDirectory=rapid-apply${nl}")
+  message(FATAL_ERROR "rapid-setup.service must declare RuntimeDirectory=rapid-apply as the single lifecycle owner of the shared queue")
+endif()
+if(NOT setup_service MATCHES "${nl}RuntimeDirectoryMode=0770${nl}")
+  message(FATAL_ERROR "rapid-setup.service must declare RuntimeDirectoryMode=0770 for the shared /run/rapid-apply queue")
+endif()
+if(NOT setup_service MATCHES "${nl}Group=rapid${nl}")
+  message(FATAL_ERROR "rapid-setup.service must run in the rapid group so shared /run/rapid-apply ownership stays usable")
+endif()
+foreach(name IN ITEMS apply wifi account)
   set(service_var "${name}_service")
   set(service "${${service_var}}")
-  if(NOT service MATCHES "${nl}RuntimeDirectory=rapid-apply${nl}")
-    message(FATAL_ERROR "rapid-${name}.service must declare RuntimeDirectory=rapid-apply so /run/rapid-apply exists before its mount namespace")
+  if(service MATCHES "${nl}RuntimeDirectory=rapid-apply${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must not declare RuntimeDirectory=rapid-apply; rapid-setup.service is the single lifecycle owner of the shared queue")
   endif()
-  if(NOT service MATCHES "${nl}RuntimeDirectoryMode=0770${nl}")
-    message(FATAL_ERROR "rapid-${name}.service must declare RuntimeDirectoryMode=0770 for the shared /run/rapid-apply queue")
+  if(NOT service MATCHES "${nl}Requires=rapid-setup[.]service${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must require rapid-setup.service so the shared queue exists before its mount namespace")
+  endif()
+  if(NOT service MATCHES "${nl}After=rapid-setup[.]service${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must be ordered After=rapid-setup.service, the owner of the shared queue")
   endif()
   if(NOT service MATCHES "${nl}Group=rapid${nl}")
     message(FATAL_ERROR "rapid-${name}.service must run in the rapid group so shared /run/rapid-apply ownership stays usable")
-  endif()
-  string(REGEX MATCH "${nl}RuntimeDirectoryMode=([^${nl}]*)${nl}" rapid_apply_match "${service}")
-  if(NOT rapid_apply_mode)
-    set(rapid_apply_mode "${CMAKE_MATCH_1}")
-  elseif(NOT CMAKE_MATCH_1 STREQUAL rapid_apply_mode)
-    message(FATAL_ERROR "rapid-setup/apply/wifi/account.service must declare the same RuntimeDirectoryMode for /run/rapid-apply")
   endif()
 endforeach()
 if(NOT setup_service MATCHES "User=rapid" OR
@@ -262,8 +275,8 @@ endif()
 # (display-recovery), that write silently fails on a real device (WSL has no
 # systemd, so the gate cannot exercise this).
 if(NOT wifi_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
-   NOT wifi_service MATCHES "${nl}RuntimeDirectory=rapid-apply${nl}")
-  message(FATAL_ERROR "rapid-wifi.service must keep ProtectSystem=strict and declare RuntimeDirectory=rapid-apply for its request/result queue")
+   NOT wifi_service MATCHES "${nl}ReadWritePaths=/run/rapid-apply${nl}")
+  message(FATAL_ERROR "rapid-wifi.service must keep ProtectSystem=strict and grant the shared /run/rapid-apply queue through ReadWritePaths=")
 endif()
 if(NOT display_recovery_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
    NOT display_recovery_service MATCHES "${nl}ReadWritePaths=/var/lib/rapid${nl}")
