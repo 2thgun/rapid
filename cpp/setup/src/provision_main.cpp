@@ -201,23 +201,39 @@ int main(int argc, char **argv) {
     // It runs before the SSID scan so the provisioner cannot mistake its own
     // still-configured legacy AP for a colliding network in range.
     remove_legacy_ap_profiles(nmcli, connection);
-    if (!status.contains("bootstrap")) {
-      require(status.value("owner_configured", false),
-              "first-boot status has no setup credentials");
-      // No access point is started here, but the profile the Wi-Fi mode
-      // controller may activate later must be open on an upgraded device too.
-      command(nmcli, {"connection", "modify", connection, "remove", "802-11-wireless-security"});
-      log("INFO provision: owner already configured; retaining the open setup AP profile");
-      return 0;
+    // #59 related: an upgraded device can carry a hand-installed override of
+    // the Wi-Fi mode worker at /etc/systemd/system/rapid-network-mode.service
+    // (the dev Pi's pointed at /usr/local/sbin/rapid-network-mode, which
+    // hardcodes the old "rapid-demo" connection). A fresh image never has that
+    // file, so the fix must not depend on removing it. Warn instead: the
+    // packaged worker at /usr/lib/rapid/rapid-network-mode is the one that
+    // activates the open "rapid-setup" profile this provisioner maintains.
+    {
+      std::error_code override_error;
+      if (fs::exists("/etc/systemd/system/rapid-network-mode.service", override_error))
+        log("WARN provision: /etc/systemd/system/rapid-network-mode.service overrides the packaged "
+            "Wi-Fi mode worker; if it names a legacy AP connection, remove it so Access Point mode "
+            "activates " + connection);
     }
-    require(status["bootstrap"].is_object(), "first-boot setup credentials are invalid");
-    const auto &bootstrap = status["bootstrap"];
-    require(bootstrap.size() == 5 && bootstrap.contains("setup_address") &&
-                bootstrap.contains("certificate_fingerprint") && bootstrap.contains("activation_token"),
-                "invalid first-boot setup credentials");
-    const auto address = bootstrap.at("setup_address").get<std::string>();
-    require(hex(bootstrap.at("certificate_fingerprint").get<std::string>(), 64),
-            "invalid setup certificate fingerprint");
+    const bool owner_configured = status.value("owner_configured", false);
+    const bool has_bootstrap = status.contains("bootstrap") && status["bootstrap"].is_object();
+    const bool has_token = has_bootstrap && status["bootstrap"].contains("activation_token");
+    // A status document written before owner_configured existed still carries
+    // its activation token, which is enough to know the owner is unenrolled.
+    require(owner_configured || has_token, "first-boot status has no setup credentials");
+    // The address the open profile serves the setup page on. first boot
+    // publishes it; an upgraded status that predates it falls back to the
+    // packaged default so the profile is still created and open.
+    std::string address = "192.168.1.64";
+    if (has_bootstrap) {
+      const auto &bootstrap = status["bootstrap"];
+      if (bootstrap.contains("setup_address") && bootstrap["setup_address"].is_string())
+        address = bootstrap["setup_address"].get<std::string>();
+      if (bootstrap.contains("certificate_fingerprint") &&
+          bootstrap["certificate_fingerprint"].is_string())
+        require(hex(bootstrap["certificate_fingerprint"].get<std::string>(), 64),
+                "invalid setup certificate fingerprint");
+    }
     ipv4(address);
     const bool exists = command(nmcli, {"connection", "show", connection}) == 0;
     const auto ssid = resolve_ssid(nmcli, ssid_file);
@@ -238,6 +254,16 @@ int main(int argc, char **argv) {
                 "802-11-wireless.mode", "ap",
                 "ipv4.method", "shared", "ipv4.addresses", address + "/24",
                 "ipv6.method", "disabled", "connection.autoconnect", "yes"});
+    if (owner_configured && !has_token) {
+      // #59: the owner is already configured. The open profile and the
+      // published SSID now exist for the panel's Access Point mode, but the
+      // device is not forced onto the setup AP at boot -- Home Wi-Fi, or the
+      // owner's explicit choice, decides. This is the upgrade path: a device
+      // that only ever had the legacy secured "rapid-demo" profile now has the
+      // open "rapid-setup" one the packaged Wi-Fi mode worker activates.
+      log("INFO provision: owner already configured; open setup AP profile retained, SSID " + ssid);
+      return 0;
+    }
     run(nmcli, {"radio", "wifi", "on"});
     run(nmcli, {"-w", "15", "connection", "up", connection, "ifname", "wlan0"});
     log("INFO provision: open setup AP profile is active, SSID " + ssid);

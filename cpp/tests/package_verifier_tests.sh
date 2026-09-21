@@ -180,17 +180,60 @@ replace_in "$units/rapid-firstboot.service" '^RuntimeDirectory=rapid$' 'RuntimeD
 printf '\nRuntimeDirectory=rapid\n' >> "$units/rapid-firstboot.service"
 expect_pass "a required path covered only by a later RuntimeDirectory line"
 
+# #40: /run/rapid has exactly one lifecycle owner, rapid-firstboot.service. A
+# shared RuntimeDirectory is not reference counted, so a consumer that also
+# declared it deleted the directory while the others still needed it.
+stage_package
+replace_in "$units/rapid-firstboot.service" '^RuntimeDirectory=rapid$' ''
+expect_fail "a first boot that does not own /run/rapid" "own /run/rapid at mode 0770"
+
+stage_package
+printf '\nRuntimeDirectory=rapid\nRuntimeDirectoryMode=0770\n' >> "$units/rapid-provision.service"
+expect_fail "a provisioner that also claims /run/rapid" "must not declare RuntimeDirectory=rapid"
+
+stage_package
+printf '\nRuntimeDirectory=rapid\nRuntimeDirectoryMode=0770\n' >> "$units/rapid-setup.service"
+expect_fail "a setup server that also claims /run/rapid" "must not declare RuntimeDirectory=rapid"
+
+stage_package
+replace_in "$units/rapid-provision.service" '^ReadWritePaths=/run/rapid$' ''
+expect_fail "a provisioner that cannot write /run/rapid" "consume /run/rapid through ReadWritePaths="
+
 stage_package
 replace_in "$units/rapid-provision.service" '^Group=rapid$' ''
-expect_fail "a provisioner that leaves /run/rapid unreadable by the rapid group" "share /run/rapid with the rapid group"
+expect_fail "a provisioner that leaves /run/rapid unreadable by the rapid group" "consume /run/rapid through ReadWritePaths="
 
 stage_package
 replace_in "$units/rapid-firstboot.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
-expect_fail "a first-boot /run/rapid mode too narrow for the files written into it" "share /run/rapid at mode 0770"
+expect_fail "a first-boot /run/rapid mode too narrow for the files written into it" "own /run/rapid at mode 0770"
+
+# #51: /var/lib/rapid-setup holds the device TLS identity, enrollment token and
+# setup database; both units that create it must keep it at 0700.
+stage_package
+replace_in "$units/rapid-firstboot.service" '^StateDirectoryMode=0700$' 'StateDirectoryMode=0755'
+expect_fail "a first boot with a world-readable setup state directory" "StateDirectoryMode=0700"
 
 stage_package
-replace_in "$units/rapid-provision.service" '^RuntimeDirectoryMode=0770$' 'RuntimeDirectoryMode=0750'
-expect_fail "a provisioner whose /run/rapid mode disagrees with first boot's" "must declare the exact same RuntimeDirectoryMode"
+replace_in "$units/rapid-setup.service" '^StateDirectoryMode=0700$' 'StateDirectoryMode=0755'
+expect_fail "a setup server with a world-readable setup state directory" "StateDirectoryMode=0700"
+
+# #41: /var/lib/rapid is created by rapid.service; the units that grant
+# ReadWritePaths=/var/lib/rapid must be ordered after it, and must not re-own it.
+stage_package
+replace_in "$units/rapid-apply.service" '^Requires=rapid[.]service$' ''
+expect_fail "an apply helper with no dependency on the runtime that creates /var/lib/rapid" "must require rapid.service"
+
+stage_package
+replace_in "$units/rapid-display-recovery.service" '^After=rapid[.]service$' ''
+expect_fail "a display recovery helper not ordered after the runtime" "must be ordered After=rapid.service"
+
+stage_package
+printf '\nStateDirectory=rapid\nStateDirectoryMode=0700\n' >> "$units/rapid-apply.service"
+expect_fail "an apply helper that re-owns /var/lib/rapid to root" "must not declare StateDirectory=rapid"
+
+stage_package
+printf '\nStateDirectory=rapid\nStateDirectoryMode=0700\n' >> "$units/rapid-display-recovery.service"
+expect_fail "a display recovery helper that re-owns /var/lib/rapid to root" "must not declare StateDirectory=rapid"
 
 # #22: the setup AP is open; the root provisioner unit must not carry an AP
 # passphrase or key-management setting.
@@ -224,8 +267,28 @@ stage_package
 EXPECT_IMAGE_READY=ON expect_fail "a release package missing the image-ready marker" "must contain the image-ready marker"
 
 stage_package
+mkdir -p "$work/stage/usr/share/rapid/companion"
+printf 'MZ\n' > "$work/stage/usr/share/rapid/companion/rapid-telemetry-daemon.exe"
 printf 'v1\n' > "$work/stage/usr/share/rapid/rapid-image-ready-v1"
 EXPECT_IMAGE_READY=ON expect_pass "a release package that declares the image ready"
+
+# #48: a release package must bundle the Windows companion the setup page
+# serves from /usr/share/rapid/companion; otherwise it advertises a download it
+# cannot serve. Ordinary main builds may omit it.
+stage_package
+printf 'v1\n' > "$work/stage/usr/share/rapid/rapid-image-ready-v1"
+EXPECT_IMAGE_READY=ON expect_fail "a release package without the bundled companion" "must contain the bundled companion artifact"
+
+stage_package
+mkdir -p "$work/stage/usr/share/rapid/companion"
+printf 'MZ\n' > "$work/stage/usr/share/rapid/companion/rapid-telemetry-daemon.exe"
+printf 'v1\n' > "$work/stage/usr/share/rapid/rapid-image-ready-v1"
+EXPECT_IMAGE_READY=ON expect_pass "a release package that bundles the companion"
+
+stage_package
+mkdir -p "$work/stage/usr/share/rapid/companion"
+printf 'MZ\n' > "$work/stage/usr/share/rapid/companion/rapid-telemetry-daemon.exe"
+expect_pass "an ordinary package that bundles the companion"
 
 # /run/rapid-apply lifecycle (#25 follow-up): the shared queue has exactly one
 # lifecycle owner, rapid-setup.service, through RuntimeDirectory=. A shared

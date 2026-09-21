@@ -1,5 +1,44 @@
 # Windows companion
 
+## Portable single-executable model
+
+The supported way to run the companion is to **run `rapid-telemetry-daemon.exe`
+with no arguments and no adjacent files**. Copy the `.exe` anywhere (a flash
+drive works) and run it:
+
+1. **First run (unpaired):** the daemon offers pairing. Enter the Pi address and
+   the TLS certificate fingerprint shown on the Pi's own display (or its setup
+   page) and approve the matching verification code on the Pi. The same
+   `--pair` / `run_pairing()` client is used, so the fingerprint check, the
+   one-use envelope and the on-device approval are unchanged.
+2. The resulting 256-bit key is stored **per Windows user** under
+   `%LOCALAPPDATA%\raPId\pairing.key.dpapi`, protected with DPAPI. No plaintext
+   key is ever written next to the executable.
+3. **Later runs** on the same Windows account just start the tray daemon and
+   use the stored credential. A different PC or Windows account pairs once.
+
+No `daemon.conf`, no `telemetry.key`, no installed config path and no command
+line are required. `daemon.conf` remains supported as an *optional* advanced
+override; `--auth-key`, `--auth-key-file` and `RAPID_TELEMETRY_KEY` remain
+available for migrated kits and automation.
+
+### Offline / demo recording
+
+The same executable also serves the offline case as a deliberate opt-in mode:
+`--no-forward` (or `no_forward=true` in the optional config) records the local
+`.ld` fallback with no Pi, no pairing and no key. It never pairs. Normal
+forwarded operation needs pairing; offline recording is the only mode that
+intentionally runs without a credential.
+
+### Automation and console-less hosts
+
+`--headless` runs without the tray/console UI and never shows a blocking error
+dialog. A run with no attached console (scheduled task, automation harness)
+fails fast with a stderr line and a non-zero exit code instead of waiting on a
+`MessageBox` — see #42.
+
+## Build
+
 Build from this directory with:
 
 ```powershell
@@ -63,7 +102,14 @@ The full flow and its remaining hardware acceptance requirements are specified
 in [the companion pairing contract](PAIRING-CONTRACT.md). Pairing belongs to
 the two main telemetry programs; first-time provisioning remains separate.
 
-The shipped `START-RAPID.cmd` and `start-rapid-daemon.vbs` launchers prefer
-`%LOCALAPPDATA%\raPId\pairing.key.dpapi` when it exists. This lets a recovered
-per-user pairing start without copying or exposing `telemetry.key`; the legacy
-bundle key remains a compatibility fallback for existing demo kits.
+## Legacy launchers and the MSI
+
+`START-RAPID.cmd` and `start-rapid-daemon.vbs` are **legacy compatibility**
+launchers kept only for existing demo kits that still ship `daemon.conf` /
+`telemetry.key`; the portable path above does not use them. They prefer
+`%LOCALAPPDATA%\raPId\pairing.key.dpapi` when it exists; the legacy bundle key
+remains a compatibility fallback for migrated kits.
+
+The MSI installs the same executable and adds Start-menu shortcuts: one to run
+the companion directly (which pairs on first use) and one to `PAIR.cmd`, so the
+manual `--pair` entry point is discoverable without a terminal (#49).

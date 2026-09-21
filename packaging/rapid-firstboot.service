@@ -9,11 +9,14 @@ User=rapid
 Group=rapid
 StateDirectory=rapid-setup
 StateDirectoryMode=0700
-# /run/rapid is shared with rapid-provision.service (root) and rapid-setup.service
-# (rapid), which both write new files into it (#25). Group=rapid plus 0770 here
-# must match rapid-provision.service exactly: whichever unit starts first sets
-# the directory's ownership and mode, and systemd re-applies them (recursively)
-# on every later start that also declares this RuntimeDirectory name.
+# /run/rapid holds the first-boot status, the setup-AP name and the
+# pairing/calibration files. This unit is its single lifecycle owner: Group=rapid
+# and mode 0770 make it usable by rapid-setup.service (rapid) and
+# rapid-provision.service (root). A shared RuntimeDirectory is not reference
+# counted - systemd removes it when ANY declaring unit stops - so a consumer
+# declaring it deletes the directory out from under the others (#40, same class
+# as #25). Only this unit declares RuntimeDirectory=rapid; consumers are ordered
+# after it and use ReadWritePaths=/run/rapid. CheckPackage enforces this.
 RuntimeDirectory=rapid
 RuntimeDirectoryMode=0770
 ExecStart=/usr/lib/rapid/rapid-firstboot --state-directory /var/lib/rapid-setup --status-file /run/rapid/firstboot.json --tls-certificate /var/lib/rapid-setup/device.crt --tls-private-key /var/lib/rapid-setup/device.key

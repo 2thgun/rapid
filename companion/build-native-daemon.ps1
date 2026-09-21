@@ -7,9 +7,10 @@ param(
     # Build identity injected into the daemon and shown in the tray "Show
     # status" dialog. Empty means derive it from Git with the package rule
     # (packaging/RapidVersion.cmake): a vX.Y.Z tag checkout becomes X.Y.Z, any
-    # other commit becomes 0.9.9~dev+<short-sha>, and no Git metadata at all
-    # becomes the literal "unknown". The RAPID_BUILD_VERSION environment
-    # variable overrides it (source archives, CI); the value is never a clock.
+    # other commit becomes 0.9.9~dev.<commit-count>+<short-sha>, and no Git
+    # metadata at all becomes the literal "unknown". The RAPID_BUILD_VERSION
+    # environment variable overrides it (source archives, CI); the value is
+    # never a clock.
     [string]$BuildVersion = ''
 )
 
@@ -43,7 +44,9 @@ function Resolve-RapidBuildVersion {
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sha)) { return 'unknown' }
         $tag = (& git -C $RepositoryRoot describe --exact-match --tags HEAD 2>$null | Out-String).Trim()
         if ($tag -match '^v([0-9][0-9A-Za-z.+~-]*)$') { return $Matches[1] }
-        return "0.9.9~dev+$sha"
+        $count = (& git -C $RepositoryRoot rev-list --count HEAD 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $count -notmatch '^[0-9]+$') { return 'unknown' }
+        return "0.9.9~dev.$count+$sha"
     } catch {
         return 'unknown'
     } finally {
@@ -100,7 +103,7 @@ if ($clang) {
     $zigCacheRoot = [IO.Path]::GetFullPath($CacheDirectory)
     $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $zigCacheRoot 'global'
     $env:ZIG_LOCAL_CACHE_DIR = Join-Path $zigCacheRoot 'local'
-    & $zigCommand c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG -municode `
+    & $zigCommand c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG -municode -static `
         $versionInclude $source -o $output @commonLibraries
     $built = $LASTEXITCODE -eq 0
 } else {
@@ -112,7 +115,9 @@ if ($clang) {
             Import-Module $devShell
             Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
             $objectOutput = Join-Path $OutputDirectory 'rapid-telemetry-daemon.obj'
-            & cl.exe /nologo /std:c++20 /O2 /DNDEBUG /EHsc /W4 /DUNICODE /D_UNICODE `
+            # /MT statically links the CRT so the single copied .exe needs no
+            # Visual C++ redistributable on the target PC (portable model, #10).
+            & cl.exe /nologo /std:c++20 /O2 /DNDEBUG /EHsc /W4 /MT /DUNICODE /D_UNICODE `
                 $msvcVersionInclude $source /Fe:$output /Fo:$objectOutput /link ws2_32.lib shell32.lib ole32.lib uuid.lib bcrypt.lib crypt32.lib user32.lib winhttp.lib
             $built = $LASTEXITCODE -eq 0
         }

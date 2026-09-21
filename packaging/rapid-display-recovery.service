@@ -1,5 +1,12 @@
 [Unit]
 Description=raPId display preview recovery
+# #41: /var/lib/rapid is created by rapid.service (StateDirectory=rapid,
+# rapid:rapid 0700). ReadWritePaths=/var/lib/rapid requires the path to exist
+# before this unit's mount namespace, so order after rapid.service; do NOT add
+# StateDirectory=rapid here, which would re-own the directory to root and lock
+# out rapid.service.
+Requires=rapid.service
+After=rapid.service
 After=rapid-display.service graphical.target
 
 [Service]

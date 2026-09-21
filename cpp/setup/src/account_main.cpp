@@ -197,6 +197,133 @@ KeyResult install_key(const Account &target, const fs::path &home, const std::st
   return KeyResult::failed;
 }
 
+// #28 management: read the account's authorized_keys without following links,
+// as root, after checking it is an account-owned regular file. A missing,
+// linked or foreign-owned file reads as "no keys" rather than being touched.
+std::optional<std::string> read_authorized_keys(const Account &target, const fs::path &home) {
+  const int home_fd = ::open(home.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (home_fd < 0) return std::nullopt;
+  struct stat info {};
+  if (::fstat(home_fd, &info) != 0 || info.st_uid != target.uid) {
+    ::close(home_fd);
+    return std::nullopt;
+  }
+  const int ssh_fd = ::openat(home_fd, ".ssh", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  ::close(home_fd);
+  if (ssh_fd < 0) return std::nullopt;
+  if (::fstat(ssh_fd, &info) != 0 || info.st_uid != target.uid) {
+    ::close(ssh_fd);
+    return std::nullopt;
+  }
+  const int file = ::openat(ssh_fd, "authorized_keys", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  ::close(ssh_fd);
+  if (file < 0) return std::nullopt;
+  if (::fstat(file, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != target.uid ||
+      info.st_nlink != 1 || info.st_size > 1024 * 1024) {
+    ::close(file);
+    return std::nullopt;
+  }
+  std::string contents(static_cast<std::size_t>(info.st_size), '\0');
+  std::size_t got = 0;
+  while (got < contents.size()) {
+    const auto n = ::read(file, contents.data() + got, contents.size() - got);
+    if (n <= 0) break;
+    got += static_cast<std::size_t>(n);
+  }
+  ::close(file);
+  contents.resize(got);
+  return contents;
+}
+
+// The public list shown on the setup page: type, comment, normalized line and
+// a SHA-256 fingerprint of the public blob. Never any private material.
+Json enrolled_keys(const Account &target, const fs::path &home) {
+  Json keys = Json::array();
+  const auto contents = read_authorized_keys(target, home);
+  if (!contents) return keys;
+  std::istringstream lines(*contents);
+  for (std::string line; std::getline(lines, line);) {
+    const auto parsed = account::parse_public_key(line);
+    if (!parsed) continue;
+    const auto fingerprint = account::key_fingerprint(parsed->blob_base64);
+    if (fingerprint.empty()) continue;
+    keys.push_back({{"fingerprint", fingerprint}, {"type", parsed->type},
+                    {"comment", parsed->comment}, {"key", parsed->line()}});
+  }
+  return keys;
+}
+
+// Removes every line whose public blob matches `fingerprint`, as the account
+// user so a link planted in its home cannot redirect the rewrite. Rewrites
+// through a fresh 0600 file and renames it over the original.
+enum class RemoveResult { removed, not_found, failed };
+RemoveResult remove_key(const Account &target, const fs::path &home, const std::string &fingerprint) {
+  const auto child = fork();
+  if (child < 0) return RemoveResult::failed;
+  if (child == 0) {
+    if (::geteuid() == 0) {
+      if (::setgroups(0, nullptr) != 0 || ::setgid(target.gid) != 0 || ::setuid(target.uid) != 0 ||
+          ::getuid() != target.uid || ::geteuid() != target.uid)
+        _exit(10);
+    } else if (::geteuid() != target.uid) {
+      _exit(11);
+    }
+    ::umask(077);
+    const int home_fd = ::open(home.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat info {};
+    if (home_fd < 0 || ::fstat(home_fd, &info) != 0 || info.st_uid != target.uid) _exit(12);
+    const int ssh_fd = ::openat(home_fd, ".ssh", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (ssh_fd < 0 || ::fstat(ssh_fd, &info) != 0 || info.st_uid != target.uid) _exit(13);
+    const int file = ::openat(ssh_fd, "authorized_keys", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (file < 0 || ::fstat(file, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != target.uid ||
+        info.st_nlink != 1 || info.st_size > 1024 * 1024)
+      _exit(14);
+    std::string existing(static_cast<std::size_t>(info.st_size), '\0');
+    std::size_t got = 0;
+    while (got < existing.size()) {
+      const auto n = ::pread(file, existing.data() + got, existing.size() - got, static_cast<off_t>(got));
+      if (n <= 0) _exit(15);
+      got += static_cast<std::size_t>(n);
+    }
+    ::close(file);
+    std::string kept;
+    bool removed = false;
+    std::istringstream lines(existing);
+    for (std::string line; std::getline(lines, line);) {
+      const auto parsed = account::parse_public_key(line);
+      if (parsed && account::key_fingerprint(parsed->blob_base64) == fingerprint) {
+        removed = true;
+        continue;
+      }
+      kept += line;
+      kept += '\n';
+    }
+    if (!removed) _exit(2);
+    const auto temporary = "authorized_keys.tmp." + unique_id();
+    const int out = ::openat(ssh_fd, temporary.c_str(),
+                             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (out < 0) _exit(16);
+    std::size_t written = 0;
+    while (written < kept.size()) {
+      const auto n = ::write(out, kept.data() + written, kept.size() - written);
+      if (n <= 0) break;
+      written += static_cast<std::size_t>(n);
+    }
+    const bool ok = written == kept.size() && ::fchmod(out, 0600) == 0 && ::fsync(out) == 0;
+    ::close(out);
+    if (!ok || ::renameat(ssh_fd, temporary.c_str(), ssh_fd, "authorized_keys") != 0) {
+      ::unlinkat(ssh_fd, temporary.c_str(), 0);
+      _exit(17);
+    }
+    _exit(0);
+  }
+  int status = 0;
+  if (::waitpid(child, &status, 0) != child || !WIFEXITED(status)) return RemoveResult::failed;
+  if (WEXITSTATUS(status) == 0) return RemoveResult::removed;
+  if (WEXITSTATUS(status) == 2) return RemoveResult::not_found;
+  return RemoveResult::failed;
+}
+
 std::optional<std::string> read_optional(const fs::path &path) {
   std::error_code error;
   if (!fs::exists(fs::symlink_status(path, error))) return std::nullopt;
@@ -281,9 +408,18 @@ int main(int argc, char **argv) {
     result["request_id"] = request_id;
     for (const auto &[key, value] : request.items())
       require(key == "request_id" || key == "password_hash" || key == "authorized_key" ||
-                  key == "replace_existing_password",
+                  key == "replace_existing_password" || key == "action" || key == "remove_fingerprint",
               "invalid account request");
-    std::string hash, key_line;
+    // #28 management: an explicit action distinguishes a key list or removal
+    // from the default password/key apply. Only the same fixed request file
+    // and helper are used; there is no second authorized_keys write path.
+    std::string action = "apply";
+    if (request.contains("action")) {
+      require(request["action"].is_string(), "invalid account request");
+      action = request["action"].get<std::string>();
+      require(action == "list_keys" || action == "remove_key", "invalid account request");
+    }
+    std::string hash, key_line, remove_fingerprint;
     bool replace = false;
     if (request.contains("password_hash")) {
       require(request["password_hash"].is_string(), "invalid account request");
@@ -300,11 +436,23 @@ int main(int argc, char **argv) {
       require(request["replace_existing_password"].is_boolean(), "invalid account request");
       replace = request["replace_existing_password"].get<bool>();
     }
+    if (request.contains("remove_fingerprint")) {
+      require(request["remove_fingerprint"].is_string(), "invalid account request");
+      remove_fingerprint = request["remove_fingerprint"].get<std::string>();
+      require(remove_fingerprint.size() == 64 &&
+                  remove_fingerprint.find_first_not_of("0123456789abcdef") == std::string::npos,
+              "invalid SSH key fingerprint");
+    }
     if (request.contains("password_hash")) {
       auto &stored = request["password_hash"].get_ref<std::string &>();
       OPENSSL_cleanse(stored.data(), stored.size());
     }
-    require(!hash.empty() || !key_line.empty(), "account request has nothing to apply");
+    if (action == "list_keys")
+      require(hash.empty() && key_line.empty() && remove_fingerprint.empty(), "invalid account request");
+    if (action == "remove_key")
+      require(hash.empty() && key_line.empty() && !remove_fingerprint.empty(), "invalid account request");
+    require(!hash.empty() || !key_line.empty() || action == "list_keys" || !remove_fingerprint.empty(),
+            "account request has nothing to apply");
 
     const auto target = find_account(root / "etc/passwd", user);
     require(target.has_value(), "account does not exist");
@@ -312,8 +460,33 @@ int main(int argc, char **argv) {
     require(!target->shell.ends_with("/nologin") && !target->shell.ends_with("/false") && !target->shell.empty(),
             "account has no login shell");
     require(!target->home.empty() && target->home.front() == '/', "account has no home directory");
+    const auto home = root / fs::path(target->home).relative_path();
     const auto shadow = root / "etc/shadow";
     const bool had_password = password_usable(shadow, user);
+
+    if (action == "list_keys") {
+      result = {{"request_id", request_id}, {"status", "applied"},
+                {"keys", enrolled_keys(*target, home)}};
+      write_public_file(result_file, result.dump() + "\n");
+      log("INFO account: listed enrolled SSH keys");
+      return 0;
+    }
+    if (action == "remove_key") {
+      std::string removal;
+      switch (remove_key(*target, home, remove_fingerprint)) {
+      case RemoveResult::removed: removal = "removed"; break;
+      case RemoveResult::not_found: removal = "not_found"; break;
+      case RemoveResult::failed: removal = "failed"; break;
+      }
+      result = {{"request_id", request_id},
+                {"status", removal == "failed" ? "failed" : "applied"},
+                {"ssh_key", removal},
+                {"keys", enrolled_keys(*target, home)}};
+      if (removal == "failed") result["error"] = "SSH key removal failed";
+      write_public_file(result_file, result.dump() + "\n");
+      log(std::string("INFO account: SSH key removal ") + removal);
+      return removal == "failed" ? 1 : 0;
+    }
 
     // Dev-Pi safety: an existing password is only replaced when the owner
     // explicitly confirmed it. Nothing at all is changed otherwise.
@@ -340,8 +513,14 @@ int main(int argc, char **argv) {
     require(!password_changed || has_password, "password update was not recorded");
 
     std::string key_state = "unchanged";
+    if (!remove_fingerprint.empty()) {
+      // #28 edit: replace the identified line in the same request, so the key
+      // is never absent between two requests. A missing line is not an error.
+      const auto removal = remove_key(*target, home, remove_fingerprint);
+      if (removal == RemoveResult::failed && error.empty()) error = "SSH key removal failed";
+    }
     if (!key_line.empty()) {
-      switch (install_key(*target, root / fs::path(target->home).relative_path(), key_line)) {
+      switch (install_key(*target, home, key_line)) {
       case KeyResult::installed: key_state = "installed"; break;
       case KeyResult::already_present: key_state = "already_present"; break;
       case KeyResult::failed: key_state = "failed"; error = "SSH key installation failed"; break;
@@ -403,7 +582,8 @@ int main(int argc, char **argv) {
               {"password_changed", password_changed},
               {"ssh_key", key_state},
               {"ssh", ssh_state},
-              {"ssh_password_login", has_password && ssh_state == "enabled"}};
+              {"ssh_password_login", has_password && ssh_state == "enabled"},
+              {"keys", enrolled_keys(*target, home)}};
     if (!error.empty()) result["error"] = error;
     write_public_file(result_file, result.dump() + "\n");
     log(std::string("INFO account: password ") + (password_changed ? "updated" : "unchanged") +

@@ -96,6 +96,14 @@ class DashboardModel final : public QObject {
   // Presentation-only smoothed steering (normalised -1..1), interpolated by
   // SteeringSmoother. The raw channel stays available through value().
   Q_PROPERTY(double steeringDisplay READ steeringDisplay NOTIFY steeringDisplayChanged)
+  // #18: the lock-to-lock used to turn the normalised steering channel into the
+  // wheel angle. iRacing supplies its own value on the wire; AC1/ACC/ACE do
+  // not, so the owner sets one on the panel (persisted next to the other display
+  // state) and it is used only as a display fallback. The wire value is never
+  // overwritten, so it stays the sim's own reading.
+  Q_PROPERTY(int userSteeringLockDeg READ userSteeringLockDeg NOTIFY changed)
+  Q_PROPERTY(int effectiveSteeringLockDeg READ effectiveSteeringLockDeg NOTIFY changed)
+  Q_PROPERTY(bool steeringLockKnown READ steeringLockKnown NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
   // True once the live WebSocket push (#17) is delivering snapshots; false
   // while the model relies on its 200 ms HTTP poll fallback (socket never
@@ -105,6 +113,9 @@ class DashboardModel final : public QObject {
   Q_PROPERTY(bool networkAvailable READ networkAvailable NOTIFY changed)
   Q_PROPERTY(QString logNotice READ logNotice NOTIFY changed)
   Q_PROPERTY(QString setupNotice READ setupNotice NOTIFY changed)
+  // #59 / setup-page-ux: the setup page URL first boot publishes, shown on the
+  // panel's settings page so the owner can open it without guessing.
+  Q_PROPERTY(QString setupUrl READ setupUrl NOTIFY changed)
   Q_PROPERTY(bool pairingPending READ pairingPending NOTIFY changed)
   Q_PROPERTY(QString pairingLabel READ pairingLabel NOTIFY changed)
   Q_PROPERTY(QString pairingCode READ pairingCode NOTIFY changed)
@@ -118,16 +129,33 @@ class DashboardModel final : public QObject {
   Q_PROPERTY(QPointF calibrationTarget READ calibrationTarget NOTIFY changed)
 
 public:
+  // #18: fallback lock-to-lock when neither the sim nor the owner supplies one.
+  // 900 deg is the common sim-racing default; the owner-set value exists
+  // precisely because AC1/ACC/ACE do not expose a per-car lock.
+  static constexpr int kDefaultSteeringLockDeg = 900;
+  static constexpr int kMinSteeringLockDeg = 90;
+  static constexpr int kMaxSteeringLockDeg = 1440;
+
   explicit DashboardModel(QUrl endpoint, QObject *parent = nullptr);
   int revision() const { return revision_; }
   int displayRotation() const { return display_rotation_; }
   double steeringDisplay() const { return steering_smoother_.value(); }
+  // Owner-set lock-to-lock in degrees; 0 when unset (fall back to the sim or
+  // the default).
+  int userSteeringLockDeg() const { return user_steering_lock_deg_; }
+  // What the wheel should use: the sim's own lock when present, else the
+  // owner's, else kDefaultSteeringLockDeg.
+  int effectiveSteeringLockDeg() const;
+  // True when the sim or the owner supplies a real value, i.e. the panel should
+  // not show the "*" unknown marker.
+  bool steeringLockKnown() const { return simSteeringLockDeg() > 0 || user_steering_lock_deg_ > 0; }
   QString status() const { return status_; }
   bool livePushActive() const { return live_push_active_; }
   QString networkMode() const { return network_mode_; }
   bool networkAvailable() const { return network_available_; }
   QString logNotice() const { return log_notice_; }
   QString setupNotice() const { return setup_notice_; }
+  QString setupUrl() const { return setup_url_; }
   bool pairingPending() const { return pairing_pending_; }
   QString pairingLabel() const { return pairing_label_; }
   QString pairingCode() const { return pairing_code_; }
@@ -146,6 +174,13 @@ public:
   Q_INVOKABLE QString timeValue(const QString &key) const;
   Q_INVOKABLE QString percentValue(const QString &key) const;
   Q_INVOKABLE void setNetworkMode(const QString &mode);
+  // #18: persist an owner-set lock-to-lock. 0 clears it (AUTO). Non-zero values
+  // are clamped to [kMinSteeringLockDeg, kMaxSteeringLockDeg]. Returns whether
+  // the value was written.
+  Q_INVOKABLE bool setUserSteeringLockDeg(int degrees);
+  // Asks the root Wi-Fi mode worker to start/restart rapid-setup.service; the
+  // panel writes the same request file the Wi-Fi mode buttons use.
+  Q_INVOKABLE void restartSetupService();
   Q_INVOKABLE bool approvePairing();
   Q_INVOKABLE bool confirmDisplay();
   Q_INVOKABLE void startCalibration();
@@ -171,6 +206,9 @@ private:
   void pollCalibrationFile();
   void pollDisplayConfirmation();
   void pollDisplayRotation();
+  void pollSteeringLock();
+  // The sim's own lock-to-lock from the wire, or 0 when absent/invalid.
+  int simSteeringLockDeg() const;
   // Maps a normalized tap from the rotated scene's local coordinates to the
   // unrotated screen frame the calibration helper works in (#13).
   QPointF screenPoint(double x, double y) const;
@@ -196,6 +234,7 @@ private:
   QString network_mode_;
   QString log_notice_;
   QString setup_notice_;
+  QString setup_url_;
   bool pairing_pending_ = false;
   QString pairing_label_;
   QString pairing_code_;
@@ -211,6 +250,7 @@ private:
   qint64 last_graph_gap_ms_ = 0;
   QVariantList graph_samples_;
   int display_rotation_ = 0;
+  int user_steering_lock_deg_ = 0;
   SteeringSmoother steering_smoother_;
   QTimer *steering_timer_ = nullptr;
   QElapsedTimer steering_tick_;

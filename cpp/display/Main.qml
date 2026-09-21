@@ -40,18 +40,26 @@ Window {
     function pair(a, b, suffix) { return numeric(a,1) + " / " + numeric(b,1) + (suffix || "") }
     function gear() { const v = raw("gear"); return v == null ? "—" : v === -1 ? "R" : v === 0 ? "N" : String(v) }
     // steering_angle is normalised -1..1 for every simulator. Degrees are
-    // derived here for display only, using the sim's own reported lock when
-    // known, else a configurable default (never silently -- see steeringLockKnown).
-    // The wheel reads dashboard.steeringDisplay, a presentation-only smoothed
-    // copy of the same channel (DashboardModel/SteeringSmoother); the raw
-    // channel and the lock conversion/fallback marker are unchanged.
-    readonly property real defaultLockToLockDeg: 900
-    function steeringLockKnown() {
+    // derived here for display only. #18: the lock-to-lock comes from the model,
+    // which prefers the sim's own value (iRacing), then the owner-set value (the
+    // settings menu; AC1/ACC/ACE expose none), then a default. The wire value is
+    // never overwritten, so it stays the sim's own reading. The wheel reads
+    // dashboard.steeringDisplay, a presentation-only smoothed copy of the same
+    // channel (DashboardModel/SteeringSmoother); the raw channel and the
+    // lock conversion/fallback marker are unchanged.
+    function steeringLockKnown() { return dashboard.steeringLockKnown }
+    function steeringLockToLockDeg() { return dashboard.effectiveSteeringLockDeg }
+    function steeringLockSource() {
         const v = raw("steering_lock_deg")
-        return v !== undefined && v !== null && Number.isFinite(Number(v)) && Number(v) > 0
+        if (v !== undefined && v !== null && Number.isFinite(Number(v)) && Number(v) > 0) return "SIM"
+        return dashboard.userSteeringLockDeg > 0 ? "SET" : "DEFAULT"
     }
-    function steeringLockToLockDeg() { return root.steeringLockKnown() ? Number(raw("steering_lock_deg")) : root.defaultLockToLockDeg }
     function steeringDegrees() { return dashboard.steeringDisplay * root.steeringLockToLockDeg() / 2 }
+    // Adjust the owner-set lock (0 clears it back to the sim/default).
+    function adjustSteeringLock(step) {
+        const base = dashboard.userSteeringLockDeg > 0 ? dashboard.userSteeringLockDeg : dashboard.effectiveSteeringLockDeg
+        dashboard.setUserSteeringLockDeg(base + step)
+    }
 
     component Label: Text {
         color: root.muted; font.pixelSize: 10; font.bold: true
@@ -99,9 +107,13 @@ Window {
         Card {
             x: 6; y: 4; width: 468; height: 36
             Label { x: 8; width: 274; anchors.verticalCenter: parent.verticalCenter; text: dashboard.status; font.pixelSize: 11 }
+            // #43: surface whether the live WebSocket push or the HTTP-poll
+            // fallback is feeding the panel. (The deprecated power-status
+            // indicator was removed here; the runtime still exposes the power
+            // fields for the engineering view.)
             Label { x: 286; width: 72; anchors.verticalCenter: parent.verticalCenter
-                text: !root.raw("power_status_available") ? "PWR ?" : root.raw("power_limited") ? "PWR LIMIT" : root.raw("power_limited_since_boot") ? "PWR WARN" : "PWR OK"
-                color: root.raw("power_limited") ? "#ff6472" : root.muted
+                text: dashboard.livePushActive ? "PUSH" : "POLL"
+                color: dashboard.livePushActive ? "#20cf75" : root.muted
             }
             Rectangle {
                 x: 362; y: 2; width: 104; height: 32; radius: 4
@@ -260,25 +272,69 @@ Window {
         Card { visible: dashboard.logNotice.length > 0; x: 165; y: 241; width: 135; height: 19; z: 2
             Label { anchors.centerIn: parent; text: dashboard.logNotice; color: "#20cf75" }
         }
+        // The panel's settings page (opened by the SETTINGS button in the top
+        // bar): Wi-Fi mode, touch calibration, the setup page address and a way
+        // to start/restart the local setup service.
         Rectangle {
             visible: root.wifiMenu; anchors.fill: parent; color: "#b0000000"; z: 10
             MouseArea { anchors.fill: parent; onClicked: root.wifiMenu = false }
-            Card { x: 30; y: 58; width: 420; height: 196
-                Label { x: 14; y: 14; text: "WI-FI MODE"; font.pixelSize: 14 }
-                Row { x: 12; y: 48; spacing: 8
+            Card { x: 20; y: 16; width: 440; height: 288
+                Label { x: 14; y: 10; text: "SETTINGS"; font.pixelSize: 14 }
+                Label { x: 14; y: 32; text: "WI-FI MODE" }
+                Row { x: 12; y: 46; spacing: 8
                     Repeater { model: [["home","HOME"],["ap","ACCESS POINT"],["off","WI-FI OFF"]]
-                        Rectangle { required property var modelData; width: 126; height: 62; radius: 4
+                        Rectangle { required property var modelData; width: 130; height: 46; radius: 4
                             color: "#19242b"; border.width: 2; border.color: dashboard.networkMode === modelData[0] ? root.accent : "#52616b"
                             Label { anchors.centerIn: parent; text: modelData[1]; color: "#f4f7f9"; font.pixelSize: 12 }
                             MouseArea { anchors.fill: parent; onClicked: { dashboard.setNetworkMode(modelData[0]); root.wifiMenu = false } }
                         }
                     }
                 }
-                Rectangle { x: 12; y: 120; width: 394; height: 62; radius: 4
+                // #18: user-settable steering lock. AC1/ACC/ACE expose no lock,
+                // so the owner sets one here; iRacing's own value still wins and
+                // AUTO clears the override. Held buttons repeat the step.
+                Label { x: 14; y: 98; text: "STEERING LOCK  " + root.steeringLockSource() }
+                Row { x: 12; y: 110; spacing: 6
+                    Rectangle { width: 54; height: 52; radius: 4
+                        color: lockMinus.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                        Label { anchors.centerIn: parent; text: "−"; color: "#f4f7f9"; font.pixelSize: 22 }
+                        MouseArea { id: lockMinus; anchors.fill: parent
+                            onPressed: { root.adjustSteeringLock(-10); lockRepeat.step = -10; lockRepeat.restart() }
+                            onReleased: lockRepeat.stop(); onCanceled: lockRepeat.stop()
+                        }
+                    }
+                    Rectangle { width: 160; height: 52; radius: 4; color: "#10161b"; border.width: 2; border.color: "#394754"
+                        Text { anchors.centerIn: parent; text: dashboard.effectiveSteeringLockDeg + "°"; color: root.accent; font.pixelSize: 20; font.bold: true }
+                    }
+                    Rectangle { width: 54; height: 52; radius: 4
+                        color: lockPlus.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                        Label { anchors.centerIn: parent; text: "+"; color: "#f4f7f9"; font.pixelSize: 22 }
+                        MouseArea { id: lockPlus; anchors.fill: parent
+                            onPressed: { root.adjustSteeringLock(10); lockRepeat.step = 10; lockRepeat.restart() }
+                            onReleased: lockRepeat.stop(); onCanceled: lockRepeat.stop()
+                        }
+                    }
+                    Rectangle { width: 98; height: 52; radius: 4
+                        color: lockAuto.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                        Label { anchors.centerIn: parent; text: "AUTO"; color: "#f4f7f9"; font.pixelSize: 12 }
+                        MouseArea { id: lockAuto; anchors.fill: parent; onClicked: dashboard.setUserSteeringLockDeg(0) }
+                    }
+                }
+                Timer { id: lockRepeat; property int step: 0; interval: 120; repeat: true; onTriggered: root.adjustSteeringLock(step) }
+                Rectangle { x: 12; y: 168; width: 408; height: 42; radius: 4
                     color: calibrateTouch.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                     Label { anchors.centerIn: parent; text: "CALIBRATE TOUCH"; color: "#f4f7f9"; font.pixelSize: 12 }
                     MouseArea { id: calibrateTouch; anchors.fill: parent; onClicked: { root.wifiMenu = false; dashboard.startCalibration() } }
                 }
+                Label { x: 14; y: 214; width: 404; elide: Text.ElideRight
+                    text: dashboard.setupUrl.length > 0 ? "SETUP PAGE  " + dashboard.setupUrl : "SETUP PAGE  not published yet"
+                    color: root.muted }
+                Rectangle { x: 12; y: 232; width: 408; height: 46; radius: 4
+                    color: restartSetup.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                    Label { anchors.centerIn: parent; text: "START / RESTART SETUP SERVICE"; color: "#f4f7f9"; font.pixelSize: 12 }
+                    MouseArea { id: restartSetup; anchors.fill: parent; onClicked: { dashboard.restartSetupService(); root.wifiMenu = false } }
+                }
+                // Seam: lane C's Pi pairing button belongs here, below the setup controls.
             }
         }
         Rectangle {

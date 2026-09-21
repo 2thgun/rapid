@@ -33,11 +33,33 @@ last completed checks, not a guarantee of current device state.
   `rapid-####` when `rapid` is already in range). The owner chooses the SSH/sudo
   password and optionally adds an SSH key on the setup page; `rapid-account`
   applies it and only then enables SSH.
+- An upgraded device now gets the open `rapid-setup` access point profile
+  created and its SSID published even when the owner is already configured, so
+  Access Point mode works after an upgrade from the old secured-profile scheme.
+- The setup page's SSH keys are now their own category, separate from the
+  device password/PIN: enrolled keys can be listed, added, edited (comment) and
+  removed through the same authenticated `/api/v1/account` endpoint and
+  `rapid-account` helper as enrollment; only public key material is ever shown
+  or sent.
+- The panel's Wi-Fi menu is now a settings page: Wi-Fi mode, touch calibration,
+  the setup page address and a Start/Restart setup service button. Its setup
+  card (SSID, address, TLS fingerprint) also shows in Access Point mode on an
+  already-enrolled device, without the activation token.
 - Added the 0.9.9 release pipeline: the package version derives from a git tag
-  (`0.9.9`, or `0.9.9~dev+<sha>` untagged), hosted ARM64 CI builds and verifies
-  the `.deb` with `-Werror`, and a `v*` tag assembles a flashable `.img.xz` with
-  a checksum and attaches it, the ARM64 `.deb` and the Windows companion to a
-  draft GitHub release.
+  (`0.9.9`, or `0.9.9~dev.<commit-count>+<sha>` untagged), hosted ARM64 CI builds
+  and verifies the `.deb` with `-Werror`, and a `v*` tag assembles a flashable
+  `.img.xz` with a checksum and attaches it, the ARM64 `.deb` and the Windows
+  companion to a draft GitHub release.
+- Dev package versions now carry a monotonic commit count
+  (`0.9.9~dev.<count>+<sha>`), so installing a newer untagged commit is an
+  upgrade rather than a downgrade and no longer needs `--allow-downgrades`. A
+  build with no git metadata and no explicit `-DRAPID_PACKAGE_VERSION` now fails
+  loudly instead of producing an untraceable `0.9.9~dev+unknown` package.
+- `/run/rapid` now has a single lifecycle owner (`rapid-firstboot.service`), so
+  stopping or restarting `rapid-provision.service` no longer deletes the shared
+  directory while `rapid-setup.service` and `rapid.service` still need it.
+  `rapid-apply.service` and `rapid-display-recovery.service` are ordered after
+  `rapid.service`, which creates `/var/lib/rapid`, instead of re-owning it.
 
 - Added code-confirmed PC pairing. `rapid-pi` serves an HTTPS pairing listener,
   the owner approves the matching code on the Pi panel or setup page, and the

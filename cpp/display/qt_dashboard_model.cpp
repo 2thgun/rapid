@@ -56,7 +56,15 @@ QUrl live_socket_endpoint(QUrl endpoint) {
 // "rapid". Two Pis can broadcast the same SSID, so the panel also shows the
 // address and the TLS certificate fingerprint the client's browser should
 // match.
-QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_contents) {
+//
+// #59 / setup-page-ux: first boot now publishes the address and fingerprint
+// even on an enrolled device, so the panel can show the setup card whenever
+// Access Point mode is up (the owner can still choose AP mode after setup).
+// On an enrolled device there is no activation token, so the card shows no
+// TOKEN line, and it stays hidden outside AP mode so it cannot cover the
+// dashboard during normal driving.
+QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_contents,
+                     bool ap_mode) {
   const auto document = QJsonDocument::fromJson(status_contents);
   if (!document.isObject()) return {};
   const auto bootstrap = document.object().value("bootstrap");
@@ -65,17 +73,31 @@ QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_c
   const auto url = values.value("setup_url").toString();
   const auto fingerprint = values.value("certificate_fingerprint").toString();
   const auto token = values.value("activation_token").toString();
-  if (url.isEmpty() || fingerprint.size() != 64 || token.size() != 64)
-    return {};
+  if (url.isEmpty() || fingerprint.size() != 64) return {};
+  if (!token.isEmpty() && token.size() != 64) return {};
+  // An enrolled device (no token) only shows the card in Access Point mode.
+  if (token.isEmpty() && !ap_mode) return {};
   const auto resolved = QString::fromUtf8(ssid_contents).trimmed();
   const auto ssid = resolved.isEmpty() ? QStringLiteral("rapid") : resolved;
+  // #54: the browser's setup page shows the first 16 hex (64 bits, the
+  // evil-twin floor) grouped in fours, so the panel shows the same short form
+  // and labels it. The full 64-hex value is still what the wire carries and is
+  // still validated above; only the printed form is shortened.
+  auto short_fingerprint = [](const QString &value) {
+    const QString hex = value.left(16).toLower();
+    QStringList groups;
+    for (qsizetype i = 0; i < hex.size(); i += 4) groups << hex.mid(i, 4);
+    return groups.join(QLatin1Char(' '));
+  };
   auto grouped = [](const QString &value, const QString &indent) {
     return QStringLiteral("%1 %2\n%3%4 %5")
         .arg(value.sliced(0, 16), value.sliced(16, 16), indent, value.sliced(32, 16), value.sliced(48, 16));
   };
-  return QStringLiteral("SETUP AP  %1  (open network)\n%2\nFINGERPRINT  %3\nTOKEN  %4")
-      .arg(ssid, url, grouped(fingerprint, QStringLiteral("             ")),
-           grouped(token, QStringLiteral("       ")));
+  QString notice = QStringLiteral("SETUP AP  %1  (open network)\n%2\nFINGERPRINT (first 16)  %3")
+      .arg(ssid, url, short_fingerprint(fingerprint));
+  if (token.size() == 64)
+    notice += QStringLiteral("\nTOKEN  %1").arg(grouped(token, QStringLiteral("       ")));
+  return notice;
 }
 
 // Inset targets avoid the bezel, where resistive panels are least linear.
@@ -96,6 +118,13 @@ QString display_state_file() {
 
 QStringList display_recovery_files() {
   return {"--state-file", display_state_file(), "--calibration-file", calibration_file()};
+}
+
+// #18: the owner-set steering lock-to-lock. Display-only state (never sent on
+// the wire, which keeps the sim's own reading truthful), so it lives with the
+// other panel state. A setup-page writer can use the same path/schema.
+QString steering_lock_file() {
+  return qEnvironmentVariable("RAPID_STEERING_LOCK", "/var/lib/rapid/steering-lock.json");
 }
 
 QString file_signature(const QString &path) {
@@ -122,6 +151,7 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayRotation);
+  QTimer::singleShot(0, this, &DashboardModel::pollSteeringLock);
   // The HTTP poll loop keeps running underneath the socket (it is a no-op
   // fetch while the push is active, see pollLive()) so that losing the
   // socket at any moment falls straight back to it without a gap.
@@ -211,11 +241,25 @@ void DashboardModel::pollSetupStatus() {
                                        "/run/rapid/network-ssid"));
   const auto status_contents = file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
   const auto ssid_contents = ssid_file.open(QIODevice::ReadOnly) ? ssid_file.readAll() : QByteArray{};
-  const QString next = setup_notice(status_contents, ssid_contents);
+  // #59: the setup page URL is shown on the panel's settings page. It is the
+  // same first-boot bootstrap the setup card reads; empty until first boot has
+  // published it.
+  QString next_url;
+  {
+    const auto document = QJsonDocument::fromJson(status_contents);
+    if (document.isObject()) {
+      const auto bootstrap = document.object().value("bootstrap");
+      if (bootstrap.isObject()) next_url = bootstrap.toObject().value("setup_url").toString();
+    }
+  }
+  bool changed = false;
+  if (setup_url_ != next_url) { setup_url_ = next_url; changed = true; }
+  const QString next = setup_notice(status_contents, ssid_contents, network_mode_ == "ap");
   if (setup_notice_ != next) {
     setup_notice_ = next;
-    bump();
+    changed = true;
   }
+  if (changed) bump();
   QTimer::singleShot(1000, this, &DashboardModel::pollSetupStatus);
 }
 
@@ -319,6 +363,68 @@ void DashboardModel::pollDisplayRotation() {
     bump();
   }
   QTimer::singleShot(500, this, &DashboardModel::pollDisplayRotation);
+}
+
+int DashboardModel::simSteeringLockDeg() const {
+  bool ok = false;
+  const double value = state_.value("steering_lock_deg").toDouble(&ok);
+  return ok && std::isfinite(value) && value > 0 ? qRound(value) : 0;
+}
+
+int DashboardModel::effectiveSteeringLockDeg() const {
+  const int sim = simSteeringLockDeg();
+  if (sim > 0) return sim;
+  return user_steering_lock_deg_ > 0 ? user_steering_lock_deg_ : kDefaultSteeringLockDeg;
+}
+
+bool DashboardModel::setUserSteeringLockDeg(int degrees) {
+  int next = degrees;
+  if (next != 0) next = std::clamp(next, kMinSteeringLockDeg, kMaxSteeringLockDeg);
+  const QString path = steering_lock_file();
+  const QFileInfo info(path);
+  QDir().mkpath(info.absolutePath());
+  const auto temporary = path + ".tmp";
+  QFile file(temporary);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+  const QJsonObject object{{"lock_to_lock_deg", next}};
+  if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0 || !file.flush()) {
+    file.close();
+    QFile::remove(temporary);
+    return false;
+  }
+  file.close();
+  file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                      QFileDevice::ReadGroup);
+  QFile::remove(path);
+  if (!QFile::rename(temporary, path)) return false;
+  if (next != user_steering_lock_deg_) {
+    user_steering_lock_deg_ = next;
+    bump();
+  }
+  return true;
+}
+
+void DashboardModel::pollSteeringLock() {
+  // Owner-set display fallback (#18). Reading it here (rather than only at
+  // startup) means a setup-page writer using the same file takes effect without
+  // a panel restart, and an external clear returns the wheel to the sim/default.
+  int value = 0;
+  QFile file(steering_lock_file());
+  if (file.open(QIODevice::ReadOnly)) {
+    const auto object = QJsonDocument::fromJson(file.readAll()).object();
+    const auto raw = object.value("lock_to_lock_deg");
+    if (raw.isDouble()) {
+      const int candidate = raw.toInt();
+      if (candidate == 0) value = 0;
+      else if (candidate >= kMinSteeringLockDeg && candidate <= kMaxSteeringLockDeg)
+        value = candidate;
+    }
+  }
+  if (value != user_steering_lock_deg_) {
+    user_steering_lock_deg_ = value;
+    bump();
+  }
+  QTimer::singleShot(2000, this, &DashboardModel::pollSteeringLock);
 }
 
 QPointF DashboardModel::screenPoint(double x, double y) const {
@@ -657,6 +763,21 @@ void DashboardModel::setNetworkMode(const QString &mode) {
   request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
   auto *reply = network_->post(request, QJsonDocument(QJsonObject{{"mode", mode}}).toJson(QJsonDocument::Compact));
   connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
+}
+
+void DashboardModel::restartSetupService() {
+  // The panel runs as the rapid user, which may write the mode controller's
+  // request directory; the root rapid-network-mode worker owns the actual
+  // restart of rapid-setup.service. This is the same file hand-off the Wi-Fi
+  // mode buttons use, so the panel needs no privilege of its own.
+  const auto directory = qEnvironmentVariable("RAPID_NETWORK_CONTROL", "/run/rapid-network");
+  QFile file(QDir(directory).filePath("request"));
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+  file.write(QJsonDocument(QJsonObject{{"action", "restart-setup"}}).toJson(QJsonDocument::Compact));
+  file.close();
+  log_notice_ = "Restarting setup…";
+  bump();
+  QTimer::singleShot(3000, this, [this] { log_notice_.clear(); bump(); });
 }
 
 void DashboardModel::pollLogStatus() {

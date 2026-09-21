@@ -249,6 +249,18 @@ void policy_tests() {
               !account::shadow_password_usable("*") && !account::shadow_password_usable("!$y$abc") &&
               account::shadow_password_usable(hash),
           "shadow field states");
+
+  // #28 management: the public key fingerprint identifies an enrolled key for
+  // listing/removal without any private material.
+  const auto fingerprint = account::key_fingerprint(ed->blob_base64);
+  require(fingerprint.size() == 64 &&
+              fingerprint.find_first_not_of("0123456789abcdef") == std::string::npos,
+          "the key fingerprint is lowercase hex");
+  require(fingerprint == account::key_fingerprint(ed->blob_base64), "the key fingerprint is stable");
+  const auto ecdsa = account::parse_public_key(ecdsa_key());
+  require(ecdsa && account::key_fingerprint(ecdsa->blob_base64) != fingerprint,
+          "distinct keys have distinct fingerprints");
+  require(account::key_fingerprint("not base64!!").empty(), "an undecodable blob has no fingerprint");
 }
 
 void api_tests(const fs::path &base) {
@@ -428,6 +440,16 @@ void helper_tests(const fs::path &base, const std::string &helper) {
           "SSH is unmasked, enabled and started once a credential exists");
   require(read_file(device.log_directory / "ssh-keygen.log") == "-A\n", "per-device host keys generated");
   require(!fs::exists(device.log_directory / "sshd.log"), "sshd -t waits for ssh.service when never started");
+  // #28 persistence regression: an enrolled key must survive an unrelated
+  // account request. The original failure was the shared /run/rapid-apply queue
+  // being torn down by a stopping consumer, so the account write never landed;
+  // the key now stays and is reported by the helper's own list.
+  queue({{"request_id", id}, {"password_hash", hash}, {"replace_existing_password", true}});
+  require(device.run() == 0, "an unrelated password-only request applies");
+  require(read_file(device.keys()) == ed25519_key(3) + "\n" &&
+              device.result()["keys"].size() == 1 &&
+              device.result()["keys"][0]["comment"] == "owner@laptop",
+          "an enrolled key survives an unrelated account request (shared-queue regression)");
 
   // 2. Dev Pi: an existing password is not replaced without confirmation.
   device.reset("rapid:" + yescrypt("Existing-dev-pass1") + ":19000:0:99999:7:::\n", "/bin/bash");
@@ -474,6 +496,54 @@ void helper_tests(const fs::path &base, const std::string &helper) {
   require(device.run() == 0 && device.result()["ssh_key"] == "already_present" &&
               read_file(device.keys()) == ed25519_key(5, "existing-dev-key") + "\n" + ed25519_key(6) + "\n",
           "the same key is not added twice");
+
+  // 3b. #28 management: list, edit and remove enrolled keys through the same
+  // helper and queue. Only public material is listed, and a remove or edit
+  // acts on the exact public fingerprint.
+  const auto first_fingerprint = account::key_fingerprint(
+      account::parse_public_key(ed25519_key(5, "existing-dev-key"))->blob_base64);
+  queue({{"request_id", id}, {"action", "list_keys"}});
+  require(device.run() == 0, "list action applies");
+  result = device.result();
+  require(result["status"] == "applied" && result["keys"].is_array() &&
+              result["keys"].size() == 2 &&
+              result["keys"][0]["type"] == "ssh-ed25519" &&
+              result["keys"][0]["comment"] == "existing-dev-key" &&
+              result["keys"][0]["fingerprint"] == first_fingerprint &&
+              result["keys"][0]["key"] == ed25519_key(5, "existing-dev-key") &&
+              result.dump().find("PRIVATE") == std::string::npos,
+          "list returns public key metadata only: " + result.dump());
+  queue({{"request_id", id}, {"action", "remove_key"}, {"remove_fingerprint", first_fingerprint}});
+  require(device.run() == 0, "remove action applies");
+  result = device.result();
+  require(result["status"] == "applied" && result["ssh_key"] == "removed" &&
+              result["keys"].size() == 1 &&
+              read_file(device.keys()) == ed25519_key(6) + "\n",
+          "remove drops exactly the matching public key");
+  queue({{"request_id", id}, {"action", "remove_key"}, {"remove_fingerprint", std::string(64, 'b')}});
+  require(device.run() == 0 && device.result()["ssh_key"] == "not_found" &&
+              device.result()["keys"].size() == 1,
+          "removing an absent fingerprint changes nothing");
+  // Edit = remove the old line and install the new one in one request.
+  const auto second_fingerprint = account::key_fingerprint(
+      account::parse_public_key(ed25519_key(6))->blob_base64);
+  queue({{"request_id", id}, {"authorized_key", ed25519_key(6, "renamed")},
+         {"remove_fingerprint", second_fingerprint}});
+  require(device.run() == 0, "edit applies");
+  result = device.result();
+  require(result["ssh_key"] == "installed" && result["keys"].size() == 1 &&
+              result["keys"][0]["comment"] == "renamed" &&
+              read_file(device.keys()) == ed25519_key(6, "renamed") + "\n",
+          "edit replaces the enrolled key's line without duplicating it");
+  // A line that is not a valid key is preserved on disk but never listed.
+  write_text(device.keys(), "not a key\n" + ed25519_key(5) + "\n");
+  if (::geteuid() == 0)
+    require(::chown(device.keys().c_str(), device.uid, device.gid) == 0,
+            "chown the hostile-list fixture");
+  queue({{"request_id", id}, {"action", "list_keys"}});
+  require(device.run() == 0 && device.result()["keys"].size() == 1 &&
+              read_file(device.keys()) == "not a key\n" + ed25519_key(5) + "\n",
+          "an unparseable authorized_keys line is preserved but never listed");
 
   // 4. sshd rejects the configuration: the previous drop-in is restored.
   write_text(device.drop_in(), "# previous\nPasswordAuthentication no\n");
@@ -726,6 +796,53 @@ void ssh_key_enrollment_tests(const fs::path &base) {
               Json::parse(read_file(request_file))["authorized_key"] == ecdsa,
           "a generated ECDSA P-256 key is accepted");
   fs::remove(request_file);
+
+  // #28 management: list/remove use the same endpoint and queue, and a list is
+  // a read that does not consume the change rate limit.
+  next_window();
+  for (int i = 0; i < 8; ++i) {
+    require(post({{"action", "list_keys"}}).status == 202, "a key list is always accepted");
+    const auto queued_list = Json::parse(read_file(request_file));
+    require(queued_list["action"] == "list_keys" && !queued_list.contains("password_hash"),
+            "a list request carries only its id and action");
+    fs::remove(request_file);
+  }
+  next_window();
+  const auto remove = post({{"action", "remove_key"}, {"fingerprint", std::string(64, 'a')}});
+  require(remove.status == 202 &&
+              Json::parse(read_file(request_file))["action"] == "remove_key" &&
+              Json::parse(read_file(request_file))["remove_fingerprint"] == std::string(64, 'a'),
+          "a remove request carries only the public fingerprint");
+  fs::remove(request_file);
+  next_window();
+  require(post({{"action", "remove_key"}, {"fingerprint", "short"}}).status == 400 &&
+              post({{"action", "remove_key"}, {"fingerprint", std::string(64, 'A')}}).status == 400 &&
+              !fs::exists(request_file),
+          "an invalid fingerprint is refused");
+  next_window();
+  require(post({{"action", "list_keys"}, {"password", "leak"}}).status == 400 &&
+              post({{"action", "delete_everything"}}).status == 400 &&
+              !fs::exists(request_file),
+          "no unexpected action or field is accepted");
+  // The result allowlist republishes only public key metadata.
+  write_text(result_file, Json{{"request_id", std::string(32, 'c')}, {"status", "applied"},
+                               {"keys", Json::array({Json{{"fingerprint", std::string(64, 'd')},
+                                                          {"type", "ssh-ed25519"},
+                                                          {"comment", "laptop"},
+                                                          {"key", ed25519_key(12)},
+                                                          {"private_key", "SECRET"}}})},
+                               {"private_material", "SECRET"}}.dump());
+  auto get = request("/api/v1/account");
+  get.headers["cookie"] = session;
+  const auto listed = Json::parse(auth.handle(get).body);
+  require(listed["result"]["keys"].size() == 1 &&
+              listed["result"]["keys"][0]["comment"] == "laptop" &&
+              listed["result"]["keys"][0]["fingerprint"] == std::string(64, 'd') &&
+              !listed["result"]["keys"][0].contains("private_key") &&
+              !listed["result"].contains("private_material") &&
+              listed.dump().find("SECRET") == std::string::npos,
+          "the account status allowlists only public key metadata");
+  fs::remove(result_file);
 }
 } // namespace
 

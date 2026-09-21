@@ -79,47 +79,12 @@ read_service("./usr/lib/rapid/rapid-panel" panel_script)
 read_service("./usr/lib/tmpfiles.d/rapid.conf" tmpfiles_file)
 file(REMOVE "${data_tar}")
 set(nl "\n")
-# #25: rapid-firstboot.service and rapid-provision.service both declare
-# RuntimeDirectory=rapid, so whichever one starts first fixes /run/rapid's
-# owning group and mode for the other (systemd re-applies a unit's own
-# RuntimeDirectory ownership recursively on every start that declares it).
-# Group=rapid must appear on both (directly, or via User=rapid's own primary
-# group for first boot) and RuntimeDirectoryMode must match exactly, or the
-# directory can end up unreadable, or unwritable, for whichever unit starts
-# second. 0770 (not just 0750) is required because rapid.service and
-# rapid-setup.service both create new files under /run/rapid (pairing
-# coordinator files, the calibration request) as group "rapid", not as owner.
-string(REGEX MATCH "${nl}RuntimeDirectoryMode=([^${nl}]*)${nl}" firstboot_mode_match "${firstboot_service}")
-set(firstboot_runtime_mode "${CMAKE_MATCH_1}")
-string(REGEX MATCH "${nl}RuntimeDirectoryMode=([^${nl}]*)${nl}" provision_mode_match "${provision_service}")
-set(provision_runtime_mode "${CMAKE_MATCH_1}")
-if(NOT firstboot_service MATCHES "User=rapid" OR
-   NOT firstboot_service MATCHES "Group=rapid" OR
-   NOT firstboot_service MATCHES "StateDirectory=rapid-setup" OR
-   NOT firstboot_service MATCHES "RuntimeDirectory=rapid" OR
-   NOT firstboot_runtime_mode STREQUAL "0770")
-  message(FATAL_ERROR "First boot must create private setup state as the rapid service user and share /run/rapid at mode 0770")
-endif()
-if(NOT provision_service MATCHES "User=root" OR
-   NOT provision_service MATCHES "Group=rapid" OR
-   NOT provision_service MATCHES "Requires=rapid-firstboot[.]service" OR
-   NOT provision_service MATCHES "--status-file /run/rapid/firstboot[.]json" OR
-   NOT provision_service MATCHES "--ssid-file /run/rapid/network-ssid" OR
-   NOT provision_service MATCHES "RuntimeDirectory=rapid")
-  message(FATAL_ERROR "Only the provisioner may run as root for the generated setup-AP state, and it must share /run/rapid with the rapid group")
-endif()
 # #22: the setup AP is the fixed, open network "rapid" (or "rapid-NNNN" only
 # on an SSID collision); its NetworkManager profile has no wifi-security.
 # rapid-provision is the only unit that creates/modifies that profile as root,
 # so it must never be handed a passphrase or key-management setting either.
 if(provision_service MATCHES "[Pp][Ss][Kk]|wifi-sec|wireless-security|password")
   message(FATAL_ERROR "rapid-provision.service must not carry an AP passphrase or security setting; the setup AP is open")
-endif()
-# Checked against firstboot's own required value (rather than hard-coding 0770
-# again here) so this rule stays meaningful even if that value ever changes:
-# the two units must agree, whatever the value is.
-if(NOT provision_runtime_mode STREQUAL firstboot_runtime_mode)
-  message(FATAL_ERROR "rapid-firstboot.service and rapid-provision.service must declare the exact same RuntimeDirectoryMode for the /run/rapid they share")
 endif()
 # Generic cross-check (#25): every unit below runs with ProtectSystem=strict,
 # which makes its whole filesystem view read-only except paths it explicitly
@@ -170,6 +135,39 @@ function(assert_writable_path service_content service_name required_path)
     message(FATAL_ERROR "${service_name} is sandboxed with ProtectSystem=strict but does not grant write access to ${required_path}, which its binary is configured to write")
   endif()
 endfunction()
+# #40: /run/rapid is shared by rapid-firstboot.service (owner), the root
+# rapid-provision.service and rapid-setup.service. A shared RuntimeDirectory is
+# not reference counted: systemd removes it when ANY declaring unit stops, so a
+# consumer that also declared RuntimeDirectory=rapid deleted the directory out
+# from under the others (same class as #25). rapid-firstboot.service is the
+# single lifecycle owner; the consumers are ordered after it and granted
+# ReadWritePaths=/run/rapid. Group=rapid and mode 0770 keep it usable by the
+# unprivileged setup server and the root helpers. Checked before the generic
+# writable-path cross-check below so a missing owner is reported as the
+# ownership defect it is, not as a missing grant.
+string(REGEX MATCH "${nl}RuntimeDirectoryMode=([^${nl}]*)${nl}" firstboot_mode_match "${firstboot_service}")
+set(firstboot_runtime_mode "${CMAKE_MATCH_1}")
+if(NOT firstboot_service MATCHES "User=rapid" OR
+   NOT firstboot_service MATCHES "Group=rapid" OR
+   NOT firstboot_service MATCHES "StateDirectory=rapid-setup" OR
+   NOT firstboot_service MATCHES "${nl}RuntimeDirectory=rapid${nl}" OR
+   NOT firstboot_runtime_mode STREQUAL "0770")
+  message(FATAL_ERROR "First boot must create private setup state as the rapid service user and own /run/rapid at mode 0770")
+endif()
+if(NOT provision_service MATCHES "User=root" OR
+   NOT provision_service MATCHES "${nl}Group=rapid${nl}" OR
+   NOT provision_service MATCHES "Requires=rapid-firstboot[.]service" OR
+   NOT provision_service MATCHES "--status-file /run/rapid/firstboot[.]json" OR
+   NOT provision_service MATCHES "--ssid-file /run/rapid/network-ssid" OR
+   NOT provision_service MATCHES "${nl}ReadWritePaths=/run/rapid${nl}")
+  message(FATAL_ERROR "Only the provisioner may run as root for the generated setup-AP state, and it must consume /run/rapid through ReadWritePaths=")
+endif()
+if(provision_service MATCHES "${nl}RuntimeDirectory=rapid${nl}")
+  message(FATAL_ERROR "rapid-provision.service must not declare RuntimeDirectory=rapid; rapid-firstboot.service is the single lifecycle owner of /run/rapid")
+endif()
+if(setup_service MATCHES "${nl}RuntimeDirectory=rapid${nl}")
+  message(FATAL_ERROR "rapid-setup.service must not declare RuntimeDirectory=rapid; rapid-firstboot.service is the single lifecycle owner of /run/rapid")
+endif()
 assert_writable_path("${firstboot_service}" "rapid-firstboot.service" "/run/rapid/firstboot.json")
 assert_writable_path("${provision_service}" "rapid-provision.service" "/run/rapid/network-ssid")
 assert_writable_path("${setup_service}" "rapid-setup.service" "/run/rapid/calibration-request.json")
@@ -235,6 +233,18 @@ if(NOT setup_service MATCHES "User=rapid" OR
    NOT setup_service MATCHES "--display-confirm-file /run/rapid-apply/display-confirm[.]json")
   message(FATAL_ERROR "Setup service must use generated rapid-owned AP/TLS state and fixed listener")
 endif()
+# #51: /var/lib/rapid-setup holds the device TLS identity, the enrollment token
+# and the owner's setup database. It must stay private to the rapid service
+# user, so both units that create it must declare StateDirectoryMode=0700; a
+# future edit that widened it would otherwise pass verification.
+if(NOT firstboot_service MATCHES "${nl}StateDirectory=rapid-setup${nl}" OR
+   NOT firstboot_service MATCHES "${nl}StateDirectoryMode=0700${nl}")
+  message(FATAL_ERROR "rapid-firstboot.service must create /var/lib/rapid-setup with StateDirectoryMode=0700")
+endif()
+if(NOT setup_service MATCHES "${nl}StateDirectory=rapid-setup${nl}" OR
+   NOT setup_service MATCHES "${nl}StateDirectoryMode=0700${nl}")
+  message(FATAL_ERROR "rapid-setup.service must keep /var/lib/rapid-setup at StateDirectoryMode=0700")
+endif()
 if(NOT firstboot_service MATCHES "--tls-certificate /var/lib/rapid-setup/device[.]crt" OR
    NOT firstboot_service MATCHES "--tls-private-key /var/lib/rapid-setup/device[.]key")
   message(FATAL_ERROR "First boot must provision the setup TLS identity")
@@ -295,6 +305,25 @@ if(NOT display_recovery_service MATCHES "${nl}ProtectSystem=strict${nl}" OR
    NOT display_recovery_service MATCHES "${nl}ReadWritePaths=/var/lib/rapid${nl}")
   message(FATAL_ERROR "rapid-display-recovery.service must keep ProtectSystem=strict and grant ReadWritePaths=/var/lib/rapid for its recovery state file")
 endif()
+# #41: /var/lib/rapid is created by rapid.service's StateDirectory=rapid
+# (rapid:rapid 0700). rapid-apply.service and rapid-display-recovery.service
+# grant ReadWritePaths=/var/lib/rapid, which systemd requires to exist before
+# ExecStart, so both must be ordered after rapid.service. They must NOT declare
+# StateDirectory=rapid themselves: that would re-own the directory to root and
+# lock out rapid.service.
+foreach(name IN ITEMS apply display_recovery)
+  set(service_var "${name}_service")
+  set(service "${${service_var}}")
+  if(NOT service MATCHES "${nl}Requires=rapid[.]service${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must require rapid.service so /var/lib/rapid exists before its mount namespace")
+  endif()
+  if(NOT service MATCHES "${nl}After=rapid[.]service${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must be ordered After=rapid.service, which creates /var/lib/rapid")
+  endif()
+  if(service MATCHES "${nl}StateDirectory=rapid${nl}")
+    message(FATAL_ERROR "rapid-${name}.service must not declare StateDirectory=rapid; that would re-own /var/lib/rapid to root and lock out rapid.service")
+  endif()
+endforeach()
 # #26: the Home Wi-Fi passphrase reaches NetworkManager as a private keyfile
 # rapid-wifi writes itself, never as an nmcli argument; under
 # ProtectSystem=strict it needs its own explicit write access to
@@ -333,5 +362,16 @@ if(EXPECT_IMAGE_READY)
   endif()
 elseif(NOT image_ready_pos EQUAL -1)
   message(FATAL_ERROR "Ordinary package must not contain the image-ready marker")
+endif()
+# #48: the setup page serves the bundled Windows companion from
+# /usr/share/rapid/companion (rapid-setup.service passes --companion-artifact
+# /usr/share/rapid/companion). A release package that ships without it would
+# advertise a download it cannot serve, so require at least one artifact there
+# for an image-ready/release package. Ordinary main builds may omit it.
+string(REGEX MATCH " ./usr/share/rapid/companion/[^ \n]+" companion_artifact_pos "${contents}")
+if(EXPECT_IMAGE_READY)
+  if(companion_artifact_pos STREQUAL "")
+    message(FATAL_ERROR "Release package must contain the bundled companion artifact under ./usr/share/rapid/companion/")
+  endif()
 endif()
 message(STATUS "Package contents, dependencies and conffile checks passed")

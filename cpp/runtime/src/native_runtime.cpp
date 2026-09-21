@@ -423,6 +423,10 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
         last_sample_ = 0;
         state_["session_active"] = false;
         state_["session_id"] = Json();
+        // An explicit non-open status (waiting/ready on a fresh run) is a
+        // session-identity change, so drop the previous session's lock exactly
+        // like a disconnect does (#47); fresh metadata re-populates it.
+        state_["steering_lock_deg"] = nullptr;
         session_.clear();
         sequence_ = -1;
       } else {
@@ -453,8 +457,13 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       for (auto *key :
            {"best_lap_ms", "sector_1_ms", "sector_2_ms", "sector_3_ms",
             "sector_1_delta_ms", "sector_2_delta_ms", "sector_3_delta_ms",
-            "delta_ms"})
+            "delta_ms", "steering_lock_deg"})
         state_[key] = nullptr;
+      // The stale lock is cleared above; a metadata packet carries the new
+      // session's lock and re-applies it here (#47), so a car/session change
+      // never shows the previous lock for a tick.
+      if (m.contains("steering_lock_deg"))
+        state_["steering_lock_deg"] = m["steering_lock_deg"];
     }
     if (sequence >= 0)
       sequence_ = sequence;
