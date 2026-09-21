@@ -9,10 +9,13 @@ Before=rapid-setup.service rapid-network-mode.service
 Type=oneshot
 User=root
 Group=rapid
-# Must match rapid-firstboot.service's RuntimeDirectory=rapid declaration
-# exactly (owning group and mode): see the comment there (#25).
-RuntimeDirectory=rapid
-RuntimeDirectoryMode=0770
+# /run/rapid is owned by rapid-firstboot.service (RuntimeDirectory=rapid,
+# Group=rapid, 0770); this unit must NOT declare it. A shared RuntimeDirectory
+# is not reference counted, so stopping or restarting the provisioner would
+# delete /run/rapid while rapid-setup.service and rapid.service still need it
+# (#40, same class as #25). The Requires=/After=rapid-firstboot.service above
+# plus this ReadWritePaths grant is the consumer side of that ownership.
+ReadWritePaths=/run/rapid
 ExecStart=/usr/lib/rapid/rapid-provision --status-file /run/rapid/firstboot.json --ssid-file /run/rapid/network-ssid
 RemainAfterExit=true
 NoNewPrivileges=true

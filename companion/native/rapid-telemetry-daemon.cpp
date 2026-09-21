@@ -76,7 +76,7 @@ std::vector<std::uint8_t> export_curve25519_wire_public(BCRYPT_KEY_HANDLE key);
 // Build identity shown in the tray "Show status" dialog, injected at build
 // time by companion/build-native-daemon.ps1 using the package rule
 // (packaging/RapidVersion.cmake): a vX.Y.Z tag checkout is X.Y.Z, any other
-// commit is 0.9.9~dev+<short-sha>.
+// commit is 0.9.9~dev.<commit-count>+<short-sha>.
 constexpr const char* kBuildVersion = RAPID_BUILD_VERSION;
 
 // Pairing credentials are deliberately protected before they leave the

@@ -1,4 +1,9 @@
 d /etc/rapid 0750 root rapid -
+# /run/rapid is deliberately NOT here: rapid-firstboot.service owns it with
+# RuntimeDirectory=rapid (Group=rapid, 0770); rapid-provision.service and
+# rapid-setup.service consume it through ReadWritePaths=/run/rapid (#40).
+# tmpfiles.d is only applied at boot and by the dpkg trigger, neither ordered
+# against a service start, so it cannot own a path a service needs at ExecStart.
 # /run/rapid-apply is deliberately NOT here: tmpfiles.d is only applied at boot
 # and by the dpkg trigger, neither ordered against a service restart, so a
 # missing directory made rapid-setup fail with 226/NAMESPACE. rapid-setup.service
