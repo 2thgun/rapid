@@ -69,13 +69,22 @@ QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_c
     return {};
   const auto resolved = QString::fromUtf8(ssid_contents).trimmed();
   const auto ssid = resolved.isEmpty() ? QStringLiteral("rapid") : resolved;
+  // #54: the browser's setup page shows the first 16 hex (64 bits, the
+  // evil-twin floor) grouped in fours, so the panel shows the same short form
+  // and labels it. The full 64-hex value is still what the wire carries and is
+  // still validated above; only the printed form is shortened.
+  auto short_fingerprint = [](const QString &value) {
+    const QString hex = value.left(16).toLower();
+    QStringList groups;
+    for (qsizetype i = 0; i < hex.size(); i += 4) groups << hex.mid(i, 4);
+    return groups.join(QLatin1Char(' '));
+  };
   auto grouped = [](const QString &value, const QString &indent) {
     return QStringLiteral("%1 %2\n%3%4 %5")
         .arg(value.sliced(0, 16), value.sliced(16, 16), indent, value.sliced(32, 16), value.sliced(48, 16));
   };
-  return QStringLiteral("SETUP AP  %1  (open network)\n%2\nFINGERPRINT  %3\nTOKEN  %4")
-      .arg(ssid, url, grouped(fingerprint, QStringLiteral("             ")),
-           grouped(token, QStringLiteral("       ")));
+  return QStringLiteral("SETUP AP  %1  (open network)\n%2\nFINGERPRINT (first 16)  %3\nTOKEN  %4")
+      .arg(ssid, url, short_fingerprint(fingerprint), grouped(token, QStringLiteral("       ")));
 }
 
 // Inset targets avoid the bezel, where resistive panels are least linear.
@@ -96,6 +105,13 @@ QString display_state_file() {
 
 QStringList display_recovery_files() {
   return {"--state-file", display_state_file(), "--calibration-file", calibration_file()};
+}
+
+// #18: the owner-set steering lock-to-lock. Display-only state (never sent on
+// the wire, which keeps the sim's own reading truthful), so it lives with the
+// other panel state. A setup-page writer can use the same path/schema.
+QString steering_lock_file() {
+  return qEnvironmentVariable("RAPID_STEERING_LOCK", "/var/lib/rapid/steering-lock.json");
 }
 
 QString file_signature(const QString &path) {
@@ -122,6 +138,7 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   QTimer::singleShot(0, this, &DashboardModel::pollCalibrationFile);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayRotation);
+  QTimer::singleShot(0, this, &DashboardModel::pollSteeringLock);
   // The HTTP poll loop keeps running underneath the socket (it is a no-op
   // fetch while the push is active, see pollLive()) so that losing the
   // socket at any moment falls straight back to it without a gap.
@@ -319,6 +336,68 @@ void DashboardModel::pollDisplayRotation() {
     bump();
   }
   QTimer::singleShot(500, this, &DashboardModel::pollDisplayRotation);
+}
+
+int DashboardModel::simSteeringLockDeg() const {
+  bool ok = false;
+  const double value = state_.value("steering_lock_deg").toDouble(&ok);
+  return ok && std::isfinite(value) && value > 0 ? qRound(value) : 0;
+}
+
+int DashboardModel::effectiveSteeringLockDeg() const {
+  const int sim = simSteeringLockDeg();
+  if (sim > 0) return sim;
+  return user_steering_lock_deg_ > 0 ? user_steering_lock_deg_ : kDefaultSteeringLockDeg;
+}
+
+bool DashboardModel::setUserSteeringLockDeg(int degrees) {
+  int next = degrees;
+  if (next != 0) next = std::clamp(next, kMinSteeringLockDeg, kMaxSteeringLockDeg);
+  const QString path = steering_lock_file();
+  const QFileInfo info(path);
+  QDir().mkpath(info.absolutePath());
+  const auto temporary = path + ".tmp";
+  QFile file(temporary);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+  const QJsonObject object{{"lock_to_lock_deg", next}};
+  if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0 || !file.flush()) {
+    file.close();
+    QFile::remove(temporary);
+    return false;
+  }
+  file.close();
+  file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                      QFileDevice::ReadGroup);
+  QFile::remove(path);
+  if (!QFile::rename(temporary, path)) return false;
+  if (next != user_steering_lock_deg_) {
+    user_steering_lock_deg_ = next;
+    bump();
+  }
+  return true;
+}
+
+void DashboardModel::pollSteeringLock() {
+  // Owner-set display fallback (#18). Reading it here (rather than only at
+  // startup) means a setup-page writer using the same file takes effect without
+  // a panel restart, and an external clear returns the wheel to the sim/default.
+  int value = 0;
+  QFile file(steering_lock_file());
+  if (file.open(QIODevice::ReadOnly)) {
+    const auto object = QJsonDocument::fromJson(file.readAll()).object();
+    const auto raw = object.value("lock_to_lock_deg");
+    if (raw.isDouble()) {
+      const int candidate = raw.toInt();
+      if (candidate == 0) value = 0;
+      else if (candidate >= kMinSteeringLockDeg && candidate <= kMaxSteeringLockDeg)
+        value = candidate;
+    }
+  }
+  if (value != user_steering_lock_deg_) {
+    user_steering_lock_deg_ = value;
+    bump();
+  }
+  QTimer::singleShot(2000, this, &DashboardModel::pollSteeringLock);
 }
 
 QPointF DashboardModel::screenPoint(double x, double y) const {

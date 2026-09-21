@@ -61,6 +61,9 @@ int main(int argc, char **argv) {
   }
   qputenv("RAPID_DISPLAY_RECOVERY", helper.toUtf8());
   qputenv("RAPID_DISPLAY_STATE", helper_directory.filePath("display-state.json").toUtf8());
+  // #18: the owner-set steering lock is display state, read/written by the panel.
+  const auto steering_lock_path = helper_directory.filePath("steering-lock.json");
+  qputenv("RAPID_STEERING_LOCK", steering_lock_path.toUtf8());
   qputenv("RAPID_TOUCH_CALIBRATION", calibration_path.toUtf8());
   const auto calibration_request = helper_directory.filePath("calibration-request.json");
   qputenv("RAPID_CALIBRATION_REQUEST", calibration_request.toUtf8());
@@ -183,6 +186,47 @@ int main(int argc, char **argv) {
           "A discontinuous steering change snaps through the model");
   state["steering_angle"] = 0.25;
   spin(400);
+  // #18: the lock-to-lock is user-settable and only a display fallback. The
+  // wire value (iRacing's own lock) always wins; the owner value is used when
+  // the sim exposes none; the "*" marker only when neither exists.
+  {
+    const auto read_lock_file = [&] {
+      QFile file(steering_lock_path);
+      return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString{};
+    };
+    require(model.userSteeringLockDeg() == 0 && !model.steeringLockKnown() &&
+                model.effectiveSteeringLockDeg() == 900,
+            "#18: with no sim lock and no owner value the panel uses the 900 default (unknown)");
+    require(model.setUserSteeringLockDeg(540) && model.userSteeringLockDeg() == 540 &&
+                model.steeringLockKnown() && model.effectiveSteeringLockDeg() == 540,
+            "#18: an owner-set lock is used and marks the lock known");
+    require(read_lock_file().contains("\"lock_to_lock_deg\":540"),
+            "#18: the owner-set lock is persisted for the next boot");
+    // iRacing supplies its own lock on the wire and must win over the owner value.
+    state["steering_lock_deg"] = 480;
+    spin(400);
+    require(model.effectiveSteeringLockDeg() == 480 && model.userSteeringLockDeg() == 540,
+            "#18: the sim's own lock wins over the owner value");
+    require(model.setUserSteeringLockDeg(0) && model.effectiveSteeringLockDeg() == 480,
+            "#18: AUTO clears the owner value while the sim value still applies");
+    state.remove("steering_lock_deg");
+    spin(400);
+    require(!model.steeringLockKnown() && model.effectiveSteeringLockDeg() == 900,
+            "#18: clearing the owner value with no sim lock returns to the unknown default");
+    require(model.setUserSteeringLockDeg(5000) && model.userSteeringLockDeg() == 1440 &&
+                model.effectiveSteeringLockDeg() == 1440,
+            "#18: an out-of-range owner value is clamped to the maximum");
+    {
+      QFile file(steering_lock_path);
+      require(file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                  file.write("{\"lock_to_lock_deg\":360}") == 24,
+              "write an external steering-lock value");
+    }
+    spin(2200);
+    require(model.userSteeringLockDeg() == 360 && model.effectiveSteeringLockDeg() == 360,
+            "#18: an externally written lock (setup page) is picked up without a restart");
+    require(model.setUserSteeringLockDeg(0), "reset the owner steering lock");
+  }
   // #13: the panel renders the orientation rapid-display-recovery persisted,
   // read from the existing state file, rather than an X/xrandr transform.
   const auto display_state = helper_directory.filePath("display-state.json");
@@ -204,11 +248,12 @@ int main(int argc, char **argv) {
   require(model.displayRotation() == 0,
           "#13: the panel follows the persisted rotation back to 0 degrees");
   require(model.setupNotice().contains("SETUP AP  rapid  (open network)") &&
-              model.setupNotice().contains("fedcba9876543210 fedcba9876543210") &&
+              model.setupNotice().contains("FINGERPRINT (first 16)  fedc ba98 7654 3210") &&
+              !model.setupNotice().contains("fedcba9876543210") &&
               model.setupNotice().contains("0123456789abcdef 0123456789abcdef") &&
               !model.setupNotice().contains("PASSWORD"),
-          "Setup card/panel shows the open network's SSID, address, TLS fingerprint and "
-          "activation token, with no passphrase");
+          "#54: the panel prints the same first-16-hex fingerprint form as the browser "
+          "and still shows the full activation token, with no passphrase");
   // The activation token must be visible even before the privileged
   // provisioner has published the resolved SSID: hiding the whole card until
   // /run/rapid/network-ssid exists left the owner with no on-screen token.
