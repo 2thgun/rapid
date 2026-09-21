@@ -14,7 +14,9 @@ Window {
     // rotation rapid-display-recovery persists for the Qt model to read. The
     // whole scene, including the confirm/calibration overlays, rotates; Qt
     // unwinds the transform for touch, so the X input matrix stays
-    // rotation-free (calibration x session baseline only).
+    // rotation-free (calibration x session baseline only). The X cursor is a
+    // separate overlay this scene cannot turn, so qt_dashboard_main.cpp
+    // re-orients it from the same value.
     property int displayRotation: dashboard.displayRotation
     readonly property color accent: "#f6b91a"
     readonly property color muted: "#9dacb5"
