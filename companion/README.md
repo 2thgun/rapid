@@ -8,14 +8,24 @@ drive works) and run it:
 
 1. **First run (unpaired):** the daemon offers pairing. Enter the Pi address and
    the TLS certificate fingerprint shown on the Pi's own display (or its setup
-   page) and approve the matching verification code on the Pi. The same
-   `--pair` / `run_pairing()` client is used, so the fingerprint check, the
-   one-use envelope and the on-device approval are unchanged.
+   page). The display prints the first **16 hex** (grouped in fours, the owner's
+   evil-twin floor); the companion accepts that short form and compares it with
+   the first 16 hex of the certificate, and still accepts the full 64-hex
+   digest. Approve the matching verification code on the Pi (the panel's
+   **Pair a companion** entry shows the same address and short fingerprint and
+   can open the pairing window). The same `--pair` / `run_pairing()` client is
+   used, so the one-use envelope and the on-device approval are unchanged.
 2. The resulting 256-bit key is stored **per Windows user** under
    `%LOCALAPPDATA%\raPId\pairing.key.dpapi`, protected with DPAPI. No plaintext
    key is ever written next to the executable.
 3. **Later runs** on the same Windows account just start the tray daemon and
    use the stored credential. A different PC or Windows account pairs once.
+
+If the paired Pi is unreachable at launch (powered off, booting, out of range),
+the companion keeps running and the runtime retries; pairing again is only
+required when the Pi's pinned certificate/device identity actually changed. A
+corrupt or unreadable per-user credential offers pairing again instead of
+failing closed.
 
 No `daemon.conf`, no `telemetry.key`, no installed config path and no command
 line are required. `daemon.conf` remains supported as an *optional* advanced
@@ -92,7 +102,7 @@ The companion can verify a Pi setup certificate before a pairing client uses it:
 
 ```powershell
 ./rapid-telemetry-daemon.exe --verify-setup-url https://192.168.1.64:8002/setup `
-  --certificate-fingerprint <64 lowercase hex characters>
+  --certificate-fingerprint <first 16 hex, or the full 64 lowercase hex>
 ```
 
 This explicitly pinned probe is also used by the pairing client. It fails on a

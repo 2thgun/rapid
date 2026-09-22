@@ -60,6 +60,16 @@ last completed checks, not a guarantee of current device state.
   directory while `rapid-setup.service` and `rapid.service` still need it.
   `rapid-apply.service` and `rapid-display-recovery.service` are ordered after
   `rapid.service`, which creates `/var/lib/rapid`, instead of re-owning it.
+- The Windows companion now accepts the 16-hex TLS fingerprint the Pi panel and
+  setup page print (compared with the first 16 hex of the certificate, 64 bits)
+  as well as the full 64-hex digest, so first-run portable pairing can be
+  completed from the display. A paired companion whose Pi is unreachable at
+  launch keeps running and retries instead of failing closed; re-pairing is
+  required only when the pinned identity changed, and a corrupt per-user
+  credential offers pairing again.
+- The panel's Wi-Fi/settings page now has a **Pair a companion** entry showing
+  the pairing address and the short fingerprint, and opening or cancelling the
+  physical pairing window from the panel.
 
 - Added code-confirmed PC pairing. `rapid-pi` serves an HTTPS pairing listener,
   the owner approves the matching code on the Pi panel or setup page, and the

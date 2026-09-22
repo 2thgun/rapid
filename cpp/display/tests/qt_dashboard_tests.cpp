@@ -75,6 +75,12 @@ int main(int argc, char **argv) {
   const auto network_control = helper_directory.filePath("network-control");
   QDir().mkpath(network_control);
   qputenv("RAPID_NETWORK_CONTROL", network_control.toUtf8());
+  // #61: the panel's pairing entry writes the pairing service's private
+  // control handoff and reads the window state it publishes.
+  const auto pairing_state = helper_directory.filePath("pairing-state.json");
+  const auto pairing_control = helper_directory.filePath("pairing-control.json");
+  qputenv("RAPID_PAIRING_STATE", pairing_state.toUtf8());
+  qputenv("RAPID_PAIRING_CONTROL", pairing_control.toUtf8());
   QJsonObject state{{"companion_connected", true}, {"companion_daemon_state", "driving"},
                     {"telemetry_fresh", true}, {"session_id", "qt-test"},
                     {"samples_received", 1}, {"throttle", 0.75}, {"brake", 0.25},
@@ -319,6 +325,52 @@ int main(int argc, char **argv) {
   pairing_panel.flush();
   spin(600);
   require(!model.pairingPending(), "Malformed pairing transaction is ignored");
+  // #61: the settings page's pairing entry shows the address and the short
+  // fingerprint a first-run companion needs, and its button writes the same
+  // private control handoff the setup page uses. The window state comes from
+  // the pairing service, not from the panel.
+  require(model.pairingAddress() == "192.168.1.64:8002" &&
+              model.pairingFingerprint() == "fedc ba98 7654 3210",
+          "#61: the panel shows the pairing address and the first-16 fingerprint");
+  require(!model.pairingWindowActive() && !model.pairingWindowRequested(),
+          "#61: the pairing window starts closed and not requested");
+  require(model.openPairingWindow() && QFile::exists(pairing_control),
+          "#61: the pairing button writes the open handoff");
+  {
+    QFile control(pairing_control);
+    require(control.open(QIODevice::ReadOnly) && control.readAll().contains("\"action\":\"open\""),
+            "#61: the open handoff asks the pairing service to open the window");
+  }
+  const auto control_permissions = QFileInfo(pairing_control).permissions();
+  require(!(control_permissions & QFileDevice::ReadOther) &&
+              !(control_permissions & QFileDevice::WriteOther),
+          "#61: the pairing control handoff is not world-readable");
+  spin(600);
+  require(model.pairingWindowRequested(), "#61: an unconsumed open handoff reads as armed");
+  {
+    QFile state(pairing_state);
+    require(state.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                state.write("{\"active\":true,\"pending\":false}") > 0,
+            "write the pairing window state");
+  }
+  spin(600);
+  require(model.pairingWindowActive(), "#61: the pairing window state is polled from the service");
+  require(model.cancelPairingWindow(), "#61: the pairing button can cancel the window");
+  {
+    QFile control(pairing_control);
+    require(control.open(QIODevice::ReadOnly) && control.readAll().contains("\"action\":\"cancel\""),
+            "#61: the cancel handoff asks the pairing service to close the window");
+  }
+  QFile::remove(pairing_control);
+  {
+    QFile state(pairing_state);
+    require(state.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                state.write("{\"active\":false,\"pending\":false}") > 0,
+            "close the pairing window state again");
+  }
+  spin(600);
+  require(!model.pairingWindowRequested() && !model.pairingWindowActive(),
+          "#61: a cancelled handoff and a closed window are both reflected");
   require(model.graphSamples().size() == 1, "Repeated polling duplicated a source sample");
   require(model.graphSamples().first().toMap()["throttle"].toDouble() == 75, "Pedal scale");
   state["samples_received"] = 2;
