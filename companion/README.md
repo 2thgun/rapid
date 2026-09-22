@@ -11,9 +11,11 @@ drive works) and run it:
    page). The display prints the first **16 hex** (grouped in fours, the owner's
    evil-twin floor); the companion accepts that short form and compares it with
    the first 16 hex of the certificate, and still accepts the full 64-hex
-   digest. Approve the matching verification code on the Pi (the panel's
-   **Pair a companion** entry shows the same address and short fingerprint and
-   can open the pairing window). The same `--pair` / `run_pairing()` client is
+   digest. The panel's **Pair a companion** entry shows the address and short
+   fingerprint to enter and can open the pairing window; it shows them at any
+   time, not only while the setup AP is up (the address is the device's own
+   address on the runtime's pairing listener). Approve the matching
+   verification code on the Pi. The same `--pair` / `run_pairing()` client is
    used, so the one-use envelope and the on-device approval are unchanged.
 2. The resulting 256-bit key is stored **per Windows user** under
    `%LOCALAPPDATA%\raPId\pairing.key.dpapi`, protected with DPAPI. No plaintext

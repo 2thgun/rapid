@@ -81,6 +81,10 @@ int main(int argc, char **argv) {
   const auto pairing_control = helper_directory.filePath("pairing-control.json");
   qputenv("RAPID_PAIRING_STATE", pairing_state.toUtf8());
   qputenv("RAPID_PAIRING_CONTROL", pairing_control.toUtf8());
+  // #61: the pairing address is the device's current address on the runtime's
+  // always-on pairing listener, not the AP-only setup URL. Pin it here so the
+  // assertion does not depend on this machine's adapters.
+  qputenv("RAPID_PAIRING_ADDRESS", "192.168.1.64:8003");
   QJsonObject state{{"companion_connected", true}, {"companion_daemon_state", "driving"},
                     {"telemetry_fresh", true}, {"session_id", "qt-test"},
                     {"samples_received", 1}, {"throttle", 0.75}, {"brake", 0.25},
@@ -329,9 +333,19 @@ int main(int argc, char **argv) {
   // fingerprint a first-run companion needs, and its button writes the same
   // private control handoff the setup page uses. The window state comes from
   // the pairing service, not from the panel.
-  require(model.pairingAddress() == "192.168.1.64:8002" &&
+  require(model.pairingAddress() == "192.168.1.64:8003" &&
               model.pairingFingerprint() == "fedc ba98 7654 3210",
           "#61: the panel shows the pairing address and the first-16 fingerprint");
+  // Without the test override the address comes from the device's own
+  // interface; it must still name the runtime pairing port (8003), never the
+  // AP-only setup port, so pairing works without switching to AP mode.
+  qunsetenv("RAPID_PAIRING_ADDRESS");
+  spin(1200);
+  const auto live_address = model.pairingAddress();
+  require(live_address.isEmpty() || live_address.endsWith(":8003"),
+          "#61: the pairing address must use the runtime pairing port");
+  qputenv("RAPID_PAIRING_ADDRESS", "192.168.1.64:8003");
+  spin(1200);
   require(!model.pairingWindowActive() && !model.pairingWindowRequested(),
           "#61: the pairing window starts closed and not requested");
   require(model.openPairingWindow() && QFile::exists(pairing_control),

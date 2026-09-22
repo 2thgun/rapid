@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QNetworkAccessManager>
+#include <QNetworkInterface>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
@@ -57,23 +58,44 @@ QString short_fingerprint(const QString &value) {
   return groups.join(QLatin1Char(' '));
 }
 
-// #61: the address a first-run companion is given. The published setup URL's
-// host and port serve the same TLS certificate and the pairing endpoints, so
-// the panel shows that as host:port, which the companion prompt accepts
-// directly (a full /setup URL would keep its path and miss the API routes).
-QString pairing_address(const QByteArray &status_contents) {
-  const auto document = QJsonDocument::fromJson(status_contents);
-  if (!document.isObject()) return {};
-  const auto bootstrap = document.object().value("bootstrap");
-  if (!bootstrap.isObject()) return {};
-  const auto values = bootstrap.toObject();
-  const QUrl url(values.value("setup_url").toString());
-  if (url.isValid() && !url.host().isEmpty())
-    return url.port() > 0 ? url.host() + ':' + QString::number(url.port()) : url.host();
-  const auto address = values.value("setup_address").toString();
-  const auto port = values.value("setup_port").toInt();
-  if (address.isEmpty()) return {};
-  return port > 0 ? address + ':' + QString::number(port) : address;
+// #61: the address a first-run companion is given. Pairing is served by the
+// runtime's own TLS listener ([pairing] in packaging/config.toml, port 8003),
+// which is up whenever the Pi is - in AP mode and on Home Wi-Fi alike - and
+// the panel's window/approval handoffs address that same coordinator. The
+// setup page's address (192.168.1.64:8002) exists only while the setup AP is
+// up, so the pairing entry publishes the device's current address instead.
+// RAPID_PAIRING_ADDRESS overrides the whole host:port for tests and unusual
+// deployments.
+constexpr int kPairingPort = 8003;
+
+QString pairing_address() {
+  const QString override = qEnvironmentVariable("RAPID_PAIRING_ADDRESS");
+  if (!override.isEmpty()) return override;
+  const auto first_ipv4 = [](const QNetworkInterface &interface) -> QString {
+    if (!interface.flags().testFlag(QNetworkInterface::IsUp) ||
+        !interface.flags().testFlag(QNetworkInterface::IsRunning) ||
+        interface.flags().testFlag(QNetworkInterface::IsLoopBack))
+      return {};
+    for (const auto &entry : interface.addressEntries()) {
+      const auto address = entry.ip();
+      if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback() &&
+          !address.isLinkLocal())
+        return address.toString();
+    }
+    return {};
+  };
+  const auto interfaces = QNetworkInterface::allInterfaces();
+  for (const auto &interface : interfaces) {
+    if (interface.name() == QLatin1String("wlan0")) {
+      const auto address = first_ipv4(interface);
+      if (!address.isEmpty()) return address + ':' + QString::number(kPairingPort);
+    }
+  }
+  for (const auto &interface : interfaces) {
+    const auto address = first_ipv4(interface);
+    if (!address.isEmpty()) return address + ':' + QString::number(kPairingPort);
+  }
+  return {};
 }
 
 // #22: the setup AP is the open network "rapid" (or a disambiguated
@@ -285,7 +307,7 @@ void DashboardModel::pollSetupStatus() {
       }
     }
   }
-  const auto next_address = pairing_address(status_contents);
+  const auto next_address = pairing_address();
   bool changed = false;
   if (setup_url_ != next_url) { setup_url_ = next_url; changed = true; }
   if (pairing_address_ != next_address) { pairing_address_ = next_address; changed = true; }
