@@ -2847,6 +2847,19 @@ std::pair<Frame, Metadata> run() {
     p.packet_id = 0; p.gear = 0;
     require(adapter->read(frame) && frame.value[gear] == -1, "packet counter restart and reverse gear");
     require(!adapter->read(frame), "resumed sample is accepted only once");
+    // #53: the simulator's own lap counter going backwards (for example ACC's
+    // "restart session") is a restart inside the same type/track/car, which
+    // the run loop turns into a run boundary so two same-type sessions cannot
+    // merge. A normal lap only ever increments the counter.
+    p.packet_id = 43; g.completed_laps = 0;
+    require(adapter->read(frame) && adapter->session_restarted() &&
+                frame.value[lap_number] == 1,
+            "a lap counter reset reports a simulator session restart (#53)");
+    p.packet_id = 44; g.completed_laps = 1;
+    require(adapter->read(frame) && !adapter->session_restarted() &&
+                frame.value[lap_number] == 2,
+            "the session restart flag clears on the following sample");
+    g.completed_laps = 2;
     // A car/track change mid-session (e.g. a garage visit while paused) must
     // be visible to a later refresh_metadata() call so the run loop can end
     // the recording and start a new one (#15) instead of merging two cars.
