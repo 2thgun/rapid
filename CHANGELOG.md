@@ -5,6 +5,14 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Added lap validity and delta presence to the authenticated v4 telemetry
+  protocol (schema 2): the Windows companion now reports whether the simulator
+  actually provided the completed lap's validity and a timing delta, so the Pi
+  records `valid` per lap in the manifest and shows "no delta" as blank instead
+  of an invented 0. AC1's always-0 delta on v4 is gone, and a simulator session
+  restart (lap counter reset) now ends the recording, so two same-type sessions
+  cannot merge. The Pi package and the companion must be upgraded as a matched
+  pair; a schema-1 companion and a schema-2 Pi do not connect.
 - Fixed `rapid-setup` restart-looping with `226/NAMESPACE` after an upgrade or
   reboot when `/run/rapid-apply` was absent. The setup request queue is now
   created by systemd through `RuntimeDirectory` on the services that use it

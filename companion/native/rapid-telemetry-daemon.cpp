@@ -299,7 +299,7 @@ constexpr std::size_t kEventSize = 1154;
 constexpr std::size_t kChannelHeaderSize = 124;
 constexpr std::size_t kV4HeaderSize = 52;
 constexpr std::size_t kV4HmacSize = 32;
-constexpr std::uint16_t kV4SchemaVersion = 1;
+constexpr std::uint16_t kV4SchemaVersion = 2;
 
 enum Field : std::size_t {
     elapsed, throttle, brake, fuel, gear, rpm, steering_angle, speed_kmh,
@@ -404,6 +404,36 @@ struct Frame {
     std::uint64_t valid_mask = 0;
     int completed_lap_ms = 0;
     int delta_ms = 0;
+    // v4 schema 2. Tri-state validity of the most recently completed lap
+    // (present+valid, present+invalid, or absent when the simulator exposes no
+    // lap-valid signal) and whether delta_ms came from the simulator at all.
+    // Neither is ever guessed: a signal the simulator does not provide stays
+    // absent on the wire instead of becoming a fabricated false or zero.
+    bool lap_valid_present = false;
+    bool lap_valid = false;
+    bool delta_present = false;
+};
+
+// Tracks a simulator's current-lap-valid signal across a lap crossing. The
+// value sampled *before* the lap counter changes describes the lap that just
+// completed, so it is attached to the first sample of the new lap -- the same
+// sample the Pi's recorder closes the boundary on (#16). The last completed
+// lap's state is held until the next crossing, so a Pi that misses the exact
+// crossing packet still reads the right lap's validity instead of an invented
+// one. A simulator with no such signal never marks it present.
+struct CompletedLapValidity {
+    bool present = false;
+    bool valid = false;
+    int lap_number = std::numeric_limits<int>::min();
+    bool previous_sim_valid = true;
+    void update(int lap_now, bool sim_valid) {
+        if (lap_number != std::numeric_limits<int>::min() && lap_now != lap_number) {
+            present = true;
+            valid = previous_sim_valid;
+        }
+        lap_number = lap_now;
+        previous_sim_valid = sim_valid;
+    }
 };
 
 struct Metadata {
@@ -417,6 +447,11 @@ struct Metadata {
     // session data (never a guessed offset). 0 means the sim does not expose
     // it; displays fall back to a configurable default and say so.
     double steering_lock_deg = 0.0;
+    // #53: the moment the companion observed this simulator session begin. The
+    // session identity is derived from the type plus this timestamp instead of
+    // adding another wire field; the Pi already keys a recording on the random
+    // v4 run identifier.
+    std::chrono::system_clock::time_point session_started_at = std::chrono::system_clock::now();
 };
 
 struct Options {
@@ -1234,6 +1269,21 @@ const char* game_name(Game game) {
     }
 }
 
+// #53: the companion-side session identity, derived from the session type and
+// the wall-clock moment the run began. Deliberately not a wire field: the Pi
+// already keys a recording on the random per-run v4 run identifier, so a
+// same-type restart is split by the run loop (adapter session_restarted())
+// rather than by a new identifier on the wire. This string makes the split and
+// the companion log readable.
+std::string session_identity(const Metadata& metadata) {
+    const auto started = std::chrono::system_clock::to_time_t(metadata.session_started_at);
+    std::tm utc{};
+    gmtime_s(&utc, &started);
+    char stamp[32]{};
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return metadata.simulator + "/" + metadata.session + "@" + stamp;
+}
+
 Game game_for_executable(const wchar_t* executable) {
     if (_wcsicmp(executable, L"AC2-Win64-Shipping.exe") == 0 || _wcsicmp(executable, L"acc.exe") == 0) {
         return Game::acc;
@@ -1329,6 +1379,12 @@ public:
     // exposes no such signal, so a recording ends only via the not-live
     // timeout, an explicit session/track/car change, or disconnection (#15).
     virtual bool ended() { return false; }
+    // True on the sample where the simulator's own lap counter went backwards:
+    // a session restart inside the same type/track/car (for example ACC's
+    // "restart session"), which the run loop treats as the end of the run so
+    // two same-type sessions cannot merge (#53). Only simulators that expose a
+    // reliable lap counter override this.
+    virtual bool session_restarted() { return false; }
     Metadata metadata;
 };
 
@@ -1379,6 +1435,8 @@ public:
     // AC_PAUSE/AC_REPLAY are gaps inside the same session (#15).
     bool ended() override { return graphics_.read<std::int32_t>(4) == 0; }
 
+    bool session_restarted() override { return session_restarted_; }
+
     bool connected() override { return true; }
 
     const char* kind() const override { return "Assetto"; }
@@ -1406,6 +1464,28 @@ public:
         for (std::size_t i = 0; i < 5; ++i) v[damage_front + i] = physics_.read<float>(224 + i * 4);
         v[pit_limiter] = physics_.read<std::int32_t>(248); v[abs_activity] = physics_.read<float>(252);
         v[lap_number] = graphics_.read<std::int32_t>(132) + 1;
+        const int lap_now = static_cast<int>(v[lap_number]);
+        // A lap counter that goes backwards is a session restart (a real lap
+        // boundary only ever increments it), not a new lap (#53).
+        session_restarted_ = last_lap_number_ >= 0 && lap_now < last_lap_number_;
+        last_lap_number_ = lap_now;
+        if (game_ == Game::acc) {
+            // ACC's graphics page carries the same documented isValidLap,
+            // iDeltaLapTime and iBestTime fields as the ACC UDP lap struct;
+            // original AC's page has none of them, so an AC1 lap's validity
+            // and delta stay absent rather than being invented. The delta is
+            // relative to the best lap, so it is only marked present once the
+            // simulator exposes one (0 and INT_MAX both mean "no lap time" on
+            // these pages).
+            lap_validity_.update(lap_now, graphics_.read<std::int32_t>(1408) != 0);
+            frame.lap_valid_present = lap_validity_.present;
+            frame.lap_valid = lap_validity_.valid;
+            const int best_ms = graphics_.read<std::int32_t>(148);
+            frame.delta_present =
+                best_ms > 0 && best_ms != std::numeric_limits<int>::max();
+            if (frame.delta_present)
+                frame.delta_ms = graphics_.read<std::int32_t>(1360);
+        }
         v[current_lap_ms] = std::max(0, graphics_.read<std::int32_t>(140));
         frame.completed_lap_ms = graphics_.read<std::int32_t>(144);
         if (frame.completed_lap_ms <= 0 || frame.completed_lap_ms == std::numeric_limits<int>::max()) {
@@ -1432,6 +1512,9 @@ private:
     Mapping physics_, graphics_, static_;
     Game game_ = Game::none;
     std::optional<int> last_packet_id_;
+    CompletedLapValidity lap_validity_;
+    int last_lap_number_ = -1;
+    bool session_restarted_ = false;
 };
 
 class AceAdapter final : public Adapter {
@@ -1515,6 +1598,13 @@ public:
         last_current_lap_ms_ = current;
         frame.completed_lap_ms = last_lap_ms_;
         v[lap_number] = synthetic_lap_;
+        // ACE's graphics page exposes is_valid_lap (bool) beside the lap
+        // times, and delta_time_ms is a documented always-present field; the
+        // completed lap's validity is attached at the synthetic crossing.
+        lap_validity_.update(synthetic_lap_, graphics_.read<std::uint8_t>(3121) != 0);
+        frame.lap_valid_present = lap_validity_.present;
+        frame.lap_valid = lap_validity_.valid;
+        frame.delta_present = true;
         for (auto& value : v) if (!std::isfinite(value)) value = 0.0;
         return before == physics_.read<std::int32_t>(0);
     }
@@ -1528,6 +1618,7 @@ private:
     int last_lap_ms_ = 0;
     int last_current_lap_ms_ = 0;
     int synthetic_lap_ = 1;
+    CompletedLapValidity lap_validity_;
 };
 
 class IracingAdapter final : public Adapter {
@@ -1585,6 +1676,7 @@ public:
     }
 
     bool connected() override { return (mapping_.read<std::int32_t>(4) & 1) != 0; }
+    bool session_restarted() override { return session_restarted_; }
     const char* kind() const override { return "iRacing"; }
 
     bool read(Frame& frame) override {
@@ -1615,9 +1707,21 @@ public:
         v[g_y] = number(offset, "VertAccel") / gravity;
         v[g_z] = number(offset, "LongAccel") / gravity;
         v[lap_number] = number(offset, "Lap");
+        const int lap_now = static_cast<int>(v[lap_number]);
+        // A lap counter that goes backwards is a session restart, not a new
+        // lap (#53).
+        session_restarted_ = last_lap_number_ >= 0 && lap_now < last_lap_number_;
+        last_lap_number_ = lap_now;
         v[current_lap_ms] = std::max(0.0, number(offset, "LapCurrentLapTime") * 1000.0);
         frame.completed_lap_ms = std::max(0, static_cast<int>(number(offset, "LapLastLapTime") * 1000.0));
-        frame.delta_ms = static_cast<int>(number(offset, "LapDeltaToBestLap") * 1000.0);
+        // iRacing exposes its own LapDeltaToBestLap_OK flag; when it is false
+        // there is no reference lap and the wire must say "no delta" rather
+        // than a fabricated 0. iRacing has no per-lap validity flag, so
+        // lap_valid stays absent for this simulator.
+        frame.delta_present = boolean(offset, "LapDeltaToBestLap_OK", false);
+        frame.delta_ms = frame.delta_present
+            ? static_cast<int>(number(offset, "LapDeltaToBestLap") * 1000.0)
+            : 0;
         v[lap_position] = number(offset, "LapDistPct");
         v[pit_limiter] = (static_cast<int>(number(offset, "EngineWarnings")) & 0x10) != 0;
         static constexpr const char* shocks[] = {"LFshockDefl", "RFshockDefl", "LRshockDefl", "RRshockDefl"};
@@ -1716,6 +1820,8 @@ private:
 
     Mapping mapping_;
     std::unordered_map<std::string, Variable> variables_;
+    int last_lap_number_ = -1;
+    bool session_restarted_ = false;
 };
 
 std::unique_ptr<Adapter> open_adapter(Game game) {
@@ -1736,6 +1842,12 @@ std::unique_ptr<Adapter> open_adapter(Game game) {
 // Packet types are telemetry=1, metadata=2, status=3. A shared sequence stream
 // starts at zero for every run. Metadata precedes the first telemetry packet.
 // flags bit 0 means an active run; bit 1 marks the final ended status packet.
+// On telemetry only, bit 2 means the frame carries the completed lap's
+// validity, bit 3 is that validity (only meaningful with bit 2), and bit 4
+// means delta_ms is a real simulator value -- so a true delta of 0 stays
+// distinct from "the simulator provides no delta". Schema 2 is the
+// lap-validity/delta-presence revision: a schema-1 companion and a schema-2
+// Pi are a mixed pair and must not be driven.
 // Telemetry payload = valid-mask u64, completed/delta lap time i32, 48 float32.
 // Metadata payload = five u16-length UTF-8 strings: venue, vehicle, driver,
 // session, steering lock (decimal degrees, full lock-to-lock; empty string
@@ -1900,7 +2012,14 @@ public:
         for (const double value : frame.value) {
             append_float_le(payload, static_cast<float>(std::isfinite(value) ? value : 0.0));
         }
-        return packet(V4PacketType::telemetry, game, 0x01, rate, std::move(payload), captured_at);
+        // v4 schema 2 telemetry flags: bit 2 says this frame carries the
+        // completed lap's validity, bit 3 is that validity, bit 4 says
+        // delta_ms is a simulator value (a real zero stays distinct from "no
+        // delta"). Bits the simulator did not provide stay clear.
+        std::uint8_t flags = 0x01;
+        if (frame.lap_valid_present) flags |= 0x04 | (frame.lap_valid ? 0x08 : 0);
+        if (frame.delta_present) flags |= 0x10;
+        return packet(V4PacketType::telemetry, game, flags, rate, std::move(payload), captured_at);
     }
 
     std::vector<std::uint8_t> status_packet(Game game, V4StatusState state, std::string_view text,
@@ -2372,8 +2491,19 @@ private:
                 Frame frame;
                 if (adapter_->live() && adapter_->read(frame)) {
                     inactive_since.reset();
+                    if (recorder_.recording() && adapter_->session_restarted()) {
+                        // The simulator's own lap counter went backwards: a
+                        // session restart inside the same type/track/car (for
+                        // example ACC's "restart session"). Ending the run
+                        // here makes the next sample begin a fresh v4 run, so
+                        // two same-type sessions cannot merge (#53).
+                        logger_.write("Session restarted in the simulator (" +
+                                      session_identity(adapter_->metadata) + "); ending the recording");
+                        finish_recording();
+                    }
                     if (!recorder_.recording()) {
                         adapter_->refresh_metadata();
+                        adapter_->metadata.session_started_at = std::chrono::system_clock::now();
                         recorder_.start(adapter_->metadata);
                         if (v4_) {
                             v4_->begin_run();
@@ -2694,6 +2824,10 @@ std::pair<Frame, Metadata> run() {
             frame.value[lap_number] == 3 && frame.value[current_lap_ms] == 12345 &&
             frame.completed_lap_ms == 90567 && approximately_equal(frame.value[lap_position], .375),
             "original AC corner fields and lap timing offsets");
+    // AC1's graphics page exposes no lap-valid flag and no delta: both stay
+    // absent rather than being invented (schema 2, #16/#20/#52).
+    require(!frame.lap_valid_present && !frame.delta_present,
+            "AC1 exposes no lap-valid or delta field: both stay absent");
     const auto wire_frame = frame;
     require(!adapter->read(frame), "unchanged LIVE physics must not become a fresh sample");
     // AC's graphics.status: AC_OFF=0, AC_REPLAY=1, AC_LIVE=2, AC_PAUSE=3. Only
@@ -3401,6 +3535,10 @@ bool run_self_test(const fs::path& directory, int sample_rate,
     wire_frame.value[speed_kmh] = 198; wire_frame.value[lap_number] = 1;
     wire_frame.value[current_lap_ms] = 1234;
     wire_frame.completed_lap_ms = 90000; wire_frame.delta_ms = -125;
+    // v4 schema 2: the reference frame carries the completed lap's validity
+    // and a real simulator delta; AC1's frame (below) carries neither.
+    wire_frame.lap_valid_present = true; wire_frame.lap_valid = true;
+    wire_frame.delta_present = true;
     const auto fixtures = directory / "v4-fixtures";
     fs::create_directories(fixtures);
     auto save = [&](const char* name, const std::vector<std::uint8_t>& bytes) {
@@ -3417,6 +3555,28 @@ bool run_self_test(const fs::path& directory, int sample_rate,
     // recording open on this state, unlike "ready"/"waiting".
     save("paused.hex", encoder.status_packet(Game::acc, V4StatusState::paused, "", 3, sample_rate));
     save("next.hex", encoder.telemetry_packet(Game::acc, wire_frame, sample_rate, std::chrono::steady_clock::now()));
+    // A real delta of 0, then the same frame with no delta at all: the Pi must
+    // keep them distinct (#20/#52).
+    Frame delta_zero = wire_frame;
+    delta_zero.delta_present = true; delta_zero.delta_ms = 0;
+    save("delta-zero.hex", encoder.telemetry_packet(Game::acc, delta_zero, sample_rate, std::chrono::steady_clock::now()));
+    Frame delta_absent = wire_frame;
+    delta_absent.delta_present = false; delta_absent.delta_ms = 0;
+    save("delta-absent.hex", encoder.telemetry_packet(Game::acc, delta_absent, sample_rate, std::chrono::steady_clock::now()));
+    // Lap crossings: the sample that reports the new lap number carries the
+    // completed lap's validity (true, false, then absent).
+    Frame crossing = wire_frame;
+    crossing.completed_lap_ms = 90000;
+    crossing.value[current_lap_ms] = 5;
+    crossing.lap_valid_present = true; crossing.lap_valid = true;
+    crossing.value[lap_number] = 2;
+    save("lap-valid-true.hex", encoder.telemetry_packet(Game::acc, crossing, sample_rate, std::chrono::steady_clock::now()));
+    crossing.lap_valid = false;
+    crossing.value[lap_number] = 3;
+    save("lap-valid-false.hex", encoder.telemetry_packet(Game::acc, crossing, sample_rate, std::chrono::steady_clock::now()));
+    crossing.lap_valid_present = false;
+    crossing.value[lap_number] = 4;
+    save("lap-valid-unknown.hex", encoder.telemetry_packet(Game::acc, crossing, sample_rate, std::chrono::steady_clock::now()));
     save("ended.hex", encoder.status_packet(Game::acc, V4StatusState::ended, "", 4, sample_rate));
     encoder.end_run();
     save("ready.hex", encoder.status_packet(Game::acc, V4StatusState::ready, "", 5, sample_rate));

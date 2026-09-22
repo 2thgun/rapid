@@ -50,7 +50,12 @@ int main(int argc, char **argv) {
                ended = fixture(argv[2], "ended.hex"),
                ready = fixture(argv[2], "ready.hex"),
                ac_metadata = fixture(argv[2], "ac-metadata.hex"),
-               ac_telemetry = fixture(argv[2], "ac-telemetry.hex");
+               ac_telemetry = fixture(argv[2], "ac-telemetry.hex"),
+               delta_zero = fixture(argv[2], "delta-zero.hex"),
+               delta_absent = fixture(argv[2], "delta-absent.hex"),
+               lap_valid_true = fixture(argv[2], "lap-valid-true.hex"),
+               lap_valid_false = fixture(argv[2], "lap-valid-false.hex"),
+               lap_valid_unknown = fixture(argv[2], "lap-valid-unknown.hex");
     {
       Runtime r(c);
       // The retired v3 JSON transport must be gone, not quietly accepted: a
@@ -68,9 +73,9 @@ int main(int argc, char **argv) {
               "truncation rejected");
       require(!r.receive(telemetry, "127.0.0.1"), "metadata required");
       auto bad = metadata;
-      bad[12] = 2;
+      bad[12] = 1;
       resign(bad);
-      require(!r.receive(bad, "127.0.0.1"), "signed invalid schema rejected");
+      require(!r.receive(bad, "127.0.0.1"), "signed old-schema packet rejected");
       require(r.receive(metadata, "127.0.0.1"),
               "Windows metadata accepted after bad packets");
       require(!r.receive(metadata, "127.0.0.1"), "metadata replay rejected");
@@ -93,6 +98,10 @@ int main(int argc, char **argv) {
       resign(bad);
       require(!r.receive(bad, "127.0.0.1"), "unknown validity bit rejected");
       bad = telemetry;
+      bad[7] = char(0x20 | (bad[7] & 0x1f));
+      resign(bad);
+      require(!r.receive(bad, "127.0.0.1"), "unknown telemetry flag bit rejected");
+      bad = telemetry;
       bad[10] = 0;
       resign(bad);
       require(!r.receive(bad, "127.0.0.1"), "signed invalid length rejected");
@@ -101,6 +110,8 @@ int main(int argc, char **argv) {
       require(state["schema_version"] == 4 && state["rpm"] == 6500 &&
                   state["gear"] == 4,
               "v4 dashboard channels");
+      require(state["delta_ms"] == -125,
+              "a present wire delta stays a number, including the sign");
       require(std::abs(number(state, "throttle") - .8) < 1e-6 &&
                   state["car_model"] == "V4 Car",
               "pedals and metadata");
@@ -166,7 +177,61 @@ int main(int argc, char **argv) {
       require(r.receive(ac_telemetry, "127.0.0.1"), "AC1 telemetry accepted");
       require(std::abs(number(r.snapshot(), "steering_angle") - (-.4)) < 1e-6,
               "AC1 steering channel is already normalised, unchanged by receipt");
+      // AC1's shared-memory page exposes no delta, so the schema-2 wire says
+      // "absent" and the Pi must show blank rather than 0 (#52).
+      require(r.snapshot()["delta_ms"].is_null(),
+              "AC1's absent delta is null, not 0 (#52)");
     }
+    // v4 schema 2 delta presence: a real 0 stays a number; an absent delta
+    // stays null, so the dashboard never shows an invented 0 (#20/#52).
+    {
+      Config deltas = c;
+      deltas.database = root / "delta.db";
+      deltas.telemetry = root / "delta";
+      Runtime r(deltas);
+      require(r.receive(metadata, "127.0.0.1") &&
+                  r.receive(delta_zero, "127.0.0.1"),
+              "delta-present packet accepted");
+      require(r.snapshot()["delta_ms"].is_number_integer() &&
+                  r.snapshot()["delta_ms"].get<int>() == 0,
+              "a real delta 0 is carried as 0, not blank");
+      require(r.receive(delta_absent, "127.0.0.1"),
+              "delta-absent packet accepted");
+      require(r.snapshot()["delta_ms"].is_null(),
+              "an absent delta is null, not a fabricated 0 (#52)");
+    }
+    // v4 schema 2 lap validity: the crossing sample carries the completed
+    // lap's validity and the manifest records it per lap (#16). The real
+    // fixture packets were produced by one companion run, so each expected
+    // validity is replayed as the crossing sample of its own fresh run: a
+    // single crossing needs no room for the recorder's 10-sample debounce,
+    // and every byte the runtime reads is exactly what the Windows encoder
+    // signed. The multi-lap sequence is covered by the synthetic streams in
+    // rapid-lap-boundary-tests.
+    auto check_lap_validity = [&](const std::string &name,
+                                  const std::string &crossing,
+                                  const Json &expected) {
+      Config laps = c;
+      laps.database = root / (name + ".db");
+      laps.telemetry = root / name;
+      Runtime r(laps);
+      require(r.receive(metadata, "127.0.0.1") &&
+                  r.receive(telemetry, "127.0.0.1") &&
+                  r.receive(crossing, "127.0.0.1"),
+              (name + " stream accepted").c_str());
+      r.finish();
+      auto bundle = r.snapshot()["last_bundle_path"];
+      require(bundle.is_string(), (name + " run published").c_str());
+      auto manifest = Json::parse(
+          read_file(fs::path(bundle.get<std::string>()) / "manifest.json"));
+      require(manifest["laps"].size() == 1,
+              (name + " records exactly the completed lap").c_str());
+      require(manifest["laps"][0]["valid"] == expected,
+              (name + " records the wire validity in the manifest").c_str());
+    };
+    check_lap_validity("lap-valid-true", lap_valid_true, true);
+    check_lap_validity("lap-valid-false", lap_valid_false, false);
+    check_lap_validity("lap-valid-unknown", lap_valid_unknown, Json());
     // Lost control packets must not create invented telemetry samples. Missing
     // optional channels must clear retained readings when their validity
     // clears.
