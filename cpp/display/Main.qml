@@ -10,6 +10,10 @@ Window {
     property int page: 0
     property int revision: dashboard.revision
     property bool wifiMenu: false
+    // #61: the Pi-dash pairing screen opened from the settings page. It shows
+    // the address and short fingerprint a first-run companion needs and arms
+    // the on-device pairing window.
+    property bool pairingScreen: false
     // #13: the physical panel is rotated in software here, driven by the
     // rotation rapid-display-recovery persists for the Qt model to read. The
     // whole scene, including the confirm/calibration overlays, rotates; Qt
@@ -329,12 +333,81 @@ Window {
                 Label { x: 14; y: 214; width: 404; elide: Text.ElideRight
                     text: dashboard.setupUrl.length > 0 ? "SETUP PAGE  " + dashboard.setupUrl : "SETUP PAGE  not published yet"
                     color: root.muted }
-                Rectangle { x: 12; y: 232; width: 408; height: 46; radius: 4
+                Rectangle { x: 12; y: 232; width: 198; height: 46; radius: 4
                     color: restartSetup.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
-                    Label { anchors.centerIn: parent; text: "START / RESTART SETUP SERVICE"; color: "#f4f7f9"; font.pixelSize: 12 }
+                    Label { anchors.centerIn: parent; text: "RESTART SETUP SERVICE"; color: "#f4f7f9"; font.pixelSize: 10 }
                     MouseArea { id: restartSetup; anchors.fill: parent; onClicked: { dashboard.restartSetupService(); root.wifiMenu = false } }
                 }
-                // Seam: lane C's Pi pairing button belongs here, below the setup controls.
+                // #61: the Pi-dash pairing entry. Opens the pairing screen
+                // that shows the pairing address and the short fingerprint to
+                // type into the companion, and arms the on-device window.
+                Rectangle { x: 218; y: 232; width: 202; height: 46; radius: 4
+                    color: pairEntry.pressed ? "#403519" : "#221c0d"; border.width: 2; border.color: root.accent
+                    Label { anchors.centerIn: parent; text: "PAIR A COMPANION"; color: root.accent; font.pixelSize: 12 }
+                    MouseArea { id: pairEntry; anchors.fill: parent; onClicked: { root.wifiMenu = false; root.pairingScreen = true } }
+                }
+            }
+        }
+        // #61: the Pi-dash pairing screen. The owner opens it from the
+        // settings page; it shows the address and the short fingerprint a
+        // first-run companion needs, arms the runtime's physical pairing
+        // window through the same private handoff the setup page uses, and
+        // approves the request with the same code the top PAIRING REQUEST
+        // card shows.
+        Rectangle {
+            id: pairingScreen
+            visible: root.pairingScreen; anchors.fill: parent; color: "#b0000000"; z: 12
+            MouseArea { anchors.fill: parent; onClicked: root.pairingScreen = false }
+            Card { x: 20; y: 16; width: 440; height: 288
+                border.color: root.accent; border.width: 2
+                Label { x: 14; y: 10; text: "PAIR A COMPANION"; color: root.accent; font.pixelSize: 14 }
+                Label { x: 14; y: 34; text: "1. TYPE THIS ADDRESS IN THE PC COMPANION" }
+                Text { x: 14; y: 48; width: 412; elide: Text.ElideRight
+                    text: dashboard.pairingAddress.length > 0 ? dashboard.pairingAddress : "unavailable"
+                    color: "#f4f7f9"; font.pixelSize: 16; font.bold: true }
+                Label { x: 14; y: 76; text: "2. MATCH THE FINGERPRINT ON THE PC (FIRST 16)" }
+                Text { x: 14; y: 90; width: 412; elide: Text.ElideRight
+                    text: dashboard.pairingFingerprint.length > 0 ? dashboard.pairingFingerprint : "unavailable"
+                    color: root.accent; font.pixelSize: 18; font.bold: true; font.letterSpacing: 1 }
+                Label { x: 14; y: 120; width: 412
+                    text: dashboard.pairingWindowActive
+                        ? "PAIRING WINDOW OPEN — approve the PC when it asks"
+                        : dashboard.pairingWindowRequested
+                            ? "WAITING FOR THE COMPANION TO ASK…"
+                            : "PAIRING WINDOW CLOSED — open it before the PC asks"
+                    color: dashboard.pairingWindowActive || dashboard.pairingWindowRequested ? "#20cf75" : root.muted }
+                // Same request/code/approval fields as the top PAIRING REQUEST
+                // card, so the whole flow works from this screen too.
+                Label { visible: dashboard.pairingPending; x: 14; y: 142; width: 240
+                    text: "PAIRING REQUEST  " + dashboard.pairingLabel; color: root.accent }
+                Text { visible: dashboard.pairingPending; x: 260; y: 138; width: 166
+                    text: dashboard.pairingCode; horizontalAlignment: Text.AlignRight
+                    color: "#f4f7f9"; font.pixelSize: 22; font.bold: true; font.letterSpacing: 2 }
+                Label { visible: dashboard.pairingPending; x: 14; y: 162; width: 260
+                    text: "Compare this code with the companion before approving" }
+                Rectangle { visible: dashboard.pairingPending; x: 288; y: 156; width: 138; height: 24; radius: 4
+                    opacity: dashboard.pairingApprovalSent ? 0.45 : 1
+                    color: pairApprove.pressed ? "#403519" : "#221c0d"; border.color: root.accent
+                    Text { anchors.centerIn: parent; text: dashboard.pairingApprovalSent ? "SENT" : "APPROVE"; color: root.accent; font.pixelSize: 10; font.bold: true }
+                    MouseArea { id: pairApprove; anchors.fill: parent; enabled: !dashboard.pairingApprovalSent; onClicked: dashboard.approvePairing() }
+                }
+                Rectangle { x: 12; y: 240; width: 254; height: 38; radius: 4
+                    color: pairingWindowButton.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: root.accent
+                    Label { anchors.centerIn: parent
+                        text: dashboard.pairingWindowActive || dashboard.pairingWindowRequested ? "CANCEL PAIRING WINDOW" : "OPEN PAIRING WINDOW"
+                        color: root.accent; font.pixelSize: 11 }
+                    MouseArea { id: pairingWindowButton; anchors.fill: parent
+                        onClicked: {
+                            if (dashboard.pairingWindowActive || dashboard.pairingWindowRequested) dashboard.cancelPairingWindow()
+                            else dashboard.openPairingWindow()
+                        }
+                    }
+                }
+                Rectangle { x: 274; y: 240; width: 154; height: 38; radius: 4
+                    color: pairingBack.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                    Label { anchors.centerIn: parent; text: "BACK"; color: "#f4f7f9"; font.pixelSize: 11 }
+                    MouseArea { id: pairingBack; anchors.fill: parent; onClicked: root.pairingScreen = false }
+                }
             }
         }
         Rectangle {

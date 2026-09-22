@@ -116,6 +116,17 @@ class DashboardModel final : public QObject {
   // #59 / setup-page-ux: the setup page URL first boot publishes, shown on the
   // panel's settings page so the owner can open it without guessing.
   Q_PROPERTY(QString setupUrl READ setupUrl NOTIFY changed)
+  // #61: the Pi-dash pairing entry. The panel shows the address a first-run
+  // companion should be given and the same first-16-hex fingerprint the setup
+  // page prints, and can open/cancel the physical pairing window. The window
+  // itself belongs to the runtime; the panel only writes the same private
+  // control handoff the setup page uses and polls its state.
+  Q_PROPERTY(QString pairingAddress READ pairingAddress NOTIFY changed)
+  Q_PROPERTY(QString pairingFingerprint READ pairingFingerprint NOTIFY changed)
+  Q_PROPERTY(bool pairingWindowActive READ pairingWindowActive NOTIFY changed)
+  // True while the panel's open/cancel handoff has not been consumed by the
+  // pairing service yet, so the button can show that pairing is armed.
+  Q_PROPERTY(bool pairingWindowRequested READ pairingWindowRequested NOTIFY changed)
   Q_PROPERTY(bool pairingPending READ pairingPending NOTIFY changed)
   Q_PROPERTY(QString pairingLabel READ pairingLabel NOTIFY changed)
   Q_PROPERTY(QString pairingCode READ pairingCode NOTIFY changed)
@@ -156,6 +167,10 @@ public:
   QString logNotice() const { return log_notice_; }
   QString setupNotice() const { return setup_notice_; }
   QString setupUrl() const { return setup_url_; }
+  QString pairingAddress() const { return pairing_address_; }
+  QString pairingFingerprint() const { return pairing_fingerprint_; }
+  bool pairingWindowActive() const { return pairing_window_active_; }
+  bool pairingWindowRequested() const { return pairing_window_requested_; }
   bool pairingPending() const { return pairing_pending_; }
   QString pairingLabel() const { return pairing_label_; }
   QString pairingCode() const { return pairing_code_; }
@@ -181,6 +196,11 @@ public:
   // Asks the root Wi-Fi mode worker to start/restart rapid-setup.service; the
   // panel writes the same request file the Wi-Fi mode buttons use.
   Q_INVOKABLE void restartSetupService();
+  // #61: open or cancel the physical pairing window so a first-run companion
+  // can be approved from the panel. Returns whether the control handoff was
+  // written; the window state itself is polled from the pairing service.
+  Q_INVOKABLE bool openPairingWindow();
+  Q_INVOKABLE bool cancelPairingWindow();
   Q_INVOKABLE bool approvePairing();
   Q_INVOKABLE bool confirmDisplay();
   Q_INVOKABLE void startCalibration();
@@ -203,6 +223,10 @@ private:
   void pollLogStatus();
   void pollSetupStatus();
   void pollPairingPanel();
+  // Writes {"action":"open"|"cancel"} to the pairing service's private control
+  // handoff, atomically and group-readable only (the panel never touches key
+  // material).
+  bool write_pairing_control(const QString &action);
   void pollCalibrationFile();
   void pollDisplayConfirmation();
   void pollDisplayRotation();
@@ -235,6 +259,10 @@ private:
   QString log_notice_;
   QString setup_notice_;
   QString setup_url_;
+  QString pairing_address_;
+  QString pairing_fingerprint_;
+  bool pairing_window_active_ = false;
+  bool pairing_window_requested_ = false;
   bool pairing_pending_ = false;
   QString pairing_label_;
   QString pairing_code_;
