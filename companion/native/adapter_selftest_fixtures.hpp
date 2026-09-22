@@ -259,6 +259,7 @@ static_assert(offsetof(SPageFileGraphicEvo, delta_time_ms) == 184, "ACE graphics
 static_assert(offsetof(SPageFileGraphicEvo, current_lap_time_ms) == 188, "ACE graphics lap-time offset");
 static_assert(offsetof(SPageFileGraphicEvo, npos) == 1244, "ACE graphics npos offset");
 static_assert(offsetof(SPageFileGraphicEvo, car_model) == 3086, "ACE graphics car_model offset");
+static_assert(offsetof(SPageFileGraphicEvo, is_valid_lap) == 3121, "ACE graphics is_valid_lap offset");
 
 struct SPageFileStaticEvo {
     char sm_version[15];
@@ -319,6 +320,7 @@ void ace() {
     g.delta_time_ms = -123;
     g.current_lap_time_ms = 18000;
     g.npos = .25f;
+    g.is_valid_lap = true;
 
     auto adapter = AceAdapter::open((prefix + L"_physics").c_str(), (prefix + L"_graphics").c_str(),
                                     (prefix + L"_static").c_str());
@@ -351,9 +353,10 @@ void ace() {
     require(close_enough(frame.value[tc], .42) && close_enough(frame.value[abs_activity], .66),
             "ACE tc/abs use the documented intensity fields");
     require(frame.value[lap_number] == 1 && frame.value[current_lap_ms] == 18000 &&
-                frame.completed_lap_ms == 0 && frame.delta_ms == -123 &&
+                frame.completed_lap_ms == 0 && frame.delta_ms == -123 && frame.delta_present &&
+                !frame.lap_valid_present &&
                 close_enough(frame.value[lap_position], .25),
-            "ACE lap number, current lap time, delta and position");
+            "ACE lap number, current lap time, delta and position (no completed lap yet)");
     require(frame.valid_mask ==
                 (all_field_bits() & ~field_bit(pit_limiter) & ~field_bit(damage_front) &
                  ~field_bit(damage_rear) & ~field_bit(damage_left) & ~field_bit(damage_right) &
@@ -363,8 +366,19 @@ void ace() {
     // A lap reset from ~18 s to ~1 s derives the completed lap and increments
     // the synthetic lap number even though ACE never ticks it itself (#16).
     p.packet_id = 42; g.current_lap_time_ms = 1000;
-    require(adapter->read(frame) && frame.value[lap_number] == 2 && frame.completed_lap_ms == 18000,
-            "ACE lap rollover derives the completed lap time");
+    require(adapter->read(frame) && frame.value[lap_number] == 2 && frame.completed_lap_ms == 18000 &&
+                frame.lap_valid_present && frame.lap_valid,
+            "ACE lap rollover derives the completed lap time and its validity");
+    // The lap-valid value sampled before the crossing describes the completed
+    // lap; a lap the simulator marks invalid must arrive invalid.
+    g.is_valid_lap = false;
+    p.packet_id = 43; g.current_lap_time_ms = 20000;
+    require(adapter->read(frame) && frame.value[lap_number] == 2,
+            "ACE accepts the invalid lap in progress");
+    p.packet_id = 44; g.current_lap_time_ms = 1000;
+    require(adapter->read(frame) && frame.value[lap_number] == 3 && frame.lap_valid_present &&
+                !frame.lap_valid,
+            "ACE reports the completed lap invalid when the sim said so");
 
     // ACEVO_STATUS: 0 off, 1 replay, 2 live, 3 pause. Only 0 is the end of the
     // session; replay and pause are gaps inside it (#15).
@@ -493,7 +507,7 @@ void iracing() {
                       L"_" + std::to_wstring(GetTickCount64());
     assetto_self_test::TestMapping<Bytes> mapping(name);
     auto& data = mapping.value();
-    iracing_header(data, 26);
+    iracing_header(data, 27);
     int index = 0;
     iracing_variable(data, index++, 1, 0, "IsOnTrack");
     iracing_variable(data, index++, 1, 100, "IsOnTrackCar");
@@ -521,7 +535,10 @@ void iracing() {
     iracing_variable(data, index++, 4, 88, "LRshockDefl");
     iracing_variable(data, index++, 4, 92, "RRshockDefl");
     iracing_variable(data, index++, 4, 96, "SteeringWheelAngleMax");
-    require(index == 26, "iRacing fixture variable count");
+    // The SDK's own delta-presence flag; without it a delta of 0 would be
+    // indistinguishable from "no reference lap" (#20/#52).
+    iracing_variable(data, index++, 1, 104, "LapDeltaToBestLap_OK");
+    require(index == 27, "iRacing fixture variable count");
     iracing_yaml(data, yaml);
     put<unsigned char>(data, kIracingBuffer + 0, 1);
     put<unsigned char>(data, kIracingBuffer + 100, 0);
@@ -551,6 +568,7 @@ void iracing() {
     // -1.3 rad / 6.5 rad live half-lock = -0.2 normalised: proves the live
     // SteeringWheelAngleMax, not the 900 deg YAML lock, drives normalisation.
     put<float>(data, kIracingBuffer + 96, 6.5f);
+    put<unsigned char>(data, kIracingBuffer + 104, 1);
 
     auto adapter = IracingAdapter::open(name.c_str());
     require(bool(adapter) && adapter->connected() && adapter->live(), "iRacing opens and enters track state");
@@ -573,11 +591,18 @@ void iracing() {
             "iRacing controls, steering, speed, velocity and acceleration");
     require(frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
                 frame.completed_lap_ms == 91250 && frame.delta_ms == -500 &&
+                frame.delta_present && !frame.lap_valid_present &&
                 close_enough(frame.value[lap_position], .375) && frame.value[pit_limiter] == 1.0,
-            "iRacing lap timing, position and pit-limiter flag");
+            "iRacing lap timing, position and pit-limiter flag (delta present, no lap-valid signal)");
     require(close_enough(frame.value[suspension_fl], 1) && close_enough(frame.value[suspension_fr], 2) &&
                 close_enough(frame.value[suspension_rl], 3) && close_enough(frame.value[suspension_rr], 4),
             "iRacing per-corner suspension");
+    // With the SDK's _OK flag false there is no reference lap: the wire must
+    // say "no delta", not a fabricated 0 (#52).
+    put<unsigned char>(data, kIracingBuffer + 104, 0);
+    require(adapter->read(frame) && !frame.delta_present && frame.delta_ms == 0,
+            "iRacing reports an absent delta when the SDK says it is not available");
+    put<unsigned char>(data, kIracingBuffer + 104, 1);
 
     // Pit/menu/replay: iRacing has no ended() signal, so losing IsOnTrack is a
     // gap in the recording, and IsOnTrackCar keeps the session live when only

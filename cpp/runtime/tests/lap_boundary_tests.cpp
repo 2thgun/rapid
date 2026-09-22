@@ -14,10 +14,11 @@
 //     was 0 in the exact packet that carried the increment, and never saw
 //     the sixth crossing at all.
 //
-// Part B is a synthetic two-lap fixture for the AC1 delta (#20): lap 1 has
-// no reference yet, so delta_ms must stay blank; lap 2 is computed against
-// lap 1's lap-position -> elapsed-time trace. ACC's own delta_ms is left
-// untouched.
+// Part B speaks the authenticated v4 schema-2 wire. The former AC1 delta
+// synthesis was deleted with #52: the wire now says explicitly whether a delta
+// exists, so the tests assert that a real delta (including 0) is carried as a
+// number and an absent one stays null, and that the recorder writes the
+// completed lap's `valid` into the manifest (#16).
 #include "rapid/lap_boundary.hpp"
 #include "rapid/native.hpp"
 #include "v4_stream.hpp"
@@ -208,6 +209,8 @@ void test_session_4e6de929_six_laps(const fs::path &fixtures, const fs::path &ro
 
 // Part B speaks the authenticated v4 wire (the v3 JSON transport is gone).
 // The stream shape mirrors the old synthetic JSON frame, one sample per call.
+// Schema 2 carries the delta-present flag and the completed lap's validity, so
+// these tests cover both presence states and the manifest's per-lap `valid`.
 struct DeltaStream {
   rapid::test::V4Stream stream;
   std::uint64_t time_us = 0;
@@ -216,8 +219,11 @@ struct DeltaStream {
     return stream.metadata(0, "Test Track", "Test Car", "Test Driver",
                            "Practice", "900");
   }
+  // lap_valid: -1 absent, 0 invalid, 1 valid.
   std::string frame(int lap_number, double current_lap_ms,
-                    double lap_position_pct, std::int32_t delta_ms = 0) {
+                    double lap_position_pct, std::int32_t delta_ms = 0,
+                    bool delta_present = false, int lap_valid = -1,
+                    std::int32_t completed_lap_ms = 0) {
     time_us += 20000;
     const auto mask = rapid::test::v4_mask(
         {rapid::test::ch_throttle, rapid::test::ch_brake,
@@ -240,16 +246,16 @@ struct DeltaStream {
          {rapid::test::ch_lap_number, float(lap_number)},
          {rapid::test::ch_current_lap_ms, float(current_lap_ms)},
          {rapid::test::ch_lap_position, float(lap_position_pct)}},
-        0, delta_ms);
+        completed_lap_ms, delta_ms, lap_valid, delta_present);
   }
 };
 
 // The former two-lap AC1 delta fixture replayed legacy v3 JSON frames with no
 // delta field, which is how the runtime used to recognise "the sim did not
-// provide a delta" and synthesise one. On the authenticated v4 wire every
-// telemetry packet carries an explicit int32 delta, so that runtime branch is
-// unreachable from v4; the AC1-specific runtime delta test was v3-only and is
-// removed with the transport. ACC's own delta passthrough is still covered.
+// provide a delta" and synthesise one. Schema 2 makes that presence explicit on
+// the wire and the AC1 synthesis was deleted with #52; what remains to verify
+// is that a present delta (including a real 0) stays a number and an absent one
+// stays null.
 
 void test_acc_delta_untouched(const fs::path &assets, const fs::path &root) {
   Config c;
@@ -263,11 +269,73 @@ void test_acc_delta_untouched(const fs::path &assets, const fs::path &root) {
   delta.stream.simulator = 1; // ACC
   require(runtime.receive(delta.metadata(), "127.0.0.1"),
           "ACC metadata accepted");
-  require(runtime.receive(delta.frame(1, 40000, 50.0, -250), "127.0.0.1"),
+  require(runtime.receive(delta.frame(1, 40000, 50.0, -250, true), "127.0.0.1"),
           "ACC sample accepted");
   require(runtime.snapshot()["delta_ms"].get<int>() == -250,
           "ACC's own delta_ms is never overwritten (#20)");
   runtime.finish();
+}
+
+void test_delta_presence(const fs::path &assets, const fs::path &root) {
+  Config c;
+  c.assets = assets;
+  c.database = root / "delta-presence.db";
+  c.telemetry = root / "delta-presence-telemetry";
+  c.queue = root / "delta-presence-queue.db";
+  c.companion_key = std::string(32, '\x11');
+  Runtime runtime(c);
+  DeltaStream delta(rapid::test::v4_run_id());
+  delta.stream.simulator = 2; // AC1: no delta in shared memory
+  require(runtime.receive(delta.metadata(), "127.0.0.1"), "delta metadata");
+  require(runtime.receive(delta.frame(1, 40000, 50.0, 0, true), "127.0.0.1"),
+          "a real delta of 0 is present");
+  require(runtime.snapshot()["delta_ms"].is_number_integer() &&
+              runtime.snapshot()["delta_ms"].get<int>() == 0,
+          "a real delta 0 stays a real 0, not blank");
+  require(runtime.receive(delta.frame(1, 41000, 50.5), "127.0.0.1"),
+          "an absent delta is accepted");
+  require(runtime.snapshot()["delta_ms"].is_null(),
+          "an absent delta is null, never a synthesised 0 (#52)");
+  runtime.finish();
+}
+
+void test_lap_validity_manifest(const fs::path &root) {
+  Recorder recorder(root / ("lap-valid-" + unique_id()), "all");
+  auto message = [](int lap_number, int current_lap_ms, const Json &valid) {
+    Json m = fixture_message("lap-valid-session", 50, lap_number,
+                             current_lap_ms, 0.0);
+    m["completed_lap_ms"] = 90000;
+    if (!valid.is_null())
+      m["telemetry"]["lap_valid"] = valid;
+    return m;
+  };
+  recorder.record(message(1, 40000, true));
+  // The shared lap-boundary rule debounces closes by 10 samples (#16), so
+  // crossings that must each close a lap are spaced the way real laps are:
+  // ten mid-lap samples in between. The pads carry no lap_valid, like a sim
+  // with no signal, and must not close anything themselves.
+  for (int i = 0; i < 10; ++i)
+    recorder.record(message(1, 41000 + i * 1000, Json()));
+  recorder.record(message(2, 100, true)); // closes lap 1, valid
+  for (int i = 0; i < 10; ++i)
+    recorder.record(message(2, 200 + i * 1000, Json()));
+  recorder.record(message(3, 100, false)); // closes lap 2, invalid
+  for (int i = 0; i < 10; ++i)
+    recorder.record(message(3, 300 + i * 1000, Json()));
+  recorder.record(message(4, 100, Json())); // closes lap 3, no signal
+  recorder.finish();
+  recorder.wait_idle();
+  auto path =
+      fs::path(recorder.status().at("last_bundle_path").get<std::string>());
+  auto manifest = Json::parse(read_file(path / "manifest.json"));
+  require(manifest["laps"].size() == 3,
+          "validity fixtures close exactly three laps");
+  require(manifest["laps"][0]["valid"] == true,
+          "the manifest records a valid lap as valid (#16)");
+  require(manifest["laps"][1]["valid"] == false,
+          "the manifest records an invalid lap as invalid (#16)");
+  require(manifest["laps"][2]["valid"].is_null(),
+          "a lap with no lap-valid signal stays unknown, never invented");
 }
 
 int main(int argc, char **argv) {
@@ -287,9 +355,12 @@ int main(int argc, char **argv) {
     test_session_c28a_lap6_wrap(fixtures, root);
     test_session_4e6de929_six_laps(fixtures, root);
     test_acc_delta_untouched(assets, root);
+    test_delta_presence(assets, root);
+    test_lap_validity_manifest(root);
 
     std::cout << "Lap boundary: unit rules, real-recording regression "
-                 "fixtures, and ACC delta passthrough passed\n"
+                 "fixtures, ACC delta passthrough, delta presence and the "
+                 "per-lap manifest validity passed\n"
                  "Evidence: "
               << root << "\n";
     return 0;

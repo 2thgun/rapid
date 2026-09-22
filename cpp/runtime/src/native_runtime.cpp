@@ -22,32 +22,6 @@ double percentile(const std::deque<double> &values, double rank) {
   return sorted[index];
 }
 
-// Linear interpolation of a lap-position (0..1) -> elapsed lap_time_ms trace,
-// used for the AC1 delta (#20). The trace is recorded in time order over a
-// forward lap, so position is expected to be non-decreasing.
-double interpolate_trace(const std::vector<std::pair<double, double>> &trace,
-                          double position) {
-  if (trace.empty())
-    return 0;
-  if (position <= trace.front().first)
-    return trace.front().second;
-  if (position >= trace.back().first)
-    return trace.back().second;
-  auto next = std::lower_bound(
-      trace.begin(), trace.end(), position,
-      [](const std::pair<double, double> &point, double value) {
-        return point.first < value;
-      });
-  if (next == trace.begin())
-    return next->second;
-  auto prev = std::prev(next);
-  const double span = next->first - prev->first;
-  if (span <= 0)
-    return prev->second;
-  const double t = (position - prev->first) / span;
-  return prev->second + t * (next->second - prev->second);
-}
-
 const std::set<std::string> &live_channels() {
   static const auto keys = [] {
     struct Channel {
@@ -145,25 +119,6 @@ void Runtime::sectors(Json &f) {
   // timing and recording close a lap on the same sample (#20).
   auto boundary = lap_boundary_.step(lap, time, position, has_position);
   if (boundary.closed) {
-    // Promote the just-finished lap's position->time trace to the reference
-    // used for the AC1 delta below, if it is the best valid lap so far. The
-    // duration comes from the trace itself (the last sample before the
-    // reset), not completed_lap_ms, because AC1 often omits that field at
-    // the exact crossing sample (#16) -- relying on it here would leave the
-    // delta reference stuck at "none" for the same reason the recorder used
-    // to drop laps.
-    bool valid = true;
-    if (f.contains("lap_valid") && f["lap_valid"].is_boolean())
-      valid = f["lap_valid"].get<bool>();
-    if (valid && !current_lap_trace_.empty()) {
-      const double duration = current_lap_trace_.back().second;
-      if (duration > 0 && (best_lap_trace_duration_ < 0 ||
-                            duration < best_lap_trace_duration_)) {
-        best_lap_trace_ = current_lap_trace_;
-        best_lap_trace_duration_ = duration;
-      }
-    }
-    current_lap_trace_.clear();
     if (timing_lap_ >= 0 && complete > 0) {
       if (splits_.size() == 2)
         record(2, complete - splits_.back());
@@ -182,16 +137,9 @@ void Runtime::sectors(Json &f) {
       splits_.push_back(int(time));
     }
   }
-  // AC1 delta (#20): only fill delta_ms when the sim did not provide one (the
-  // AC1 adapter never sets it) and a reference lap already exists. ACC's own
-  // delta -- set by the companion before this frame arrives -- is left
-  // untouched, and the field stays blank until a reference lap exists.
-  if (has_position && !best_lap_trace_.empty() &&
-      (!f.contains("delta_ms") || f["delta_ms"].is_null()))
-    f["delta_ms"] =
-        int(std::lround(time - interpolate_trace(best_lap_trace_, position)));
-  if (has_position)
-    current_lap_trace_.emplace_back(position, time);
+  // The former AC1 delta synthesis (#20/#52) lived here: the v4 wire now
+  // carries an explicit delta-present flag, and the Pi leaves delta_ms null
+  // (blank) when the simulator provided none instead of inventing one.
 }
 bool Runtime::receive(const std::string &payload, const std::string &host,
                       double receipt_monotonic) {
@@ -383,6 +331,9 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
             (!frame[key].is_number() ||
              std::abs(number(frame, key)) > 2147483647))
           throw std::runtime_error("invalid integer channel");
+      if (frame.contains("lap_valid") && !frame["lap_valid"].is_null() &&
+          !frame["lap_valid"].is_boolean())
+        throw std::runtime_error("invalid lap validity");
       daemon = "driving";
     } else
       throw std::runtime_error("invalid packet type");
@@ -447,13 +398,9 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       best_lap_ = 0;
       splits_.clear();
       std::fill(std::begin(best_sectors_), std::end(best_sectors_), 0);
-      // A new session has no reference lap yet: the AC1 delta (#20) must go
-      // back to blank rather than keep interpolating against the previous
-      // session's trace.
+      // A new session starts with a fresh lap boundary; delta_ms stays null
+      // until the companion says the new session's simulator provides one.
       lap_boundary_ = LapBoundary{};
-      current_lap_trace_.clear();
-      best_lap_trace_.clear();
-      best_lap_trace_duration_ = -1;
       for (auto *key :
            {"best_lap_ms", "sector_1_ms", "sector_2_ms", "sector_3_ms",
             "sector_1_delta_ms", "sector_2_delta_ms", "sector_3_delta_ms",

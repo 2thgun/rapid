@@ -215,12 +215,11 @@ class Runtime {
   double last_sender_seconds_ = -std::numeric_limits<double>::infinity();
   double sender_lag_current_ms_ = 0;
   std::deque<double> sender_lag_ms_, process_ms_, lock_wait_ms_;
-  // Lap-position (0..1) -> elapsed lap_time_ms trace for the AC1 delta (#20),
-  // using the same boundary rule as the recorder (#16) so a lap that closes
-  // for recording also closes for timing.
+  // Lap boundaries use the same debounced rule as the recorder (#16) so timing
+  // and recording close a lap on the same sample. The former AC1 delta
+  // synthesis and its position->time traces were removed with #52: the v4 wire
+  // now says explicitly whether a delta exists, and the Pi never invents one.
   LapBoundary lap_boundary_;
-  std::vector<std::pair<double, double>> current_lap_trace_, best_lap_trace_;
-  double best_lap_trace_duration_ = -1;
   std::uint64_t next_event_ = 1;
   void sectors(Json &frame);
 

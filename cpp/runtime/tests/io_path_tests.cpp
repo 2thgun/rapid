@@ -132,7 +132,7 @@ struct Stream {
     put(b, 7, flags, 1);
     put(b, 8, 52, 2);
     put(b, 10, end - 52, 2);
-    put(b, 12, 1, 2);
+    put(b, 12, 2, 2); // schema 2: lap-validity/delta-presence revision
     put(b, 14, 48, 2);
     put(b, 16, rate, 2);
     put(b, 18, 0, 2);

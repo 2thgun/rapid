@@ -43,6 +43,20 @@ if (qmlSource.includes('PWR') || qmlSource.includes('power_status_available') ||
 if (!qmlSource.includes('dashboard.livePushActive')) {
   throw new Error('Main.qml must surface dashboard.livePushActive (#43)');
 }
+// #61: the settings page carries a real pairing entry, not a placeholder: it
+// shows the address and the short fingerprint to type into a first-run
+// companion and can arm/cancel the on-device pairing window.
+if (!qmlSource.includes('dashboard.pairingAddress') ||
+    !qmlSource.includes('dashboard.pairingFingerprint') ||
+    !qmlSource.includes('dashboard.pairingWindowActive') ||
+    !qmlSource.includes('dashboard.pairingWindowRequested') ||
+    !qmlSource.includes('dashboard.openPairingWindow()') ||
+    !qmlSource.includes('dashboard.cancelPairingWindow()')) {
+  throw new Error('Main.qml must expose the Pi-dash pairing button (#61)');
+}
+if (qmlSource.includes('Seam: lane C')) {
+  throw new Error('Main.qml pairing placeholder must be replaced by the real button (#61)');
+}
 
 // steering-display-motion: the wheel must read the model's presentation-only
 // smoothed value, not the raw channel, so a ~30 Hz push renders as continuous

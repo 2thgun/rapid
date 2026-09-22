@@ -199,7 +199,7 @@ Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
   check(type >= 1 && type <= 3 && sim >= 1 && sim <= 4,
         "invalid v4 packet type/simulator");
   check(le(bytes, 8, 2) == 52 && le(bytes, 10, 2) == end - 52 &&
-            le(bytes, 12, 2) == 1 && le(bytes, 14, 2) == 48 &&
+            le(bytes, 12, 2) == 2 && le(bytes, 14, 2) == 48 &&
             le(bytes, 18, 2) == 0,
         "invalid v4 header/schema");
   auto rate = le(bytes, 16, 2), sequence = le(bytes, 36, 8),
@@ -207,7 +207,7 @@ Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
   check(rate >= 1 && rate <= 100 && sequence <= 9007199254740991ULL &&
             time <= 9007199254740991ULL,
         "invalid v4 rate/sequence/time");
-  check(flags <= 3, "invalid v4 flags");
+  check(flags <= 0x1f, "invalid v4 flags");
   const auto raw_id = bytes.substr(20, 16);
   check(raw_id != std::string(16, '\0'), "zero v4 run id");
   std::string session_id;
@@ -232,7 +232,8 @@ Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
   Json metadata = Json::object();
   bool closed = false;
   if (type == 1) {
-    check(flags == 1 && end == 260, "invalid v4 telemetry size/flags");
+    check((flags & 0x03) == 0x01 && end == 260,
+          "invalid v4 telemetry size/flags");
     const auto mask = le(bytes, 52, 8);
     constexpr std::uint64_t primary =
         (1ULL << 5) | (1ULL << 6) | (1ULL << 11) | (1ULL << 12) | (1ULL << 13);
@@ -261,11 +262,22 @@ Json decode_v4(Store &store, const std::string &bytes, const std::string &key,
     }
     frame["completed_lap_ms"] =
         std::bit_cast<std::int32_t>(std::uint32_t(le(bytes, 60, 4)));
-    frame["delta_ms"] =
-        std::bit_cast<std::int32_t>(std::uint32_t(le(bytes, 64, 4)));
-    check(frame["completed_lap_ms"].get<std::int64_t>() >= -2147483647 &&
-              frame["delta_ms"].get<std::int64_t>() >= -2147483647,
+    check(frame["completed_lap_ms"].get<std::int64_t>() >= -2147483647,
           "invalid v4 lap timing");
+    // Schema 2 header flags: bit 2 says the completed lap's validity is a real
+    // simulator value and bit 3 is that value; bit 4 says the delta is real.
+    // Anything the simulator did not provide stays null, so the dashboard and
+    // the recorder show "unknown" rather than a fabricated false or 0 (#16,
+    // #20, #52).
+    frame["lap_valid"] =
+        (flags & 0x04) ? Json((flags & 0x08) != 0) : Json(nullptr);
+    if (flags & 0x10) {
+      const auto delta =
+          std::bit_cast<std::int32_t>(std::uint32_t(le(bytes, 64, 4)));
+      check(delta >= -2147483647, "invalid v4 delta");
+      frame["delta_ms"] = std::int64_t(delta);
+    } else
+      frame["delta_ms"] = nullptr;
     message["type"] = "telemetry";
     message["telemetry"] = std::move(frame);
   } else if (type == 2) {

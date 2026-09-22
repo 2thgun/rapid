@@ -74,7 +74,7 @@ struct V4Stream {
     v4_put(b, 7, std::uint64_t(flags), 1);
     v4_put(b, 8, 52, 2);
     v4_put(b, 10, end - 52, 2);
-    v4_put(b, 12, 1, 2);
+    v4_put(b, 12, 2, 2); // schema 2: lap-validity/delta-presence revision
     v4_put(b, 14, 48, 2);
     v4_put(b, 16, std::uint64_t(rate), 2);
     v4_put(b, 18, 0, 2);
@@ -112,11 +112,19 @@ struct V4Stream {
     return sign(b);
   }
 
+  // lap_valid: -1 absent (the simulator exposed no lap-valid signal), 0 the
+  // completed lap was invalid, 1 it was valid. delta_present distinguishes a
+  // real delta (including 0) from "the simulator provided none".
   std::string telemetry(std::uint64_t time_us, std::uint64_t mask,
                         const std::vector<std::pair<int, float>> &channels,
                         std::int32_t completed_lap_ms = 0,
-                        std::int32_t delta_ms = 0) {
-    auto b = header(1, 1, 260, time_us);
+                        std::int32_t delta_ms = 0,
+                        int lap_valid = -1,
+                        bool delta_present = false) {
+    std::uint64_t flags = 1;
+    if (lap_valid >= 0) flags |= 0x04 | (lap_valid ? 0x08 : 0);
+    if (delta_present) flags |= 0x10;
+    auto b = header(1, int(flags), 260, time_us);
     v4_put(b, 52, mask, 8);
     v4_put(b, 60, std::uint32_t(completed_lap_ms), 4);
     v4_put(b, 64, std::uint32_t(delta_ms), 4);

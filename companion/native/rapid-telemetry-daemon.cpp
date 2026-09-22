@@ -299,7 +299,7 @@ constexpr std::size_t kEventSize = 1154;
 constexpr std::size_t kChannelHeaderSize = 124;
 constexpr std::size_t kV4HeaderSize = 52;
 constexpr std::size_t kV4HmacSize = 32;
-constexpr std::uint16_t kV4SchemaVersion = 1;
+constexpr std::uint16_t kV4SchemaVersion = 2;
 
 enum Field : std::size_t {
     elapsed, throttle, brake, fuel, gear, rpm, steering_angle, speed_kmh,
@@ -404,6 +404,36 @@ struct Frame {
     std::uint64_t valid_mask = 0;
     int completed_lap_ms = 0;
     int delta_ms = 0;
+    // v4 schema 2. Tri-state validity of the most recently completed lap
+    // (present+valid, present+invalid, or absent when the simulator exposes no
+    // lap-valid signal) and whether delta_ms came from the simulator at all.
+    // Neither is ever guessed: a signal the simulator does not provide stays
+    // absent on the wire instead of becoming a fabricated false or zero.
+    bool lap_valid_present = false;
+    bool lap_valid = false;
+    bool delta_present = false;
+};
+
+// Tracks a simulator's current-lap-valid signal across a lap crossing. The
+// value sampled *before* the lap counter changes describes the lap that just
+// completed, so it is attached to the first sample of the new lap -- the same
+// sample the Pi's recorder closes the boundary on (#16). The last completed
+// lap's state is held until the next crossing, so a Pi that misses the exact
+// crossing packet still reads the right lap's validity instead of an invented
+// one. A simulator with no such signal never marks it present.
+struct CompletedLapValidity {
+    bool present = false;
+    bool valid = false;
+    int lap_number = std::numeric_limits<int>::min();
+    bool previous_sim_valid = true;
+    void update(int lap_now, bool sim_valid) {
+        if (lap_number != std::numeric_limits<int>::min() && lap_now != lap_number) {
+            present = true;
+            valid = previous_sim_valid;
+        }
+        lap_number = lap_now;
+        previous_sim_valid = sim_valid;
+    }
 };
 
 struct Metadata {
@@ -417,6 +447,11 @@ struct Metadata {
     // session data (never a guessed offset). 0 means the sim does not expose
     // it; displays fall back to a configurable default and say so.
     double steering_lock_deg = 0.0;
+    // #53: the moment the companion observed this simulator session begin. The
+    // session identity is derived from the type plus this timestamp instead of
+    // adding another wire field; the Pi already keys a recording on the random
+    // v4 run identifier.
+    std::chrono::system_clock::time_point session_started_at = std::chrono::system_clock::now();
 };
 
 struct Options {
@@ -475,6 +510,41 @@ std::string lower_ascii(std::string input) {
     return input;
 }
 
+// #61: the panel and the setup page print the first 16 hex of the SHA-256
+// certificate fingerprint (#54 - 64 bits, the owner's chosen evil-twin floor),
+// while the stored/wire form stays the full 64. Manual pairing accepts either:
+// a 16-hex value is compared against the first 16 of the server certificate,
+// a 64-hex value against the whole digest. The grouped display form ("fedc
+// ba98 7654 3210") is accepted by removing whitespace; after that the value
+// must be exactly 16 or 64 lowercase hex characters.
+constexpr std::size_t kShortFingerprintHex = 16;
+constexpr std::size_t kFullFingerprintHex = 64;
+
+std::string validate_pairing_fingerprint(std::string value, std::string_view source) {
+    value = lower_ascii(std::move(value));
+    // The grouped display form ("fedc ba98 7654 3210") and a pasted value can
+    // carry spaces or line breaks; those are removed before the length check.
+    value.erase(std::remove_if(value.begin(), value.end(), [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    }), value.end());
+    if (value.size() != kShortFingerprintHex && value.size() != kFullFingerprintHex)
+        throw std::runtime_error(std::string(source) +
+            " must be the 16-hex fingerprint shown on the Pi's display or the full 64-hex SHA-256 fingerprint");
+    if (value.find_first_not_of("0123456789abcdef") != std::string::npos)
+        throw std::runtime_error(std::string(source) +
+            " must be hexadecimal (the 16-hex fingerprint shown on the Pi's display or the full 64-hex SHA-256 fingerprint)");
+    return value;
+}
+
+// A 16-hex pin is a prefix check; a 64-hex pin is exact. `actual_full` is
+// always the certificate's full 64-hex SHA-256 digest.
+bool fingerprint_matches(std::string_view actual_full, std::string_view expected) {
+    if (expected.size() == kShortFingerprintHex)
+        return actual_full.size() >= kShortFingerprintHex &&
+               actual_full.substr(0, kShortFingerprintHex) == expected;
+    return actual_full == expected;
+}
+
 std::string hex_text(std::span<const std::uint8_t> bytes) {
     std::ostringstream output;
     for (const auto byte : bytes)
@@ -529,6 +599,19 @@ std::string certificate_fingerprint(PCCERT_CONTEXT certificate) {
 
 struct PairingHttpResponse { DWORD status = 0; std::string body; };
 
+// #61 owner-recommended paired-run policy: a transport failure means "the Pi
+// is not answering right now" (powered off, booting, out of range) and must
+// not stop a paired companion, while a server that presents a different
+// certificate than the pinned one is a changed identity and requires pairing
+// again. The two are different exception types so verify_paired_identity() can
+// tell them apart; run_pairing() still fails on either.
+struct PairingUnreachable : std::runtime_error {
+    explicit PairingUnreachable(const std::string& what) : std::runtime_error(what) {}
+};
+struct PairingIdentityChanged : std::runtime_error {
+    explicit PairingIdentityChanged(const std::string& what) : std::runtime_error(what) {}
+};
+
 PairingHttpResponse pairing_http(const std::wstring& url, std::wstring method,
                                  const std::string& body, std::string_view expected_fp) {
     URL_COMPONENTS parts{}; parts.dwStructSize = sizeof(parts);
@@ -537,11 +620,11 @@ PairingHttpResponse pairing_http(const std::wstring& url, std::wstring method,
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
         throw std::runtime_error("pairing requires an https URL");
     HINTERNET session = WinHttpOpen(L"raPId pairing", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) throw std::runtime_error("cannot open Windows HTTPS session");
+    if (!session) throw PairingUnreachable("cannot open Windows HTTPS session");
     HINTERNET connection = WinHttpConnect(session, host, parts.nPort, 0);
     HINTERNET request = connection ? WinHttpOpenRequest(connection, method.c_str(), path, nullptr, WINHTTP_NO_REFERER,
                                                          WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr;
-    if (!request) { if (connection) WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("cannot create pairing request"); }
+    if (!request) { if (connection) WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw PairingUnreachable("cannot create pairing request"); }
     DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID;
     WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
     const wchar_t headers[] = L"Content-Type: application/json\r\n";
@@ -549,14 +632,14 @@ PairingHttpResponse pairing_http(const std::wstring& url, std::wstring method,
                             body.empty() ? 0 : static_cast<DWORD>(-1L), body.empty() ? nullptr : (LPVOID)body.data(),
                             static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) ||
         !WinHttpReceiveResponse(request, nullptr)) {
-        WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("pairing HTTPS request failed");
+        WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw PairingUnreachable("pairing HTTPS request failed");
     }
     PCCERT_CONTEXT cert = nullptr; DWORD cert_size = sizeof(cert);
     if (!WinHttpQueryOption(request, WINHTTP_OPTION_SERVER_CERT_CONTEXT, &cert, &cert_size)) {
-        WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("pairing server did not provide a certificate");
+        WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw PairingUnreachable("pairing server did not provide a certificate");
     }
     const auto actual = certificate_fingerprint(cert); CertFreeCertificateContext(cert);
-    if (actual != expected_fp) { WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw std::runtime_error("pairing certificate fingerprint mismatch"); }
+    if (!fingerprint_matches(actual, expected_fp)) { WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); throw PairingIdentityChanged("pairing certificate fingerprint mismatch"); }
     DWORD status = 0, status_size = sizeof(status); WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
     std::string response; DWORD available = 0;
     while (WinHttpQueryDataAvailable(request, &available) && available) { const auto at = response.size(); response.resize(at + available); DWORD got = 0; if (!WinHttpReadData(request, response.data() + at, available, &got)) break; response.resize(at + got); }
@@ -592,8 +675,7 @@ void write_pairing_identity(const fs::path& credential, std::string_view device,
 }
 
 int verify_setup_certificate(const std::wstring& url, const std::string& expected) {
-    if (expected.size() != 64 || expected.find_first_not_of("0123456789abcdef") != std::string::npos)
-        throw std::runtime_error("certificate fingerprint must be 64 lowercase hexadecimal characters");
+    const auto pinned = validate_pairing_fingerprint(expected, "certificate fingerprint");
     URL_COMPONENTS parts{}; parts.dwStructSize = sizeof(parts);
     wchar_t host[256]{}; wchar_t path[2048]{};
     parts.lpszHostName = host; parts.dwHostNameLength = static_cast<DWORD>(std::size(host));
@@ -621,7 +703,7 @@ int verify_setup_certificate(const std::wstring& url, const std::string& expecte
     const auto actual = certificate_fingerprint(certificate);
     CertFreeCertificateContext(certificate);
     WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session);
-    if (actual != expected) throw std::runtime_error("setup certificate fingerprint mismatch");
+    if (!fingerprint_matches(actual, pinned)) throw std::runtime_error("setup certificate fingerprint mismatch");
     std::cout << "Setup certificate fingerprint verified: " << actual << '\n';
     return 0;
 }
@@ -679,17 +761,20 @@ std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std:
 }
 
 int run_pairing(const Options& options) {
-    if (options.pairing_label.empty() || options.pairing_url.empty() || options.pinned_certificate_fingerprint.size() != 64) throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
-    const auto base = pairing_base_url(options.pairing_url); const auto setup = pairing_http(base + L"/api/v1/setup", L"GET", {}, options.pinned_certificate_fingerprint);
+    if (options.pairing_label.empty() || options.pairing_url.empty()) throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
+    // #61: 16-hex (the display's short form) or the full 64-hex digest; both
+    // pin the certificate, the short one as a 64-bit prefix.
+    const auto pinned_fingerprint = validate_pairing_fingerprint(options.pinned_certificate_fingerprint, "certificate fingerprint");
+    const auto base = pairing_base_url(options.pairing_url); const auto setup = pairing_http(base + L"/api/v1/setup", L"GET", {}, pinned_fingerprint);
     if (setup.status != 200) throw std::runtime_error("pairing setup endpoint failed");
-    const auto device = json_field(setup.body, "device_id"); const auto fp = lower_ascii(json_field(setup.body, "certificate_fingerprint")); if (fp != options.pinned_certificate_fingerprint) throw std::runtime_error("setup fingerprint does not match pinned fingerprint");
+    const auto device = json_field(setup.body, "device_id"); const auto fp = lower_ascii(json_field(setup.body, "certificate_fingerprint")); if (!fingerprint_matches(fp, pinned_fingerprint)) throw std::runtime_error("setup fingerprint does not match pinned fingerprint");
     BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_KEY_HANDLE key = nullptr; const wchar_t curve[] = L"Curve25519"; if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM, nullptr, 0) < 0 || BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME, (PUCHAR)curve, sizeof(curve), 0) < 0 || BCryptGenerateKeyPair(alg, &key, 255, 0) < 0 || BCryptFinalizeKeyPair(key, 0) < 0) throw std::runtime_error("CNG Curve25519 generation failed");
     ULONG private_size = 0; if (BCryptExportKey(key, nullptr, BCRYPT_ECCPRIVATE_BLOB, nullptr, 0, &private_size, 0) < 0) throw std::runtime_error("CNG private-key export failed"); std::vector<std::uint8_t> private_blob(private_size); if (BCryptExportKey(key, nullptr, BCRYPT_ECCPRIVATE_BLOB, private_blob.data(), private_size, &private_size, 0) < 0) throw std::runtime_error("CNG private-key export failed");
     const auto pub = export_curve25519_wire_public(key); BCryptDestroyKey(key); BCryptCloseAlgorithmProvider(alg, 0); const auto pubhex = hex_text(pub);
     const std::string request_body = "{\"label\":\"" + json_escape(options.pairing_label) + "\",\"companion_public_key\":\"" + pubhex + "\"}";
-    const auto requested = pairing_http(base + L"/api/v1/pairing/request", L"POST", request_body, options.pinned_certificate_fingerprint); if (requested.status != 200 && requested.status != 201) throw std::runtime_error("pairing request rejected");
+    const auto requested = pairing_http(base + L"/api/v1/pairing/request", L"POST", request_body, pinned_fingerprint); if (requested.status != 200 && requested.status != 201) throw std::runtime_error("pairing request rejected");
     const auto tx = json_field(requested.body, "transaction_id"); const auto nonce = json_field(requested.body, "nonce"); std::cout << "Pairing verification code: " << cng_pairing_verification_code(device, fp, tx, nonce, pubhex) << '\n';
-    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, options.pinned_certificate_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "nonce"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp, wide_to_utf8(base)); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
+    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, pinned_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "nonce"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp, wide_to_utf8(base)); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
     throw std::runtime_error("pairing approval timed out");
 }
 
@@ -745,6 +830,27 @@ PortableStartup plan_portable_startup(bool have_key, bool offline,
     if (offline || have_key || !explicit_credential.empty()) return {};
     if (default_credential_exists) return {default_credential, false};
     return {{}, true};
+}
+
+// #61 owner-recommended: a corrupt or unreadable per-user credential must
+// offer re-pairing (which rewrites the same file) instead of failing closed
+// with an error the owner cannot act on. Only the implicit bare-run path uses
+// this; an explicit --auth-key-dpapi-file still fails closed because the owner
+// named that file deliberately.
+struct DefaultCredentialLoad {
+    std::vector<std::uint8_t> key;
+    bool offer_pairing = false;
+    std::string error;
+};
+
+DefaultCredentialLoad load_default_pairing_credential(const fs::path& credential) {
+    try {
+        auto key = read_dpapi_credential(credential);
+        if (key.size() != 32) throw std::runtime_error("DPAPI pairing credential is not a 256-bit key");
+        return {std::move(key), false, {}};
+    } catch (const std::exception& error) {
+        return {{}, true, error.what()};
+    }
 }
 
 // #42: an implicit first run must never open a prompt that can block on a host
@@ -809,10 +915,10 @@ bool complete_pairing_options(Options& options, std::istream& input, std::ostrea
         options.pairing_url = pairing_url_from_address(address);
     }
     if (options.pinned_certificate_fingerprint.empty()) {
-        output << "TLS fingerprint shown on the Pi's own display: " << std::flush;
+        output << "TLS fingerprint shown on the Pi's own display (first 16 hex, or all 64): " << std::flush;
         std::string fingerprint;
         if (!std::getline(input, fingerprint)) return false;
-        options.pinned_certificate_fingerprint = lower_ascii(trim_ascii(std::move(fingerprint)));
+        options.pinned_certificate_fingerprint = validate_pairing_fingerprint(std::move(fingerprint), "TLS fingerprint");
     }
     return true;
 }
@@ -871,13 +977,49 @@ std::optional<PairedIdentity> read_paired_identity(const fs::path& credential) {
     return identity;
 }
 
-void verify_paired_identity(const fs::path& credential) {
-    const auto identity = read_paired_identity(credential);
-    if (!identity) return; // Imported legacy DPAPI credentials have no pinned device record.
-    const auto response = pairing_http(pairing_base_url(utf8_to_wide(identity->url)) + L"/api/v1/setup", L"GET", {}, identity->fingerprint);
-    if (response.status != 200 || json_field(response.body, "device_id") != identity->device_id ||
-        lower_ascii(json_field(response.body, "certificate_fingerprint")) != identity->fingerprint)
-        throw std::runtime_error("paired Pi identity changed; pair this Windows account again");
+// #61 owner-recommended paired-run policy: an unreachable Pi is not a security
+// event - it may simply be off - so the companion keeps running and the
+// runtime retries. Only a reachable Pi whose pinned identity changed requires
+// pairing again; an unreadable local record offers re-pairing rather than a
+// hard failure. `detail` carries the reason for the caller's message.
+enum class PairedIdentityState { verified, unreachable, re_pair_required };
+
+PairedIdentityState verify_paired_identity(const fs::path& credential, std::string& detail) {
+    std::optional<PairedIdentity> identity;
+    try {
+        identity = read_paired_identity(credential);
+    } catch (const std::exception& error) {
+        detail = std::string("stored paired-device record is unreadable (") + error.what() +
+                 "); pair this Windows account again";
+        return PairedIdentityState::re_pair_required;
+    }
+    if (!identity) return PairedIdentityState::verified; // Imported legacy DPAPI credentials have no pinned device record.
+    try {
+        const auto response = pairing_http(pairing_base_url(utf8_to_wide(identity->url)) + L"/api/v1/setup", L"GET", {}, identity->fingerprint);
+        if (response.status != 200) {
+            detail = "paired Pi refused the stored identity; pair this Windows account again";
+            return PairedIdentityState::re_pair_required;
+        }
+        const auto device = json_field(response.body, "device_id");
+        const auto fingerprint = lower_ascii(json_field(response.body, "certificate_fingerprint"));
+        if (device != identity->device_id || !fingerprint_matches(fingerprint, identity->fingerprint)) {
+            detail = "paired Pi identity changed; pair this Windows account again";
+            return PairedIdentityState::re_pair_required;
+        }
+        return PairedIdentityState::verified;
+    } catch (const PairingIdentityChanged& error) {
+        detail = error.what();
+        return PairedIdentityState::re_pair_required;
+    } catch (const PairingUnreachable& error) {
+        detail = error.what();
+        return PairedIdentityState::unreachable;
+    } catch (const std::exception& error) {
+        // A malformed answer is not proof of a changed identity, but the pin
+        // cannot be confirmed; ask for pairing again rather than trusting it.
+        detail = std::string("paired Pi answered with an unverifiable identity (") + error.what() +
+                 "); pair this Windows account again";
+        return PairedIdentityState::re_pair_required;
+    }
 }
 
 bool parse_bool(std::string value, std::string_view name) {
@@ -1038,8 +1180,9 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (raw == L"--verify-setup-url") {
             options.verify_setup_url = option_value(i, argc, argv, L"--verify-setup-url");
         } else if (raw == L"--certificate-fingerprint") {
-            options.pinned_certificate_fingerprint = lower_ascii(
-                wide_to_utf8(option_value(i, argc, argv, L"--certificate-fingerprint")));
+            options.pinned_certificate_fingerprint = validate_pairing_fingerprint(
+                wide_to_utf8(option_value(i, argc, argv, L"--certificate-fingerprint")),
+                "--certificate-fingerprint");
         } else if (raw == L"--pair") {
             // #10: the manual-entry path. Without --pairing-url the address
             // (and the pinned TLS fingerprint) are prompted for in wmain; with
@@ -1073,7 +1216,8 @@ Options parse_options(int argc, wchar_t** argv) {
                       "  --pairing-pi-seals-fixtures PATH  With --self-test: decrypt the real\n"
                       "                              Pi-sealed pairing fixture at PATH (#14)\n"
                       "  --verify-setup-url URL       Verify an HTTPS setup certificate fingerprint and exit\n"
-                      "  --certificate-fingerprint HEX64  Expected SHA-256 setup certificate fingerprint\n"
+                      "  --certificate-fingerprint HEX16|HEX64  Expected setup certificate fingerprint (the\n"
+                      "                              first 16 hex shown on the Pi's display, or the full SHA-256)\n"
                       "  --pair                     Pair without flags: prompt for the Pi address and its\n"
                       "                              TLS fingerprint (piped stdin works). Reaches the same client\n"
                       "                              path as --pairing-url\n"
@@ -1093,8 +1237,9 @@ Options parse_options(int argc, wchar_t** argv) {
         // --pairing-url keeps its flag-only validation. A bare --pair (empty
         // URL) is the manual-entry path: wmain completes it from stdin, so the
         // address and pinned fingerprint are not required on the command line.
+        // #61: the pinned value is 16 or 64 hex (validated where it is set).
         if (!options.pairing_url.empty() &&
-            (options.pairing_label.empty() || options.pinned_certificate_fingerprint.size() != 64))
+            (options.pairing_label.empty() || options.pinned_certificate_fingerprint.empty()))
             throw std::runtime_error("pairing requires --pairing-label and --certificate-fingerprint");
         if (options.pairing_credential_file.empty())
             options.pairing_credential_file = default_pairing_credential_path();
@@ -1112,11 +1257,21 @@ Options parse_options(int argc, wchar_t** argv) {
         const auto plan = plan_portable_startup(false, options.no_forward, {},
                                                 default_credential, fs::exists(default_credential));
         if (!plan.credential.empty()) {
-            const auto protected_key = read_dpapi_credential(plan.credential);
-            if (protected_key.size() != 32)
-                throw std::runtime_error("DPAPI pairing credential is not a 256-bit key");
-            options.auth_key = protected_key;
-            options.auth_key_dpapi_file = plan.credential;
+            auto loaded = load_default_pairing_credential(plan.credential);
+            if (loaded.offer_pairing) {
+                // #61 owner-recommended: a corrupt/unreadable default DPAPI
+                // credential offers re-pairing (the pairing flow rewrites the
+                // same file) instead of failing closed.
+                std::fprintf(stderr,
+                             "raPId native daemon: stored pairing credential could not be read (%s); "
+                             "pairing again.\n", loaded.error.c_str());
+                options.pairing = true;
+                options.run_after_pairing = true;
+                options.pairing_credential_file = default_credential;
+            } else {
+                options.auth_key = std::move(loaded.key);
+                options.auth_key_dpapi_file = plan.credential;
+            }
         } else if (plan.offer_pairing) {
             options.pairing = true;
             options.run_after_pairing = true;
@@ -1234,6 +1389,21 @@ const char* game_name(Game game) {
     }
 }
 
+// #53: the companion-side session identity, derived from the session type and
+// the wall-clock moment the run began. Deliberately not a wire field: the Pi
+// already keys a recording on the random per-run v4 run identifier, so a
+// same-type restart is split by the run loop (adapter session_restarted())
+// rather than by a new identifier on the wire. This string makes the split and
+// the companion log readable.
+std::string session_identity(const Metadata& metadata) {
+    const auto started = std::chrono::system_clock::to_time_t(metadata.session_started_at);
+    std::tm utc{};
+    gmtime_s(&utc, &started);
+    char stamp[32]{};
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return metadata.simulator + "/" + metadata.session + "@" + stamp;
+}
+
 Game game_for_executable(const wchar_t* executable) {
     if (_wcsicmp(executable, L"AC2-Win64-Shipping.exe") == 0 || _wcsicmp(executable, L"acc.exe") == 0) {
         return Game::acc;
@@ -1329,6 +1499,12 @@ public:
     // exposes no such signal, so a recording ends only via the not-live
     // timeout, an explicit session/track/car change, or disconnection (#15).
     virtual bool ended() { return false; }
+    // True on the sample where the simulator's own lap counter went backwards:
+    // a session restart inside the same type/track/car (for example ACC's
+    // "restart session"), which the run loop treats as the end of the run so
+    // two same-type sessions cannot merge (#53). Only simulators that expose a
+    // reliable lap counter override this.
+    virtual bool session_restarted() { return false; }
     Metadata metadata;
 };
 
@@ -1379,6 +1555,8 @@ public:
     // AC_PAUSE/AC_REPLAY are gaps inside the same session (#15).
     bool ended() override { return graphics_.read<std::int32_t>(4) == 0; }
 
+    bool session_restarted() override { return session_restarted_; }
+
     bool connected() override { return true; }
 
     const char* kind() const override { return "Assetto"; }
@@ -1406,6 +1584,28 @@ public:
         for (std::size_t i = 0; i < 5; ++i) v[damage_front + i] = physics_.read<float>(224 + i * 4);
         v[pit_limiter] = physics_.read<std::int32_t>(248); v[abs_activity] = physics_.read<float>(252);
         v[lap_number] = graphics_.read<std::int32_t>(132) + 1;
+        const int lap_now = static_cast<int>(v[lap_number]);
+        // A lap counter that goes backwards is a session restart (a real lap
+        // boundary only ever increments it), not a new lap (#53).
+        session_restarted_ = last_lap_number_ >= 0 && lap_now < last_lap_number_;
+        last_lap_number_ = lap_now;
+        if (game_ == Game::acc) {
+            // ACC's graphics page carries the same documented isValidLap,
+            // iDeltaLapTime and iBestTime fields as the ACC UDP lap struct;
+            // original AC's page has none of them, so an AC1 lap's validity
+            // and delta stay absent rather than being invented. The delta is
+            // relative to the best lap, so it is only marked present once the
+            // simulator exposes one (0 and INT_MAX both mean "no lap time" on
+            // these pages).
+            lap_validity_.update(lap_now, graphics_.read<std::int32_t>(1408) != 0);
+            frame.lap_valid_present = lap_validity_.present;
+            frame.lap_valid = lap_validity_.valid;
+            const int best_ms = graphics_.read<std::int32_t>(148);
+            frame.delta_present =
+                best_ms > 0 && best_ms != std::numeric_limits<int>::max();
+            if (frame.delta_present)
+                frame.delta_ms = graphics_.read<std::int32_t>(1360);
+        }
         v[current_lap_ms] = std::max(0, graphics_.read<std::int32_t>(140));
         frame.completed_lap_ms = graphics_.read<std::int32_t>(144);
         if (frame.completed_lap_ms <= 0 || frame.completed_lap_ms == std::numeric_limits<int>::max()) {
@@ -1432,6 +1632,9 @@ private:
     Mapping physics_, graphics_, static_;
     Game game_ = Game::none;
     std::optional<int> last_packet_id_;
+    CompletedLapValidity lap_validity_;
+    int last_lap_number_ = -1;
+    bool session_restarted_ = false;
 };
 
 class AceAdapter final : public Adapter {
@@ -1515,6 +1718,13 @@ public:
         last_current_lap_ms_ = current;
         frame.completed_lap_ms = last_lap_ms_;
         v[lap_number] = synthetic_lap_;
+        // ACE's graphics page exposes is_valid_lap (bool) beside the lap
+        // times, and delta_time_ms is a documented always-present field; the
+        // completed lap's validity is attached at the synthetic crossing.
+        lap_validity_.update(synthetic_lap_, graphics_.read<std::uint8_t>(3121) != 0);
+        frame.lap_valid_present = lap_validity_.present;
+        frame.lap_valid = lap_validity_.valid;
+        frame.delta_present = true;
         for (auto& value : v) if (!std::isfinite(value)) value = 0.0;
         return before == physics_.read<std::int32_t>(0);
     }
@@ -1528,6 +1738,7 @@ private:
     int last_lap_ms_ = 0;
     int last_current_lap_ms_ = 0;
     int synthetic_lap_ = 1;
+    CompletedLapValidity lap_validity_;
 };
 
 class IracingAdapter final : public Adapter {
@@ -1585,6 +1796,7 @@ public:
     }
 
     bool connected() override { return (mapping_.read<std::int32_t>(4) & 1) != 0; }
+    bool session_restarted() override { return session_restarted_; }
     const char* kind() const override { return "iRacing"; }
 
     bool read(Frame& frame) override {
@@ -1615,9 +1827,21 @@ public:
         v[g_y] = number(offset, "VertAccel") / gravity;
         v[g_z] = number(offset, "LongAccel") / gravity;
         v[lap_number] = number(offset, "Lap");
+        const int lap_now = static_cast<int>(v[lap_number]);
+        // A lap counter that goes backwards is a session restart, not a new
+        // lap (#53).
+        session_restarted_ = last_lap_number_ >= 0 && lap_now < last_lap_number_;
+        last_lap_number_ = lap_now;
         v[current_lap_ms] = std::max(0.0, number(offset, "LapCurrentLapTime") * 1000.0);
         frame.completed_lap_ms = std::max(0, static_cast<int>(number(offset, "LapLastLapTime") * 1000.0));
-        frame.delta_ms = static_cast<int>(number(offset, "LapDeltaToBestLap") * 1000.0);
+        // iRacing exposes its own LapDeltaToBestLap_OK flag; when it is false
+        // there is no reference lap and the wire must say "no delta" rather
+        // than a fabricated 0. iRacing has no per-lap validity flag, so
+        // lap_valid stays absent for this simulator.
+        frame.delta_present = boolean(offset, "LapDeltaToBestLap_OK", false);
+        frame.delta_ms = frame.delta_present
+            ? static_cast<int>(number(offset, "LapDeltaToBestLap") * 1000.0)
+            : 0;
         v[lap_position] = number(offset, "LapDistPct");
         v[pit_limiter] = (static_cast<int>(number(offset, "EngineWarnings")) & 0x10) != 0;
         static constexpr const char* shocks[] = {"LFshockDefl", "RFshockDefl", "LRshockDefl", "RRshockDefl"};
@@ -1716,6 +1940,8 @@ private:
 
     Mapping mapping_;
     std::unordered_map<std::string, Variable> variables_;
+    int last_lap_number_ = -1;
+    bool session_restarted_ = false;
 };
 
 std::unique_ptr<Adapter> open_adapter(Game game) {
@@ -1736,6 +1962,12 @@ std::unique_ptr<Adapter> open_adapter(Game game) {
 // Packet types are telemetry=1, metadata=2, status=3. A shared sequence stream
 // starts at zero for every run. Metadata precedes the first telemetry packet.
 // flags bit 0 means an active run; bit 1 marks the final ended status packet.
+// On telemetry only, bit 2 means the frame carries the completed lap's
+// validity, bit 3 is that validity (only meaningful with bit 2), and bit 4
+// means delta_ms is a real simulator value -- so a true delta of 0 stays
+// distinct from "the simulator provides no delta". Schema 2 is the
+// lap-validity/delta-presence revision: a schema-1 companion and a schema-2
+// Pi are a mixed pair and must not be driven.
 // Telemetry payload = valid-mask u64, completed/delta lap time i32, 48 float32.
 // Metadata payload = five u16-length UTF-8 strings: venue, vehicle, driver,
 // session, steering lock (decimal degrees, full lock-to-lock; empty string
@@ -1900,7 +2132,14 @@ public:
         for (const double value : frame.value) {
             append_float_le(payload, static_cast<float>(std::isfinite(value) ? value : 0.0));
         }
-        return packet(V4PacketType::telemetry, game, 0x01, rate, std::move(payload), captured_at);
+        // v4 schema 2 telemetry flags: bit 2 says this frame carries the
+        // completed lap's validity, bit 3 is that validity, bit 4 says
+        // delta_ms is a simulator value (a real zero stays distinct from "no
+        // delta"). Bits the simulator did not provide stay clear.
+        std::uint8_t flags = 0x01;
+        if (frame.lap_valid_present) flags |= 0x04 | (frame.lap_valid ? 0x08 : 0);
+        if (frame.delta_present) flags |= 0x10;
+        return packet(V4PacketType::telemetry, game, flags, rate, std::move(payload), captured_at);
     }
 
     std::vector<std::uint8_t> status_packet(Game game, V4StatusState state, std::string_view text,
@@ -2372,8 +2611,19 @@ private:
                 Frame frame;
                 if (adapter_->live() && adapter_->read(frame)) {
                     inactive_since.reset();
+                    if (recorder_.recording() && adapter_->session_restarted()) {
+                        // The simulator's own lap counter went backwards: a
+                        // session restart inside the same type/track/car (for
+                        // example ACC's "restart session"). Ending the run
+                        // here makes the next sample begin a fresh v4 run, so
+                        // two same-type sessions cannot merge (#53).
+                        logger_.write("Session restarted in the simulator (" +
+                                      session_identity(adapter_->metadata) + "); ending the recording");
+                        finish_recording();
+                    }
                     if (!recorder_.recording()) {
                         adapter_->refresh_metadata();
+                        adapter_->metadata.session_started_at = std::chrono::system_clock::now();
                         recorder_.start(adapter_->metadata);
                         if (v4_) {
                             v4_->begin_run();
@@ -2694,6 +2944,10 @@ std::pair<Frame, Metadata> run() {
             frame.value[lap_number] == 3 && frame.value[current_lap_ms] == 12345 &&
             frame.completed_lap_ms == 90567 && approximately_equal(frame.value[lap_position], .375),
             "original AC corner fields and lap timing offsets");
+    // AC1's graphics page exposes no lap-valid flag and no delta: both stay
+    // absent rather than being invented (schema 2, #16/#20/#52).
+    require(!frame.lap_valid_present && !frame.delta_present,
+            "AC1 exposes no lap-valid or delta field: both stay absent");
     const auto wire_frame = frame;
     require(!adapter->read(frame), "unchanged LIVE physics must not become a fresh sample");
     // AC's graphics.status: AC_OFF=0, AC_REPLAY=1, AC_LIVE=2, AC_PAUSE=3. Only
@@ -2713,6 +2967,19 @@ std::pair<Frame, Metadata> run() {
     p.packet_id = 0; p.gear = 0;
     require(adapter->read(frame) && frame.value[gear] == -1, "packet counter restart and reverse gear");
     require(!adapter->read(frame), "resumed sample is accepted only once");
+    // #53: the simulator's own lap counter going backwards (for example ACC's
+    // "restart session") is a restart inside the same type/track/car, which
+    // the run loop turns into a run boundary so two same-type sessions cannot
+    // merge. A normal lap only ever increments the counter.
+    p.packet_id = 43; g.completed_laps = 0;
+    require(adapter->read(frame) && adapter->session_restarted() &&
+                frame.value[lap_number] == 1,
+            "a lap counter reset reports a simulator session restart (#53)");
+    p.packet_id = 44; g.completed_laps = 1;
+    require(adapter->read(frame) && !adapter->session_restarted() &&
+                frame.value[lap_number] == 2,
+            "the session restart flag clears on the following sample");
+    g.completed_laps = 2;
     // A car/track change mid-session (e.g. a garage visit while paused) must
     // be visible to a later refresh_metadata() call so the run loop can end
     // the recording and start a new one (#15) instead of merging two cars.
@@ -3260,6 +3527,14 @@ void manual_pairing_entry_self_test() {
     if (interactive.pairing_url != L"https://192.168.1.64:8002" ||
         interactive.pinned_certificate_fingerprint != fingerprint || interactive.pairing_label.empty())
         throw std::runtime_error("manual pairing entry did not reach the --pairing-url fields");
+    // #61: the same entry point accepts the short 16-hex form the Pi display
+    // shows (grouped in fours), keeping the full-64 path above.
+    Options short_form;
+    short_form.pairing = true;
+    std::istringstream short_input("rapid:8443\nfedc ba98 7654 3210\n");
+    if (!complete_pairing_options(short_form, short_input, output) ||
+        short_form.pinned_certificate_fingerprint != "fedcba9876543210")
+        throw std::runtime_error("manual pairing entry rejected the 16-hex display fingerprint");
     // Explicit flags are never overwritten (the --pairing-url code path).
     Options flagged;
     flagged.pairing = true;
@@ -3278,6 +3553,83 @@ void manual_pairing_entry_self_test() {
         throw std::runtime_error("manual pairing entry accepted an empty stdin");
     std::cout << "Manual pairing entry self-test passed: scripted address and fingerprint reach the "
                  "--pairing-url fields, and empty input fails closed\n";
+}
+
+// #61: the panel and the setup page show the first 16 hex of the certificate
+// fingerprint; the companion must accept that short form and compare it as a
+// 64-bit prefix while the full-64 path keeps working. Pinned without a
+// network: the validator, the prefix comparison, and the paired-identity
+// decision for a corrupt local record (which must offer re-pairing instead of
+// failing closed).
+void pairing_fingerprint_self_test(const fs::path& directory) {
+    const std::string short_hex = "fedcba9876543210";
+    const std::string full_hex = short_hex + "0123456789abcdef0123456789abcdef0123456789abcdef";
+    const std::string other_full = "0123456789abcdef" + full_hex.substr(16);
+    const auto normalized = [](const std::string& value) {
+        return validate_pairing_fingerprint(value, "fingerprint");
+    };
+    if (normalized(short_hex) != short_hex || normalized("FEDC BA98 7654 3210") != short_hex ||
+        normalized("  " + short_hex + " \r\n") != short_hex)
+        throw std::runtime_error("#61: the 16-hex display fingerprint must be accepted, grouped or not, any case");
+    if (normalized(full_hex) != full_hex ||
+        normalized("FEDC BA98 7654 3210 " + full_hex.substr(16)) != full_hex)
+        throw std::runtime_error("#61: the full 64-hex fingerprint must still be accepted");
+    const auto rejected = [](const std::string& value) {
+        try {
+            (void)validate_pairing_fingerprint(value, "fingerprint");
+            return false;
+        } catch (const std::runtime_error& error) {
+            const std::string message = error.what();
+            return message.find("16") != std::string::npos && message.find("64") != std::string::npos;
+        }
+    };
+    for (const std::string& value : {std::string{}, std::string("fedcba987654321"),
+                                     std::string("fedcba98765432100"), std::string(63, 'a'),
+                                     std::string(65, 'a'), std::string("fedcba987654321g")}) {
+        if (!rejected(value))
+            throw std::runtime_error("#61: an invalid fingerprint must be rejected, naming the 16-hex and 64-hex forms");
+    }
+    // The short pin is a prefix of the certificate digest; the full pin is exact.
+    if (!fingerprint_matches(full_hex, short_hex) || !fingerprint_matches(full_hex, full_hex) ||
+        fingerprint_matches(full_hex, other_full) || fingerprint_matches(other_full, short_hex))
+        throw std::runtime_error("#61: a 16-hex pin must compare against the certificate's first 16 hex only");
+    // A corrupt local paired-device record must ask for re-pairing; a legacy
+    // credential with no pinned record needs no identity check at all.
+    const auto corrupt_directory = directory / "corrupt-paired-identity";
+    fs::create_directories(corrupt_directory);
+    {
+        std::ofstream output(corrupt_directory / "pairing.identity");
+        output << "device_id=not-a-device\n";
+    }
+    std::string detail;
+    if (verify_paired_identity(corrupt_directory / "pairing.key.dpapi", detail) != PairedIdentityState::re_pair_required ||
+        detail.empty())
+        throw std::runtime_error("#61: an unreadable paired-device record must require pairing again");
+    const auto legacy_directory = directory / "legacy-dpapi-credential";
+    fs::create_directories(legacy_directory);
+    detail.clear();
+    if (verify_paired_identity(legacy_directory / "pairing.key.dpapi", detail) != PairedIdentityState::verified)
+        throw std::runtime_error("#61: a legacy credential without a pinned record must not need an identity check");
+    // #61 owner-recommended: a corrupt/unreadable default DPAPI credential
+    // offers re-pairing rather than failing closed, while a valid one loads.
+    const auto corrupt_credential = directory / "corrupt-default.dpapi";
+    {
+        std::ofstream output(corrupt_credential, std::ios::binary | std::ios::trunc);
+        output << "not a dpapi record";
+    }
+    const auto corrupt_load = load_default_pairing_credential(corrupt_credential);
+    if (!corrupt_load.offer_pairing || corrupt_load.error.empty() || !corrupt_load.key.empty())
+        throw std::runtime_error("#61: a corrupt DPAPI credential must offer re-pairing");
+    const auto valid_credential = directory / "valid-default.dpapi";
+    const std::vector<std::uint8_t> expected_key(32, 0x5a);
+    write_dpapi_credential(valid_credential, expected_key);
+    const auto valid_load = load_default_pairing_credential(valid_credential);
+    fs::remove(valid_credential);
+    if (valid_load.offer_pairing || valid_load.key != expected_key)
+        throw std::runtime_error("#61: a valid DPAPI credential must load for the bare run");
+    std::cout << "Pairing fingerprint self-test passed: the 16-hex display form and the full 64 both pin the "
+                 "certificate, invalid lengths/characters are rejected, and a corrupt local record offers "
+                 "re-pairing (#61)\n";
 }
 
 // The tray "Show status" dialog must identify the exact build, and the identity
@@ -3350,6 +3702,7 @@ bool run_self_test(const fs::path& directory, int sample_rate,
     manual_pairing_entry_self_test();
     build_identity_self_test();
     portable_startup_self_test();
+    pairing_fingerprint_self_test(directory);
     // The legacy JSON v3 transport is retired: selecting it on the command
     // line or in a config file must fail with an actionable pairing hint, not
     // silently fall back to anything unauthenticated.
@@ -3401,6 +3754,10 @@ bool run_self_test(const fs::path& directory, int sample_rate,
     wire_frame.value[speed_kmh] = 198; wire_frame.value[lap_number] = 1;
     wire_frame.value[current_lap_ms] = 1234;
     wire_frame.completed_lap_ms = 90000; wire_frame.delta_ms = -125;
+    // v4 schema 2: the reference frame carries the completed lap's validity
+    // and a real simulator delta; AC1's frame (below) carries neither.
+    wire_frame.lap_valid_present = true; wire_frame.lap_valid = true;
+    wire_frame.delta_present = true;
     const auto fixtures = directory / "v4-fixtures";
     fs::create_directories(fixtures);
     auto save = [&](const char* name, const std::vector<std::uint8_t>& bytes) {
@@ -3417,6 +3774,28 @@ bool run_self_test(const fs::path& directory, int sample_rate,
     // recording open on this state, unlike "ready"/"waiting".
     save("paused.hex", encoder.status_packet(Game::acc, V4StatusState::paused, "", 3, sample_rate));
     save("next.hex", encoder.telemetry_packet(Game::acc, wire_frame, sample_rate, std::chrono::steady_clock::now()));
+    // A real delta of 0, then the same frame with no delta at all: the Pi must
+    // keep them distinct (#20/#52).
+    Frame delta_zero = wire_frame;
+    delta_zero.delta_present = true; delta_zero.delta_ms = 0;
+    save("delta-zero.hex", encoder.telemetry_packet(Game::acc, delta_zero, sample_rate, std::chrono::steady_clock::now()));
+    Frame delta_absent = wire_frame;
+    delta_absent.delta_present = false; delta_absent.delta_ms = 0;
+    save("delta-absent.hex", encoder.telemetry_packet(Game::acc, delta_absent, sample_rate, std::chrono::steady_clock::now()));
+    // Lap crossings: the sample that reports the new lap number carries the
+    // completed lap's validity (true, false, then absent).
+    Frame crossing = wire_frame;
+    crossing.completed_lap_ms = 90000;
+    crossing.value[current_lap_ms] = 5;
+    crossing.lap_valid_present = true; crossing.lap_valid = true;
+    crossing.value[lap_number] = 2;
+    save("lap-valid-true.hex", encoder.telemetry_packet(Game::acc, crossing, sample_rate, std::chrono::steady_clock::now()));
+    crossing.lap_valid = false;
+    crossing.value[lap_number] = 3;
+    save("lap-valid-false.hex", encoder.telemetry_packet(Game::acc, crossing, sample_rate, std::chrono::steady_clock::now()));
+    crossing.lap_valid_present = false;
+    crossing.value[lap_number] = 4;
+    save("lap-valid-unknown.hex", encoder.telemetry_packet(Game::acc, crossing, sample_rate, std::chrono::steady_clock::now()));
     save("ended.hex", encoder.status_packet(Game::acc, V4StatusState::ended, "", 4, sample_rate));
     encoder.end_run();
     save("ready.hex", encoder.status_packet(Game::acc, V4StatusState::ready, "", 5, sample_rate));
@@ -3568,8 +3947,19 @@ int wmain(int argc, wchar_t** argv) {
             options.pairing = false;
             g_show_error_dialog = dialogs_allowed();
         }
-        if (!options.auth_key_dpapi_file.empty())
-            verify_paired_identity(options.auth_key_dpapi_file);
+        if (!options.auth_key_dpapi_file.empty()) {
+            // #61 owner-recommended: an unreachable Pi keeps the companion
+            // running (the runtime retries; the Pi may simply be off), while a
+            // changed pinned identity or an unreadable local record requires
+            // pairing again.
+            std::string paired_detail;
+            const auto paired = verify_paired_identity(options.auth_key_dpapi_file, paired_detail);
+            if (paired == PairedIdentityState::re_pair_required)
+                throw std::runtime_error(paired_detail);
+            if (paired == PairedIdentityState::unreachable)
+                std::cout << "Paired Pi is unreachable right now (" << paired_detail
+                          << "); running and retrying.\n";
+        }
         if (options.self_test)
             return run_self_test(options.output_directory, options.sample_rate,
                                  options.pairing_pi_seals_fixtures) ? 0 : 1;

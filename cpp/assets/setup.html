@@ -181,10 +181,10 @@ let certificateFingerprint = '';
 let companionInfo = null;
 const message = document.getElementById('message');
 /* #setup-page-pure:start */
-// The Pi panel prints the full 64-hex TLS fingerprint in 16-character blocks.
-// The browser shows the first 16 characters (64 bits, enough that a lookalike
-// certificate cannot realistically repeat them) grouped in fours, so the owner
-// compares one short line against the first block on the panel.
+// The Pi panel prints the same first 16 hex as this page (#54), grouped in
+// fours. The browser shows the first 16 characters (64 bits, enough that a
+// lookalike certificate cannot realistically repeat them) grouped in fours, so
+// the owner compares one short line against the first block on the panel.
 function formatFingerprint(fp) {
   const hex = String(fp || '').replace(/[^0-9a-f]/gi, '').toLowerCase().slice(0, 16);
   return hex ? hex.match(/.{1,4}/g).join(' ') : 'unavailable';

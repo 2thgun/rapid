@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QNetworkAccessManager>
+#include <QNetworkInterface>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
@@ -44,6 +45,57 @@ QUrl live_socket_endpoint(QUrl endpoint) {
   endpoint.setPath("/api/v1/live");
   endpoint.setQuery(QUrlQuery{{"mode", "state"}});
   return endpoint;
+}
+
+// #54/#61: the printed short form of the certificate fingerprint is the first
+// 16 hex (64 bits, the evil-twin floor) grouped in fours. The panel, the setup
+// page and the companion all use it; the full 64-hex value is still what the
+// wire carries and is still what the stored pairing identity pins.
+QString short_fingerprint(const QString &value) {
+  const QString hex = value.left(16).toLower();
+  QStringList groups;
+  for (qsizetype i = 0; i < hex.size(); i += 4) groups << hex.mid(i, 4);
+  return groups.join(QLatin1Char(' '));
+}
+
+// #61: the address a first-run companion is given. Pairing is served by the
+// runtime's own TLS listener ([pairing] in packaging/config.toml, port 8003),
+// which is up whenever the Pi is - in AP mode and on Home Wi-Fi alike - and
+// the panel's window/approval handoffs address that same coordinator. The
+// setup page's address (192.168.1.64:8002) exists only while the setup AP is
+// up, so the pairing entry publishes the device's current address instead.
+// RAPID_PAIRING_ADDRESS overrides the whole host:port for tests and unusual
+// deployments.
+constexpr int kPairingPort = 8003;
+
+QString pairing_address() {
+  const QString override = qEnvironmentVariable("RAPID_PAIRING_ADDRESS");
+  if (!override.isEmpty()) return override;
+  const auto first_ipv4 = [](const QNetworkInterface &interface) -> QString {
+    if (!interface.flags().testFlag(QNetworkInterface::IsUp) ||
+        !interface.flags().testFlag(QNetworkInterface::IsRunning) ||
+        interface.flags().testFlag(QNetworkInterface::IsLoopBack))
+      return {};
+    for (const auto &entry : interface.addressEntries()) {
+      const auto address = entry.ip();
+      if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback() &&
+          !address.isLinkLocal())
+        return address.toString();
+    }
+    return {};
+  };
+  const auto interfaces = QNetworkInterface::allInterfaces();
+  for (const auto &interface : interfaces) {
+    if (interface.name() == QLatin1String("wlan0")) {
+      const auto address = first_ipv4(interface);
+      if (!address.isEmpty()) return address + ':' + QString::number(kPairingPort);
+    }
+  }
+  for (const auto &interface : interfaces) {
+    const auto address = first_ipv4(interface);
+    if (!address.isEmpty()) return address + ':' + QString::number(kPairingPort);
+  }
+  return {};
 }
 
 // #22: the setup AP is the open network "rapid" (or a disambiguated
@@ -83,12 +135,6 @@ QString setup_notice(const QByteArray &status_contents, const QByteArray &ssid_c
   // evil-twin floor) grouped in fours, so the panel shows the same short form
   // and labels it. The full 64-hex value is still what the wire carries and is
   // still validated above; only the printed form is shortened.
-  auto short_fingerprint = [](const QString &value) {
-    const QString hex = value.left(16).toLower();
-    QStringList groups;
-    for (qsizetype i = 0; i < hex.size(); i += 4) groups << hex.mid(i, 4);
-    return groups.join(QLatin1Char(' '));
-  };
   auto grouped = [](const QString &value, const QString &indent) {
     return QStringLiteral("%1 %2\n%3%4 %5")
         .arg(value.sliced(0, 16), value.sliced(16, 16), indent, value.sliced(32, 16), value.sliced(48, 16));
@@ -245,15 +291,27 @@ void DashboardModel::pollSetupStatus() {
   // same first-boot bootstrap the setup card reads; empty until first boot has
   // published it.
   QString next_url;
+  QString next_fingerprint;
   {
     const auto document = QJsonDocument::fromJson(status_contents);
     if (document.isObject()) {
       const auto bootstrap = document.object().value("bootstrap");
-      if (bootstrap.isObject()) next_url = bootstrap.toObject().value("setup_url").toString();
+      if (bootstrap.isObject()) {
+        const auto values = bootstrap.toObject();
+        next_url = values.value("setup_url").toString();
+        // #61: the same validation the setup card applies; only a full 64-hex
+        // digest becomes the short printed form the companion accepts.
+        const auto fingerprint = values.value("certificate_fingerprint").toString();
+        if (!next_url.isEmpty() && fingerprint.size() == 64)
+          next_fingerprint = short_fingerprint(fingerprint);
+      }
     }
   }
+  const auto next_address = pairing_address();
   bool changed = false;
   if (setup_url_ != next_url) { setup_url_ = next_url; changed = true; }
+  if (pairing_address_ != next_address) { pairing_address_ = next_address; changed = true; }
+  if (pairing_fingerprint_ != next_fingerprint) { pairing_fingerprint_ = next_fingerprint; changed = true; }
   const QString next = setup_notice(status_contents, ssid_contents, network_mode_ == "ap");
   if (setup_notice_ != next) {
     setup_notice_ = next;
@@ -287,13 +345,32 @@ void DashboardModel::pollPairingPanel() {
           code.size() == 8 && numeric;
     }
   }
+  // #61: the pairing service publishes the window state and owns the window;
+  // the panel's open/cancel handoff is a private control file that the service
+  // consumes on the next pairing interaction, so its presence means "armed,
+  // waiting for the companion".
+  bool window_active = false;
+  QFile state_file(qEnvironmentVariable("RAPID_PAIRING_STATE", "/run/rapid/pairing-state.json"));
+  if (state_file.open(QIODevice::ReadOnly)) {
+    const auto document = QJsonDocument::fromJson(state_file.readAll());
+    if (document.isObject()) window_active = document.object().value("active").toBool();
+  }
+  const bool window_requested = [&] {
+    QFile control(qEnvironmentVariable("RAPID_PAIRING_CONTROL", "/run/rapid/pairing-control.json"));
+    if (!control.open(QIODevice::ReadOnly)) return false;
+    const auto document = QJsonDocument::fromJson(control.readAll());
+    return document.isObject() && document.object().value("action").toString() == "open";
+  }();
   if (pairing_pending_ != pending || pairing_label_ != label || pairing_code_ != code ||
-      pairing_transaction_ != transaction) {
+      pairing_transaction_ != transaction || pairing_window_active_ != window_active ||
+      pairing_window_requested_ != window_requested) {
     if (pairing_transaction_ != transaction) pairing_approval_sent_ = false;
     pairing_pending_ = pending;
     pairing_label_ = std::move(label);
     pairing_code_ = std::move(code);
     pairing_transaction_ = std::move(transaction);
+    pairing_window_active_ = window_active;
+    pairing_window_requested_ = window_requested;
     if (!pairing_pending_) pairing_approval_sent_ = false;
     bump();
   }
@@ -779,6 +856,42 @@ void DashboardModel::restartSetupService() {
   bump();
   QTimer::singleShot(3000, this, [this] { log_notice_.clear(); bump(); });
 }
+
+bool DashboardModel::write_pairing_control(const QString &action) {
+  // #61: the pairing window belongs to the runtime; the panel writes the same
+  // private control handoff the setup server proxies ({"action":"open"} or
+  // {"action":"cancel"}) and never touches a credential. The service consumes
+  // it on the next pairing interaction, and the state file it publishes is
+  // what pollPairingPanel() reflects.
+  const QString path = qEnvironmentVariable("RAPID_PAIRING_CONTROL",
+                                            "/run/rapid/pairing-control.json");
+  const QFileInfo info(path);
+  QDir().mkpath(info.absolutePath());
+  const auto temporary = path + ".tmp";
+  QFile file(temporary);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+  const QJsonObject object{{"action", action}};
+  if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0 || !file.flush()) {
+    file.close();
+    QFile::remove(temporary);
+    return false;
+  }
+  file.close();
+  if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                           QFileDevice::ReadGroup)) {
+    QFile::remove(temporary);
+    return false;
+  }
+  QFile::remove(path);
+  if (!QFile::rename(temporary, path)) return false;
+  pairing_window_requested_ = action == "open";
+  bump();
+  return true;
+}
+
+bool DashboardModel::openPairingWindow() { return write_pairing_control("open"); }
+
+bool DashboardModel::cancelPairingWindow() { return write_pairing_control("cancel"); }
 
 void DashboardModel::pollLogStatus() {
   auto *reply = network_->get(QNetworkRequest(endpoint_path(endpoint_, "/api/log-status", 8001)));
