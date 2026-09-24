@@ -318,20 +318,6 @@ int main(int argc, char **argv) {
                 model.setupNotice().contains("FINGERPRINT (first 16)  fedc ba98 7654 3210") &&
                 !model.setupNotice().contains("TOKEN"),
             "#59: an enrolled device in AP mode shows the SSID/address/fingerprint without a token");
-    // #70: the card must never cover the dashboard on an enrolled device on
-    // Home Wi-Fi, and a mode the panel cannot read is not Access Point mode.
-    served_mode = "home";
-    spin(3200);
-    require(model.setupNotice().isEmpty(), "#70: an enrolled device on Home Wi-Fi shows no setup card");
-    served_mode = "ap";
-    spin(3200);
-    require(!model.setupNotice().isEmpty(), "#70: the card returns in Access Point mode");
-    served_mode.clear();
-    spin(3200);
-    require(model.setupNotice().isEmpty() && model.networkMode().isEmpty(),
-            "#70: an unreadable Wi-Fi mode clears the last known mode and hides the card");
-    served_mode = "ap";
-    spin(3200);
   }
   // setup-page-ux: the settings page shows the setup page URL and can ask the
   // root Wi-Fi mode worker to start/restart the setup service.
@@ -563,5 +549,19 @@ int main(int argc, char **argv) {
   spin(700);
   require(!model.displayConfirmPending() && !model.displayConfirmSent(),
           "The orientation prompt clears once the applicator keeps it");
+  // #70: the card must never cover the dashboard on an enrolled device on Home
+  // Wi-Fi, and a mode the panel cannot read is not Access Point mode. Last in
+  // the test: each step waits for the 2 s mode poll, and the earlier graph
+  // assertions depend on the 30 s history window.
+  served_mode = "home";
+  spin(3200);
+  require(model.setupNotice().isEmpty(), "#70: an enrolled device on Home Wi-Fi shows no setup card");
+  served_mode = "ap";
+  spin(3200);
+  require(!model.setupNotice().isEmpty(), "#70: the card returns in Access Point mode");
+  served_mode.clear();
+  spin(3200);
+  require(model.setupNotice().isEmpty() && model.networkMode().isEmpty(),
+          "#70: an unreadable Wi-Fi mode clears the last known mode and hides the card");
   std::cout << "Qt model polling, deduplication, null, gap and calibration checks passed\n";
 }
