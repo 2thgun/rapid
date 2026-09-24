@@ -4,6 +4,15 @@
 #include <optional>
 
 namespace rapid::native {
+// #71: the one pairing timeline. The window gives the owner time to walk to the
+// PC and type the address; a request then gets its own full approval time, and
+// the window is stretched to cover it, so time spent typing never eats into the
+// time left to compare and approve. The companion's poll budget
+// (kPairingPollSeconds in rapid-telemetry-daemon.cpp) must exceed the request
+// lifetime; rapid-pairing-tests enforces that.
+inline constexpr double kPairingWindowSeconds = 300;
+inline constexpr double kPairingRequestSeconds = 300;
+
 // Private control-plane state for the physical pairing window. It intentionally
 // has no HTTP dependency: only the future panel/HTTPS service may decide where
 // pending details are displayed or submitted.

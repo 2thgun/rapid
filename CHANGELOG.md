@@ -5,6 +5,14 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Pairing no longer times out before a person can approve it. A pairing
+  request now has five minutes to be approved, counted from when the PC asks
+  rather than from when the window was opened, and the companion waits longer
+  than the Pi so the Pi decides when a request expired. The panel shows the time
+  left and stops showing a code that can no longer be approved (#71).
+- The full-screen setup card no longer stays over the dashboard when the panel
+  cannot read the Wi-Fi mode; an unknown mode is treated as "not Access Point"
+  (#70).
 - Added lap validity and delta presence to the authenticated v4 telemetry
   protocol (schema 2): the Windows companion now reports whether the simulator
   actually provided the completed lap's validity and a timing delta, so the Pi
