@@ -1,17 +1,15 @@
-# Contributing to raPId
+# Contributing
 
-Read HANDOFF.md and initialize documentation with
-`git submodule update --init --recursive`.
+Clone with the wiki: `git clone --recurse-submodules https://github.com/2thgun/rapid.git`.
+Build and test commands are in [Building](https://github.com/2thgun/rapid/wiki/Building)
+and [Testing](https://github.com/2thgun/rapid/wiki/Testing).
 
-Use a focused branch and pull request. Run relevant tests and report automated
-and hardware validation separately. Runtime work belongs in C++.
-
-Guides and development logs live in the
-[wiki](https://github.com/2thgun/rapid/wiki). Follow its
-[documentation workflow](https://github.com/2thgun/rapid/wiki/Documentation-Workflow):
-publish wiki changes first, then commit the updated submodule pointer and handoff.
-
-Keep temporary outputs under ignored .local/sessions/. Never commit credentials,
-paired keys, recordings, generated binaries or private raw logs to source or wiki.
-Preserve rollback copies outside tracked source before deployment. Check the
-recorder is idle and verify device state rather than trusting old log entries.
+- Work on a branch, open a pull request, and wait for green CI. Don't push to `main`.
+- Stage files explicitly. Don't use `git add -A`.
+- No AI attribution in commits, PRs or issues.
+- Runtime code is C++.
+- Before calling something done, pass clean Debug and Release builds, the Qt check and the companion self-test.
+- Device-facing changes (display, touch, network, boot, recording) aren't done until they've run on a real Pi. If yours hasn't, say so in the PR.
+- The wiki describes how things work now. Update the page you changed and don't add logs or status notes. Push the wiki before committing the submodule pointer.
+- Add a `CHANGELOG.md` line for user-visible changes.
+- Never commit keys, passwords, recordings or raw logs.

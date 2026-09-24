@@ -1,12 +1,23 @@
 # Companion pairing contract
 
-This is the implementation contract for GitHub issue #10. It describes the
-customer pairing flow that will replace copying a shared `telemetry.key`.
-The Pi transport and envelope primitives are implemented; the panel now shows
-the request and accepts local approval through its private handoff. The native
-Windows companion implements the HTTPS request, code comparison, envelope
-decryption and DPAPI handoff. Clean-account and hardware acceptance remain
-release evidence rather than development prerequisites.
+This is the contract for pairing a Windows companion with a Pi: it replaced
+copying a shared `telemetry.key` (issue #10). Both sides implement it: the Pi in
+`cpp/pairing/` (served by `rapid-pi`), the companion in
+`companion/native/rapid-telemetry-daemon.cpp`. The user-facing flow is in the
+[Windows companion](https://github.com/2thgun/rapid/wiki/Windows-Companion#pair-with-the-pi)
+guide.
+
+## Endpoints
+
+| Endpoint | Served by | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST /api/v1/pairing/request` | `rapid-pi`, HTTPS 8003 | open pairing window | Submit label and 64-hex X25519 public key |
+| `GET /api/v1/pairing/result?transaction_id=...` | `rapid-pi`, HTTPS 8003 | one use | Retrieve the approved envelope |
+| `GET /api/v1/setup` | `rapid-pi` | public | Device ID and certificate fingerprint |
+| `GET /api/v1/pairing/state`, `POST /api/v1/pairing/window`, `GET /api/v1/pairing/pending`, `POST /api/v1/pairing/approve` | `rapid-setup-server`, HTTPS 8002 | owner session + CSRF | Open/cancel the window, show and approve the code |
+
+The touchscreen opens the window and approves through private handoff files in
+`/run/rapid/` rather than HTTP.
 
 ## Goal and boundary
 
@@ -41,10 +52,11 @@ companion deliberately supports a first-use certificate only during an open
 pairing window; afterward it pins the certificate's SHA-256 fingerprint along
 with the device ID. A changed fingerprint is an error requiring a new physical
 pairing, not a silent reconnect.
-The setup service rejects a cleartext companion POST before route dispatch.
+The pairing listener accepts only TLS; there is no cleartext pairing route.
 
-1. The companion discovers a Pi or accepts a manually entered address. It shows
-   the Pi's device ID and certificate fingerprint before pairing.
+1. The user enters the Pi's address and fingerprint as shown on the touchscreen
+   (network discovery is not implemented). The fingerprint may be the first 16
+   hex characters or all 64.
 2. The companion creates an ephemeral X25519 key pair and sends a `POST` pairing
    request containing its public key and a validated display name. It sends no
    telemetry key or Windows identity token.
@@ -83,14 +95,14 @@ must be erased once it is consumed or expires.
 - The receiver selects the correct v4 key before accepting a packet and keeps
   replay watermarks separate for each paired PC. It still permits only one live
   telemetry sender through the existing ownership/inactivity rule.
-- Discovery is convenience only. Manual address entry always remains available.
+- Manual address entry must always remain available, even if discovery is added.
 - The MSI and portable companion use the same pairing executable and storage
   format. Portable mode needs no administrator rights and still uses the current
   Windows user's DPAPI scope; it does not make a portable plaintext key file.
 
 ## UI states
 
-The companion needs explicit states: `not paired`, `discovering`, `request
+The companion needs explicit states: `not paired`, `request
 pending`, `compare code`, `approved`, `connected`, `revoked`, and `error`.
 Normal simulator monitoring may continue only in `connected`; `not paired` must
 show an actionable pairing button instead of a v4 key parse error. A failed
@@ -105,7 +117,7 @@ independent replay state for two PC keys. Integration tests must prove that a
 packet signed by PC A cannot authenticate as PC B, and that revoking A does not
 interrupt B.
 
-On hardware, pair two clean Windows accounts through both discovery and manual
+On hardware, pair two clean Windows accounts by manual
 address entry; compare the code on the Pi, reconnect each account, revoke one,
 and confirm that only the other can resume telemetry. Repeat with a network
 intermediary test fixture to prove the envelope never reveals the key. Verify

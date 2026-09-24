@@ -2,71 +2,70 @@
 
 raPId is a Raspberry Pi racing dashboard, Windows telemetry companion, and MoTeC compatible .ld data recorder.
 
-Engineering preview: the prepared development kit works with existing private
-configuration. A fresh-card, terminal-free setup flow is still under development;
-no release image is available. See [Get started](https://github.com/2thgun/rapid/wiki/Get-Started)
-and the [release checklist](https://github.com/2thgun/rapid/wiki/Release-Acceptance).
+**Status: engineering preview.** No release has been published yet. 0.9.9 is
+the first planned release.
 
 ## Features
 
-- 480×320 Raspberry Pi touch dashboard with Drive, Timing, Vehicle, Tyres and live Graphs pages.
-- Graphs retain 30 seconds of throttle/brake and lateral/longitudinal G-force history while driving; ready and waiting periods render as gaps.
-- Windows C++ telemetry companion with adapters for ACC, AC, ACE and iRacing.
-- Authenticated binary v4 telemetry with shared-key setup and persistent replay checks.
-- Live engineering telemetry at `/telemetry`, pushed over WebSocket with selectable traces (up to 8) and history.
-- MoTeC compatible session recordings and completed-lap files, available through
-  the read-only network share `\\rapid\Telemetry` after session finalization.
-- Optional authenticated archive uploads with resumable transfer.
-- Journal logging with a small dashboard activity notification.
-
-## Components
-
-| Component | Purpose |
-| --- | --- |
-| Windows companion | Collect simulator telemetry and send it to the Pi |
-| `rapid-pi` | Native C++ dashboard server, telemetry receiver and recorder |
-| `rapid-qt-display` | Native Qt touchscreen with five pages and Home/AP/Off control |
-| `rapid-log-status` | Native C++ journal activity monitor |
-| `rapid-archive` | Native C++ archive ingest service |
-| `rapid-setup-server` | Loopback owner enrollment/login and saved desired settings |
-| `rapid-firstboot` | Initializes device state and first-boot setup access point |
-| `rapid-account` | Privileged helper for the owner-chosen SSH/sudo password |
-
-## Build
-
-On Linux, install the dependencies in [operations](https://github.com/2thgun/rapid/wiki/Operations), then run
-from the repository root:
-
-```sh
-cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON
-cmake --build build/cpp
-ctest --test-dir build/cpp --output-on-failure
-```
-
-See the [Windows companion guide](https://github.com/2thgun/rapid/wiki/Windows-Companion) for Windows builds and setup.
+- A dashboard for a 480×320 touchscreen with five pages: Drive, Timing, Vehicle,
+  Tyres and Graphs.
+- ACC, Assetto Corsa, Assetto Corsa EVO and iRacing, all through one lightweight Windows
+  program (`rapid-telemetry-daemon.exe`) that needs no installation.
+- MoTeC i2 compatible recordings: the whole session plus one file per lap. All
+  simulators share the same channel layout.
+- Setup from a browser, with no peripherals needed: the Pi starts its own Wi-Fi
+  network, and you claim it, connect it to home Wi-Fi, set the orientation and
+  calibrate touch from a phone.
+- Pairing: each PC gets its own key after you approve a code on the Pi.
+  Telemetry is authenticated and protected against replay.
+- Everything runs locally. No internet or account is needed.
 
 ## Documentation
 
-- [Original Assetto Corsa / Content Manager demo guide](https://github.com/2thgun/rapid/wiki/AC1-Demo-Guide)
-- [Architecture](https://github.com/2thgun/rapid/wiki/Architecture)
-- [Installation and operations](https://github.com/2thgun/rapid/wiki/Operations)
-- [Fresh Pi installation status](image/README.md)
-- [Testing](https://github.com/2thgun/rapid/wiki/Testing)
-- [Qt touchscreen display migration](https://github.com/2thgun/rapid/wiki/Qt-Display)
-- [Telemetry v4 setup and protocol](https://github.com/2thgun/rapid/wiki/Telemetry-v4)
-- [Changelog](CHANGELOG.md)
+The [wiki](https://github.com/2thgun/rapid/wiki) is the manual:
 
-The [wiki](https://github.com/2thgun/rapid/wiki) contains the full guides and
-[development log](https://github.com/2thgun/rapid/wiki/Development-Log).
-Clone source and its pinned documentation together:
+- [Getting started](https://github.com/2thgun/rapid/wiki/Getting-Started)
+- [First-time setup](https://github.com/2thgun/rapid/wiki/First-Time-Setup)
+- [Windows companion](https://github.com/2thgun/rapid/wiki/Windows-Companion)
+- [Driving and recording](https://github.com/2thgun/rapid/wiki/Driving-and-Recording)
+- [Troubleshooting](https://github.com/2thgun/rapid/wiki/Troubleshooting)
+- [Architecture](https://github.com/2thgun/rapid/wiki/Architecture),
+  [telemetry protocol](https://github.com/2thgun/rapid/wiki/Telemetry-Protocol),
+  [building](https://github.com/2thgun/rapid/wiki/Building),
+  [testing](https://github.com/2thgun/rapid/wiki/Testing)
+
+User-visible changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Quick build
+
+The Pi components build on Linux. The dependencies are listed in
+[Building](https://github.com/2thgun/rapid/wiki/Building).
 
 ```sh
-git clone --recurse-submodules https://github.com/2thgun/rapid.git
+cmake -S cpp -B build -DCMAKE_BUILD_TYPE=Debug -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-For an existing checkout, run `git submodule update --init --recursive`.
-See [HANDOFF.md](HANDOFF.md) to resume development.
+The Windows companion builds on Windows (PowerShell):
+
+```powershell
+./companion/build-native-daemon.ps1 -Compiler MSVC
+```
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `cpp/` | Pi programs: runtime, pairing, setup, Qt display, log monitor, archive |
+| `companion/` | Windows companion and its build scripts |
+| `installer/` | MSI definition |
+| `packaging/` | Debian package, systemd units, default configuration |
+| `image/` | Raspberry Pi image profile |
+| `wiki/` | The wiki, as a Git submodule (`git submodule update --init`) |
+
+Contributing: see [CONTRIBUTING](.github/CONTRIBUTING.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
