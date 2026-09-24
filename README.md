@@ -1,10 +1,6 @@
 # raPId
 
-raPId turns a Raspberry Pi with a small touchscreen into a sim-racing
-dashboard and data logger. A companion program on the Windows PC reads the
-simulator and sends live telemetry to the Pi over Wi-Fi. The Pi shows the
-telemetry on the touchscreen and records every session as MoTeC-compatible
-`.ld` files.
+raPId is a Raspberry Pi racing dashboard, Windows telemetry companion, and MoTeC compatible .ld data recorder.
 
 **Status: engineering preview.** No release has been published yet. 0.9.9 is
 the first planned release.
@@ -12,12 +8,12 @@ the first planned release.
 ## Features
 
 - A dashboard for a 480×320 touchscreen with five pages: Drive, Timing, Vehicle,
-  Tyres and Graphs (30-second pedal and G-force traces).
-- ACC, Assetto Corsa, Assetto Corsa EVO and iRacing, all through one Windows
+  Tyres and Graphs.
+- ACC, Assetto Corsa, Assetto Corsa EVO and iRacing, all through one lightweight Windows
   program (`rapid-telemetry-daemon.exe`) that needs no installation.
 - MoTeC i2 compatible recordings: the whole session plus one file per lap. All
   simulators share the same channel layout.
-- Setup from a browser, with no keyboard needed: the Pi starts its own Wi-Fi
+- Setup from a browser, with no peripherals needed: the Pi starts its own Wi-Fi
   network, and you claim it, connect it to home Wi-Fi, set the orientation and
   calibrate touch from a phone.
 - Pairing: each PC gets its own key after you approve a code on the Pi.

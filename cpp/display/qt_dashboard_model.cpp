@@ -157,7 +157,7 @@ QString calibration_file() {
 }
 
 // The one rotation state file rapid-display-recovery writes; the panel reads
-// the same file and path (PROJECT.md: do not invent a second one).
+// the same file and path (do not invent a second one).
 QString display_state_file() {
   return qEnvironmentVariable("RAPID_DISPLAY_STATE", "/var/lib/rapid/display-recovery.json");
 }
