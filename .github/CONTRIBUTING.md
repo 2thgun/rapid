@@ -1,17 +1,14 @@
 # Contributing to raPId
 
-Read HANDOFF.md and initialize documentation with
-`git submodule update --init --recursive`.
+1. Clone with the wiki: `git clone --recurse-submodules https://github.com/2thgun/rapid.git`.
+2. Read [PROJECT.md](../PROJECT.md) for the working method, and
+   [Building](https://github.com/2thgun/rapid/wiki/Building) and
+   [Testing](https://github.com/2thgun/rapid/wiki/Testing) for the commands.
+3. Work on a focused branch and open a pull request. CI must be green.
+4. In the pull request, report automated results and hardware results
+   separately. Say which device-facing behavior was **not** exercised on a real
+   Pi.
+5. If behavior changed, update the wiki page that describes it and
+   `CHANGELOG.md`. Push the wiki first, then commit the submodule pointer.
 
-Use a focused branch and pull request. Run relevant tests and report automated
-and hardware validation separately. Runtime work belongs in C++.
-
-Guides and development logs live in the
-[wiki](https://github.com/2thgun/rapid/wiki). Follow its
-[documentation workflow](https://github.com/2thgun/rapid/wiki/Documentation-Workflow):
-publish wiki changes first, then commit the updated submodule pointer and handoff.
-
-Keep temporary outputs under ignored .local/sessions/. Never commit credentials,
-paired keys, recordings, generated binaries or private raw logs to source or wiki.
-Preserve rollback copies outside tracked source before deployment. Check the
-recorder is idle and verify device state rather than trusting old log entries.
+Never commit credentials, keys, recordings, generated binaries or raw logs.

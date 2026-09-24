@@ -25,15 +25,11 @@ $bundle = [IO.Path]::GetFullPath($Destination).TrimEnd('\', '/')
 $repository = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\', '/')
 $wiki = Join-Path $repository 'wiki'
 $guides = [ordered]@{
-    'AC1-Demo-Guide' = 'AC1_DEMO_GUIDE.md'
-    'Architecture' = 'ARCHITECTURE.md'
-    'Operations' = 'OPERATIONS.md'
-    'Portable-Setup' = 'PORTABLE_SETUP.md'
-    'Qt-Display' = 'QT_DISPLAY.md'
-    'Validation-Status' = 'STATUS.md'
-    'Telemetry-v4' = 'TELEMETRY_V4.md'
-    'Testing' = 'TESTING.md'
+    'Getting-Started' = 'GETTING_STARTED.md'
     'Windows-Companion' = 'WINDOWS_COMPANION.md'
+    'Touchscreen' = 'TOUCHSCREEN.md'
+    'Driving-and-Recording' = 'DRIVING_AND_RECORDING.md'
+    'Troubleshooting' = 'TROUBLESHOOTING.md'
 }
 foreach ($required in @('START-RAPID.cmd', 'start-rapid-daemon.vbs', 'install-demo.cmd')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $required) -PathType Leaf)) {
@@ -118,7 +114,7 @@ $instructions = @(
     '4. Launch Assetto Corsa through Steam or Content Manager.'
     '5. Enter a driving session and check live pedals, steering, graphs and recording on the Pi.'
     ''
-    'Read AC1_DEMO_GUIDE.md before the demo for the full checklist and recovery steps.'
+    'Read DRIVING_AND_RECORDING.md and TROUBLESHOOTING.md before the demo.'
     'The installer creates a per-user raPId AC1 Demo folder and login startup entry.'
     'PC logs and emergency recordings are in recordings. Exit through the tray menu to finish recordings.'
     'telemetry.key is private and must match the Pi. Do not publish or upload this folder.'

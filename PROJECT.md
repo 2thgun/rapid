@@ -1,348 +1,148 @@
-# PROJECT.md — how work is done in raPId
+# PROJECT.md: how work is done in raPId
 
-This is the entry point for anyone working in this repository, human or
-agent. It defines the working method: what to read, what words mean, what
-counts as evidence, where things get written down, and how several people or
-agents work at once without overwriting each other.
+This document sets the working method for anyone who changes raPId, whether a
+person or an agent. The product itself is documented in the
+[wiki](https://github.com/2thgun/rapid/wiki).
 
-It deliberately does not restate the rules that other files already own.
-Duplicated rules drift and then contributors follow different copies. Where
-this document points at another file, that file is authoritative.
+## 1. Where things live
 
-| Question | Authoritative file |
+| What | Where |
 | --- | --- |
-| Repository working conventions, short form | `AGENTS.md` |
-| Current checkpoint and next task | `HANDOFF.md` |
-| Who is working on what right now, Pi lock, current parallel plan | `../developer/COWORK.md` (local board, not in Git) |
-| Which doc is canonical, and commit order | `wiki/Documentation-Workflow.md` |
-| Engineering state, deeper than the handoff | `wiki/Resume-Work.md` |
-| What has actually been verified, and when | `wiki/Validation-Status.md` |
-| Build and test commands | `wiki/Testing.md` |
-| Hardware and release sign-off | `wiki/Hardware-Acceptance.md`, `wiki/Release-Acceptance.md` |
-| Everything else | the wiki sidebar |
+| Source, tests, CI | this repository |
+| The manual: how raPId works and how to use, build and test it | the wiki, pinned here as the `wiki/` submodule |
+| User-visible changes | `CHANGELOG.md` |
+| Open work and its acceptance criteria | GitHub issues and milestones |
+| Planning, task briefs, session logs, device evidence | the maintainer's local workspace, **outside Git** |
 
-## 1. Read order at the start of every session
-
-Do this before proposing or changing anything. It takes a few minutes and
-prevents the most common failure in this project, which is acting on a stale
-description of the device.
-
-```sh
-git status --short
-git submodule update --init --recursive
-```
-
-1. `HANDOFF.md` — the current checkpoint and the next task.
-2. `wiki/Resume-Work.md` — the engineering view of the same moment.
-3. `wiki/Validation-Status.md` — what has been verified, and against which
-   revision.
-4. The issue you intend to work, in full, including its acceptance criteria.
-5. `../developer/COWORK.md` — who holds which files and the Pi, and the
-   current parallel plan. It sits outside the repository so every checkout and
-   worktree on this machine shares one copy. **Add your claim there before you edit anything or touch the Pi.**
-   Following `COWORK.md` is mandatory, not a courtesy; work done without a
-   claim is treated as an unknown change (§3).
-
-Then inspect the actual state you are about to change: the current source,
-the current service state on the device, the current package contents. Old
-log entries are dated evidence of what was true once. They are not a
-description of the system now, and they are never deployment instructions.
+The wiki describes **the current behavior only**. It doesn't hold status
+reports, session logs, handoffs, "resume work" notes or audit trails. Git
+history and issues keep that record. When behavior changes, change the page
+that describes it. Don't append a note about the change.
 
 ## 2. Claim vocabulary
 
-Most confusion in this project comes from one word doing five jobs. Use these
-terms precisely, in commits, logs, issues and conversation. If you cannot
-honestly use a stronger word, use a weaker one.
+Use these words exactly, in commits, pull requests and issues:
 
 | Term | Means | Evidence required |
 | --- | --- | --- |
-| **Implemented** | The code exists and compiles. | A revision. Nothing more is claimed. |
-| **Tested** | Automated checks covering it pass locally. | Named test targets, the result, and the build type. |
-| **Verified** | The full suite passed at a named revision, in a named configuration. | Revision, configuration, targets, duration, and where it ran. Hosted CI runs are linked. |
-| **Deployed** | Installed on a real device. | Which device, which artifact, which revision, and where the rollback copy is. |
-| **Accepted** | A human observed the real behavior on real hardware, against a runbook. | The runbook row, the date, the operator, and the observed result. |
+| **Implemented** | The code exists and compiles. | A revision. |
+| **Tested** | Automated checks covering it pass. | Named targets, result, build type. |
+| **Verified** | The full gate passed at a named revision. | Revision, configuration, test count, where it ran, and the CI link. |
+| **Deployed** | It is installed on a real device. | Device, artifact, revision, and where the rollback copy is. |
+| **Accepted** | A person saw the real behavior on real hardware. | The checklist row, the date, the tester, and what was observed. |
 
-Rules that follow from this:
+A passing test suite is not acceptance. Synthetic fixtures, screenshots and
+injected input are not physical evidence. An HTTP health check doesn't prove
+UDP telemetry arrived, and a sent-packet counter on the PC doesn't prove the
+Pi accepted anything. When something hasn't been run, write `not run`.
 
-- A passing test suite is not acceptance. Synthetic fixtures, screenshots and
-  injected input events are not physical evidence.
-- An HTTP health response does not prove UDP telemetry. A sent-packet counter
-  on the PC does not prove the Pi accepted anything. Use receiver counters.
-- "It should work" is not a status. Write `not run` rather than inferring a
-  pass.
-- Implemented and unverified is a perfectly respectable state. Say it plainly
-  rather than rounding it up.
+## 3. Working an issue
 
-## 3. Document before you act, confirm after
+- An issue's acceptance criteria are the contract. Close an issue only when
+  every row has evidence, not when the code change lands.
+- Write tests from the required behavior, not from the current implementation.
+- **Nothing ships without its producer.** An endpoint or UI that acts on data
+  nothing writes yet is not implemented.
+- **Cross-platform protocols need cross-platform fixtures.** Anything the
+  companion sends and the Pi parses (v4 telemetry, pairing) is tested with
+  fixtures produced by the real code on the other platform.
+- If a gate fails, keep the evidence and leave the issue open. Never weaken a
+  test to get a pass.
 
-Every step that changes state — an edit, a command, a build, a deployment, a
-git operation — is written down before it is taken and confirmed after it
-completes. State what you are about to do, why, and what you expect. Then
-state what actually happened, including when it differs from the expectation.
+## 4. Branches and commits
 
-This is not ceremony. It is what makes a session reconstructible by the next
-contributor, and it is what lets several agents share one repository and one
-physical device without guessing at each other's intent.
+- Use one focused branch per change, based on the current `origin/main`, and
+  merge through a pull request with green CI. Never push directly to `main`, and
+  never force-push shared branches.
+- Stage files explicitly. Never `git add -A` or `git commit -a`; other work is
+  often in progress in the same tree.
+- **No AI attribution.** Don't add `Co-Authored-By` trailers for any AI tool, or
+  "Generated with …" lines, to commits, pull requests or issues.
+- Runtime behavior belongs in C++.
 
-A step that was taken but not written down is treated as an unknown change
-and should be re-verified.
+## 5. Documentation
 
-## 4. During the session
+With each change:
 
-Work in the smallest scope that satisfies the task. Runtime work belongs in
-C++. Keep disposable output in an ignored session directory:
+1. Update the wiki page that describes the behavior you changed. Keep pages
+   accurate, not historical.
+2. Add a line to `CHANGELOG.md` if users will notice the change.
+3. The wiki is its own repository. Commit and push the wiki first, then commit
+   the updated `wiki` submodule pointer with the source change:
 
-```
-.local/sessions/YYYY-MM-DD-topic/
-```
-
-One directory per session per topic, named for the work, not the person. Put
-logs, screenshots, diagnostic excerpts and measurements there. Never put
-credentials, paired keys, recordings, private Wi-Fi names or raw system logs
-in the repository or the wiki — those stay in `.local/private/` or off the
-machine entirely.
-
-Preserve a rollback copy outside tracked source before changing anything on a
-device, and record where it is.
-
-## 5. Finishing a session
-
-The order matters, because the wiki is a separate repository pinned here as a
-submodule. Full detail is in `wiki/Documentation-Workflow.md`; the shape is:
-
-1. Append a dated entry to `wiki/Development-Log.md`.
-2. Update the relevant wiki guide if behavior or instructions changed.
-3. Update `wiki/Resume-Work.md` and `HANDOFF.md` only if the current
-   checkpoint actually moved.
-4. Update `CHANGELOG.md` if the change is user-visible.
-5. Review both diffs for secrets and private details.
-6. Commit and push the wiki first, then commit the submodule pointer together
-   with the source change.
-7. Remove your claim from `COWORK.md`, release the Pi lock if you held it, and
-   move your resolved messages into the Development-Log entry.
-
-Never commit a source change that describes wiki content which has not been
-pushed. The pointer must always resolve for someone cloning fresh.
-
-**Documentation cadence.** Steps 1–4 happen once per session, not once per
-change. Do not make one-line documentation commits or re-run the full gate
-just to refresh a status sentence; on 2026-09-14, 137 of 227 commits were
-record/refresh/update commits and `HANDOFF.md` grew conflicting checkpoints.
-Live progress during a session goes in `../developer/COWORK.md`, which is not
-versioned; the session's Development-Log entry is the durable record. Stage files explicitly; never
-`git add -A` or `git commit -a` in a shared tree.
-
-### Development-Log entry template
-
-Consistent shape matters more than prose quality. Every entry answers the
-same questions in the same order, so entries can be compared and skimmed.
-
-```markdown
-## YYYY-MM-DD — short topic
-
-**Changed.** What was modified, and in which components.
-
-**Why.** The issue or defect this serves, linked.
-
-**Verification.** Which targets ran, in which configuration, at which
-revision, with results and duration. Link hosted runs. Name what was not
-run.
-
-**Deployment.** Whether anything was installed anywhere, which artifact,
-and where the rollback copy lives. "Not deployed" is a valid and common
-answer.
-
-**Outstanding.** What this deliberately did not do, and what remains
-before the owning issue can close.
+```sh
+git -C wiki switch master && git -C wiki pull --ff-only
+# edit wiki pages
+git -C wiki add <pages> && git -C wiki commit -m "docs: ..." && git -C wiki push
+git add wiki <source files> && git commit
 ```
 
-### HANDOFF.md rules
-
-`HANDOFF.md` is read first by everyone, so it stays short and current. It
-describes the present checkpoint and the immediate next task. It is not a
-history — the log is the history. When the handoff and a log entry disagree,
-the handoff is wrong and should be corrected, because the log is dated and
-the handoff claims to be now.
-
-Only the contributor finishing a session updates it, and only when the
-checkpoint actually changed.
+A GitHub ZIP download doesn't include the wiki. Clone with
+`--recurse-submodules`.
 
 ## 6. The verification gate
 
-Before claiming anything stronger than "implemented", run the suite. Commands
-and dependencies are in `wiki/Testing.md` and `wiki/Operations.md`; the shape
-is a Debug pass and a Release pass on Linux with the optional targets
-enabled:
+Before you claim anything stronger than "implemented", run the gate:
 
-```sh
-cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug \
-  -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON
-cmake --build build/cpp
-ctest --test-dir build/cpp --output-on-failure
-```
+- Linux, **clean** Debug **and** Release builds with
+  `RAPID_BUILD_LOG_STATUS=ON`, `RAPID_BUILD_QT_DISPLAY=ON` and
+  `RAPID_BUILD_PI_PACKAGE=ON`. Every CTest target must pass.
+- `node cpp/display/tests/qt_display_tests.js`.
+- The Windows companion build and `--self-test`.
+- An ARM64 build before any claim about deployment. An x86-64 pass says nothing
+  about the Pi's compiler, `-Werror` or dependencies.
 
-Report the number of targets that ran rather than quoting a count from an
-older document — the count grows as suites are added, and stale counts in
-prose are a recurring source of confusion. The Qt display regression
-(`node cpp/display/tests/qt_display_tests.js`) and the Windows companion
-self-test are part of the gate, not extras.
+Rules learned from false results:
 
-Rules for the gate, each learned from a false result:
+- Build from an empty build directory. Reused object files have produced wrong
+  passes.
+- The log is the evidence. A result counts only if the log shows the command,
+  its exit code and the CTest summary line.
+- Hosted CI is the source of truth. Check it before building on a commit.
 
-- **Build from a clean build directory** after any source copy or checkout
-  change. Reused object files produced wrong results on 7, 10 and 13 Sep.
-  `developer/Test-LocalCandidate.ps1` wipes and reconfigures Debug and Release.
-- **The log is the evidence.** A result counts only if the session log shows
-  the command, its exit code and the CTest summary line (`N tests passed, 0
-  failed out of N`, total time). A log with an empty exit code or no test
-  output means `not run`, whatever was remembered.
-- **Push the same day; hosted CI is the source of truth.** Ten hosted runs
-  failed in a row on 10 Sep while local runs passed. Check the hosted result
-  before building on a commit.
-- **Build ARM64 before any deploy claim.** An x86-64 pass says nothing about
-  the Pi's compiler, `-Werror` or dependencies.
+The commands are in [Testing](https://github.com/2thgun/rapid/wiki/Testing).
 
-Package inspection is not installation. Installation is not acceptance.
+## 7. Privacy
 
-## 7. Working an issue
-
-Issues here carry full acceptance criteria, and those criteria are the
-contract. Source correctness is usually only one row of several.
-
-- Do not close an issue because its code change landed. Close it when every
-  acceptance row has recorded evidence.
-- If the work splits, narrow the issue explicitly and say what was moved
-  where, rather than closing it and opening a vaguer one.
-- If something is already satisfied by existing code, say so with the file
-  and line as evidence, rather than reimplementing it.
-- Prerequisite issues closing does not pass the gate that depends on them.
-- **Tests encode the acceptance criteria, not the current implementation.**
-  Write the test from the issue's required behavior first. The #11 rotation
-  test asserted "preview then confirm" in one step, which was the bug itself.
-- **Nothing ships without its producer.** An endpoint, reset or UI that acts on
-  data nothing yet writes (the calibration reset on 14 Sep) is not implemented.
-- **Cross-platform protocols need cross-platform fixtures.** Anything the
-  Windows companion sends and the Pi parses (v4 telemetry, pairing) must have
-  fixtures generated by the real Windows code and consumed by Linux CI, before
-  either side is polished. Pairing interop broke within minutes of first
-  contact on 14 Sep despite both sides' self-tests passing.
-
-When a gate fails, preserve the evidence, name the failing row, and leave the
-issue open. Do not downgrade the test to obtain a pass.
+Never commit or publish device credentials, paired or telemetry keys, TLS
+private keys, recordings, private Wi-Fi names or raw system logs, whether in
+source, the wiki, issues or pull requests. Put local scratch output in the
+ignored `.local/` directory. Before committing, review both the source and the
+wiki diffs for secrets.
 
 ## 8. Device and safety rules
 
-The Raspberry Pi is a single shared physical resource and the demo kits carry
-private keys. Treat both accordingly.
+The development Pi is a single shared device.
 
-- Confirm the recorder is idle before restarting, deploying or powering down.
-- Preserve keys, configuration, the state database and recordings across any
-  upgrade, with a timestamped `.old` copy, and record its location.
-- Deleting the state database deletes replay history. Reconcile data
-  deliberately while services are stopped, never by restoring old paths over
-  newer data.
-- Do not clone a configured card for another unit. A new device generates its
-  own identity, credentials and keys.
-- Never publish device credentials, paired keys, recordings or raw private
-  logs, in either repository. Never write passwords into handoff or session
-  notes either, even local ones; refer to where the owner keeps them.
+- Only one person or agent works on the Pi at a time. Coordinate before any SSH
+  session, deployment, reboot or test drive.
+- Make sure the recorder is idle before you restart, deploy or power down.
+- Before an upgrade, back up `/var/lib/rapid-setup`, `/var/lib/rapid` and
+  `/etc/rapid` with a timestamp, and note where the backup is. Deleting the
+  state database deletes replay history. Never restore old data over newer
+  data without reconciling it first.
+- Never clone a configured card to another unit. Each device generates its own
+  identity.
+- **Device-facing work isn't done until it has run on the Pi.** That covers the
+  display, rotation, touch, network, boot, recording and telemetry. Until then
+  it is at most "tested".
+- **Probe before you design.** Before you build on a device tool or interface
+  (evdev naming, NetworkManager behavior, Xorg), check read-only on the real Pi
+  that it does what the design assumes.
 
-### Hardware contact
+## 9. Definition of done
 
-Between 5 and 15 Sep every session on the real device found a bug that no
-synthetic test caught (missing Qt data, a 4-minute boot, split recordings,
-missing units, `xrandr` rotation unusable on this panel). Contact with the
-device then stopped while test volume grew. So:
-
-- Anything device-facing — display, rotation, touch, network, boot, recording,
-  telemetry — is not done until it has been exercised on the Pi. Until then
-  its status is at most "tested", and the handoff says so.
-- **Probe before you design.** Before building on a device tool or interface
-  (`xrandr`, evdev naming, NetworkManager behavior), check read-only on the
-  real Pi that it does what the design assumes, and record the output.
-- Do not stack a second feature on an unverified hardware assumption. Plan a
-  hardware session (take the Pi lock in `COWORK.md`) at least after every
-  batch of merged device-facing work.
-
-### Known traps
-
-These have each cost someone a session already.
-
-- The `developer/` folder outside this repository is optional local history,
-  not a source dependency — but installed companion kits may still point into
-  it. Relocate deliberately before removing anything.
-- An initialized submodule can be on a detached HEAD. Switch to the branch
-  and fast-forward before editing the wiki; never reset away local changes.
-- A GitHub ZIP download omits submodule contents. Documentation work needs a
-  recursive clone.
-
-## 9. Working alongside other contributors and agents
-
-Several agents in one repository, against one device, need three things:
-declared scope, separate scratch, and append-only history. `COWORK.md` is
-where the first of these happens, and using it is required.
-
-**Declare scope before starting — in `COWORK.md`.** Add a claim row naming
-the step or issue, the files or functions you own, your worktree or branch,
-and what you are waiting on. Do not edit files another row owns without
-posting a message there and getting an answer. Two contributors in the same
-source files at once is a merge problem; two contributors on the device at
-once is a correctness problem. The board lives at
-`C:\Users\VOS-User\Documents\raPId\developer\COWORK.md`; agents in worktrees
-use that absolute path.
-
-**The device is exclusive — take the Pi lock.** Set the lock line in
-`COWORK.md` before any SSH session, deploy, reboot or driving test, including
-read-only probes, and set it back to `free` when you are off. Never deploy
-while another session's work is installed but unverified, and never while a
-recording is active.
-
-**Keep scratch separate.** Each session gets its own
-`.local/sessions/YYYY-MM-DD-topic/`. Do not write into another session's
-directory or edit its files.
-
-**Treat history as append-only.** Add a new dated entry to the development
-log; do not rewrite someone else's. If an earlier entry was wrong, add a
-correction that says so and links it, which is how `wiki/Wiki-Audit.md`
-already works.
-
-**HANDOFF.md is the hot spot.** It is small, everyone edits it, and it
-conflicts easily. Only the finishing contributor updates it, it stays brief,
-and it describes only the current checkpoint.
-
-**Pull before you write documentation.** The wiki advances independently,
-including from edits made on the GitHub website. Fast-forward first.
-
-**Talk on the board.** Questions, blockers and "I'm about to change X" go in
-`COWORK.md` messages, append-only and timestamped. The planner keeps the
-current parallel plan there; implementers follow its order and "waits for"
-column rather than starting blocked steps.
-
-**Hand off in writing.** An unfinished task is handed over with what was
-done, what was verified, what is deliberately incomplete, and where the
-evidence is. Anything else forces the next contributor to rediscover the
-state, which is the expensive part.
-
-## 10. Definition of done
-
-A change is done when all of these are true. If one is not, say which.
-
-- [ ] The change is in C++ if it is runtime behavior.
-- [ ] Tests covering it exist and were written from the acceptance criteria.
-- [ ] The suite passes in clean Debug and Release builds, and the session log
-      shows each command's exit code and test summary.
-- [ ] It is pushed and hosted CI is green.
-- [ ] If it is device-facing, it was exercised on the Pi, or the handoff says
-      plainly that it was not.
-- [ ] The result is described with the correct claim vocabulary from §2.
-- [ ] A dated development-log entry records what ran and what did not.
-- [ ] Affected guides are updated; `CHANGELOG.md` is updated if user-visible.
-- [ ] `HANDOFF.md` and `Resume-Work.md` are current, or deliberately
-      unchanged because the checkpoint did not move.
-- [ ] Wiki is pushed, then the pointer is committed with the source change.
+- [ ] Runtime behavior is in C++.
+- [ ] Tests exist and come from the acceptance criteria.
+- [ ] Clean Debug and Release gates pass. The log shows the exit codes and
+      test summaries.
+- [ ] Pushed, with hosted CI green.
+- [ ] Device-facing changes were exercised on the Pi, or the pull request says
+      plainly that they weren't.
+- [ ] The result is described with the §2 vocabulary.
+- [ ] The affected wiki pages describe the new behavior. `CHANGELOG.md` is
+      updated if the change is user-visible.
+- [ ] The wiki is pushed before the submodule pointer is committed.
 - [ ] Both diffs were reviewed for secrets.
-- [ ] The owning issue records evidence, and is closed only if every
-      acceptance row is satisfied.
-- [ ] Every step taken was written down before it was taken and confirmed
-      after.
-- [ ] Your `COWORK.md` claim is removed and the Pi lock is `free`.
+- [ ] The issue records evidence, and it is closed only if every acceptance row
+      passed.
