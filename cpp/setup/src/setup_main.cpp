@@ -129,8 +129,13 @@ int main(int argc, char **argv) {
     SetupAuth auth(store, port, monotonic, token, listen_host, apply_request_file,
                    apply_result_file, firstboot_status_file, wifi_request_file,
                    wifi_result_file, pairing.get(), !tls_certificate.empty(),
-                   pairing_certificate_fingerprint, false, calibration_file,
-                   calibration_request_file, display_confirm_file);
+                   // #62: enable the pairing transport whenever a device
+                   // identity is configured. A hardcoded `false` left
+                   // /api/v1/pairing/* dead, so companion pairing never worked
+                   // on a real device even though the transport and its crypto
+                   // were tested.
+                   pairing_certificate_fingerprint, !pairing_device_id.empty(),
+                   calibration_file, calibration_request_file, display_confirm_file);
     if (account_request_file.empty() != account_result_file.empty())
       throw std::invalid_argument("device access requires both account request and result files");
     if (!account_request_file.empty()) auth.set_account_files(account_request_file, account_result_file);
