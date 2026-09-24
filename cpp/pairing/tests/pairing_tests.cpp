@@ -24,8 +24,23 @@ std::string derive_public_key(const std::string &private_hex) {
     out << std::hex << std::setw(2) << std::setfill('0') << int(byte);
   return out.str();
 }
-int main() {
+// #71: the companion polls for the approved envelope for kPairingPollSeconds;
+// it must outlast the Pi's request lifetime, or it gives up while the Pi would
+// still accept the approval. The companion is a separate Windows build that
+// cannot include pairing.hpp, so this reads its constant from source.
+void companion_outlasts_request(const fs::path &companion_source) {
+  const auto source = read_file(companion_source);
+  const std::string marker = "kPairingPollSeconds = ";
+  const auto at = source.find(marker);
+  require(at != std::string::npos, "#71: companion declares kPairingPollSeconds");
+  const int poll = std::stoi(source.substr(at + marker.size()));
+  require(poll >= kPairingRequestSeconds + 30,
+          "#71: companion poll budget exceeds the Pi request lifetime by at least 30 s");
+}
+int main(int argc, char **argv) {
   try {
+    if (argc == 2) companion_outlasts_request(argv[1]);
+    else std::cout << "Companion source not in this tree; poll-budget check not run\n";
     // RFC 7748 Section 6.1 X25519 known-answer test, independent of
     // OpenSSL/Windows-CNG interop (#14): pins this Pi-side implementation's
     // byte order against the published test vector, so a regression here is
@@ -145,7 +160,7 @@ int main() {
             "cancelling pairing clears queued panel approval");
     coordinator.open(20);
     (void)coordinator.request("Expiring PC", derive_public_key(private_key), 21);
-    require(!coordinator.pending(142) && !fs::exists(panel_file),
+    require(!coordinator.pending(21 + kPairingRequestSeconds + 1) && !fs::exists(panel_file),
             "expired pairing clears the panel state");
     std::error_code cleanup_error;
     fs::remove_all(store_path, cleanup_error);
@@ -165,8 +180,27 @@ int main() {
     require(!window.pending(20), "five failures erase pending material");
     window.open(30);
     pending = window.request("Driver PC", public_key, 31);
-    require(!window.approve(pending.transaction_id, pending.code, 152) && !window.active(152),
+    const double expired = 31 + kPairingRequestSeconds + 1;
+    require(!window.approve(pending.transaction_id, pending.code, expired) && !window.active(expired),
             "expired transaction closes pairing window");
+    // #71: a person needs time to walk to the PC, type the address, then read
+    // and compare the code. One minute of typing then three minutes of
+    // comparing must still pair, and a request that arrives just before the
+    // window would close still gets its whole approval time.
+    window.open(1000);
+    pending = window.request("Slow PC", public_key, 1060);
+    require(window.approve(pending.transaction_id, pending.code, 1060 + 180),
+            "#71: approval three minutes after a request one minute into the window succeeds");
+    require(window.consume_approved(1240).has_value(), "#71: the slow approval is consumed");
+    window.open(2000);
+    pending = window.request("Late PC", public_key, 2000 + kPairingWindowSeconds - 5);
+    require(pending.expires_at == 2000 + kPairingWindowSeconds - 5 + kPairingRequestSeconds,
+            "#71: the request carries its full approval time");
+    require(window.active(pending.expires_at) && window.pending(pending.expires_at - 1),
+            "#71: a late request keeps the window open until it expires");
+    require(window.approve(pending.transaction_id, pending.code, pending.expires_at - 1),
+            "#71: a late request can still be approved near the end of its own time");
+    window.cancel();
     window.open(200);
     pending = window.request("Driver PC", public_key, 201);
     require(window.approve(pending.transaction_id, pending.code, 201),

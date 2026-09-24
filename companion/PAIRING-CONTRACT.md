@@ -64,8 +64,13 @@ The pairing listener accepts only TLS; there is no cleartext pairing route.
    eight-digit verification code from the transaction identifier, nonce, device
    certificate fingerprint and companion public key. The Pi panel and companion
    both show that code and the requested PC name.
-4. The user compares the two screens and approves on the Pi. The request expires
-   after two minutes; five failed or expired attempts close the window.
+4. The user compares the two screens and approves on the Pi. The window stays
+   open for five minutes for a PC to ask; a request then has its own five
+   minutes to be approved, and the window stays open until it expires. The
+   panel counts down and stops showing an expired code. The companion waits
+   5.5 minutes, so the Pi decides expiry (`kPairingWindowSeconds`,
+   `kPairingRequestSeconds`, `kPairingPollSeconds`; #71). Five failed or
+   expired attempts close the window.
 5. The Pi generates a fresh 32-byte telemetry key and returns it only after
    approval, encrypted to the companion's X25519 public key. The envelope uses
    X25519 shared secret, HKDF-SHA-256 with transaction-bound salt and

@@ -760,6 +760,12 @@ std::vector<std::uint8_t> decrypt_pairing_envelope(std::string_view device, std:
     return plain;
 }
 
+// #71: how long to wait for the owner to approve on the Pi. It must outlast the
+// Pi's request lifetime (kPairingRequestSeconds in cpp/pairing/include/rapid/
+// pairing.hpp, 300 s) so the Pi, not the companion, decides when a request has
+// expired; rapid-pairing-tests checks this value against that constant.
+constexpr int kPairingPollSeconds = 330;
+
 int run_pairing(const Options& options) {
     if (options.pairing_label.empty() || options.pairing_url.empty()) throw std::runtime_error("pairing requires --pairing-url, --pairing-label, and --certificate-fingerprint");
     // #61: 16-hex (the display's short form) or the full 64-hex digest; both
@@ -774,7 +780,8 @@ int run_pairing(const Options& options) {
     const std::string request_body = "{\"label\":\"" + json_escape(options.pairing_label) + "\",\"companion_public_key\":\"" + pubhex + "\"}";
     const auto requested = pairing_http(base + L"/api/v1/pairing/request", L"POST", request_body, pinned_fingerprint); if (requested.status != 200 && requested.status != 201) throw std::runtime_error("pairing request rejected");
     const auto tx = json_field(requested.body, "transaction_id"); const auto nonce = json_field(requested.body, "nonce"); std::cout << "Pairing verification code: " << cng_pairing_verification_code(device, fp, tx, nonce, pubhex) << '\n';
-    for (int attempt = 0; attempt != 180; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, pinned_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "nonce"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp, wide_to_utf8(base)); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
+    std::cout << "Check that the Pi shows the same code, then tap APPROVE on the Pi within 5 minutes." << std::endl;
+    for (int attempt = 0; attempt != kPairingPollSeconds; ++attempt) { const auto result = pairing_http(base + L"/api/v1/pairing/result?transaction_id=" + utf8_to_wide(tx), L"GET", {}, pinned_fingerprint); if (result.status == 202) { std::this_thread::sleep_for(1s); continue; } if (result.status != 200) throw std::runtime_error("pairing was rejected or expired"); const auto plain = decrypt_pairing_envelope(device, tx, nonce, pubhex, json_field(result.body, "ephemeral_public_key"), json_field(result.body, "nonce"), json_field(result.body, "ciphertext"), json_field(result.body, "tag"), private_blob); if (plain.size() != 32) throw std::runtime_error("pairing envelope did not contain a 256-bit key"); write_dpapi_credential(options.pairing_credential_file, plain); write_pairing_identity(options.pairing_credential_file, device, fp, wide_to_utf8(base)); SecureZeroMemory(const_cast<std::uint8_t*>(plain.data()), plain.size()); SecureZeroMemory(private_blob.data(), private_blob.size()); std::cout << "Pairing complete; credential stored for this Windows user.\n"; return 0; }
     throw std::runtime_error("pairing approval timed out");
 }
 

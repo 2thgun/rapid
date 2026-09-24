@@ -17,6 +17,7 @@
 #include <QAbstractSocket>
 #include <QWebSocket>
 #include <QtMath>
+#include <chrono>
 #include <cmath>
 #include <utility>
 
@@ -326,6 +327,7 @@ void DashboardModel::pollPairingPanel() {
   bool pending = false;
   QString label, code;
   QString transaction;
+  int seconds_left = -1;
   if (file.open(QIODevice::ReadOnly)) {
     const auto document = QJsonDocument::fromJson(file.readAll());
     if (document.isObject()) {
@@ -343,6 +345,19 @@ void DashboardModel::pollPairingPanel() {
           });
       pending = !label.isEmpty() && transaction_hex &&
           code.size() == 8 && numeric;
+      // #71: expires_at is on the pairing service's steady clock, which on
+      // Linux is CLOCK_MONOTONIC for every process, so the panel can count
+      // down against it. The service only rewrites this file on its next
+      // event, so an expired request must stop showing here, not later.
+      const auto expires_at = object.value("expires_at");
+      if (pending && expires_at.isDouble()) {
+        const double now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const double left = expires_at.toDouble() - now;
+        if (left <= 0) pending = false;
+        else seconds_left = static_cast<int>(std::ceil(left));
+      }
+      if (!pending) { label.clear(); code.clear(); transaction.clear(); }
     }
   }
   // #61: the pairing service publishes the window state and owns the window;
@@ -363,7 +378,7 @@ void DashboardModel::pollPairingPanel() {
   }();
   if (pairing_pending_ != pending || pairing_label_ != label || pairing_code_ != code ||
       pairing_transaction_ != transaction || pairing_window_active_ != window_active ||
-      pairing_window_requested_ != window_requested) {
+      pairing_window_requested_ != window_requested || pairing_seconds_left_ != seconds_left) {
     if (pairing_transaction_ != transaction) pairing_approval_sent_ = false;
     pairing_pending_ = pending;
     pairing_label_ = std::move(label);
@@ -371,6 +386,7 @@ void DashboardModel::pollPairingPanel() {
     pairing_transaction_ = std::move(transaction);
     pairing_window_active_ = window_active;
     pairing_window_requested_ = window_requested;
+    pairing_seconds_left_ = seconds_left;
     if (!pairing_pending_) pairing_approval_sent_ = false;
     bump();
   }
@@ -822,14 +838,23 @@ void DashboardModel::pollNetworkMode() {
 }
 
 void DashboardModel::consumeNetworkMode(QNetworkReply *reply) {
+  // #70: a mode the panel cannot read is unknown, not the last mode it saw.
+  // Keeping a stale "ap" would hold the full-screen setup card over the
+  // dashboard after the device went back to Home Wi-Fi.
+  bool available = false;
+  QString mode;
   if (reply->error() == QNetworkReply::NoError) {
     const auto document = QJsonDocument::fromJson(reply->readAll());
     if (document.isObject()) {
       const auto object = document.object();
-      network_available_ = object.value("available").toBool();
-      network_mode_ = object.value("mode").toString();
-      bump();
+      available = object.value("available").toBool();
+      if (available) mode = object.value("mode").toString();
     }
+  }
+  if (network_available_ != available || network_mode_ != mode) {
+    network_available_ = available;
+    network_mode_ = mode;
+    bump();
   }
   reply->deleteLater();
 }

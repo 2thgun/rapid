@@ -13,6 +13,7 @@
 #include <QTemporaryFile>
 #include <QTimer>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 
@@ -40,7 +41,17 @@ int main(int argc, char **argv) {
   if (!pairing_panel.open()) return 2;
   const auto pairing_approval = pairing_panel.fileName() + ".approval";
   pairing_panel.resize(0);
-  pairing_panel.write("{\"transaction_id\":\"0123456789abcdef0123456789abcdef\",\"label\":\"Test PC\",\"code\":\"12345678\",\"expires_at\":120}\n");
+  // #71: expires_at is on the pairing service's steady clock; give the fixture
+  // request five minutes from now so the countdown is live.
+  const auto steady_now = [] {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  };
+  const auto pairing_fixture = [](const char *transaction, double expires_at) {
+    return QByteArray("{\"transaction_id\":\"") + transaction +
+        "\",\"label\":\"Test PC\",\"code\":\"12345678\",\"expires_at\":" +
+        QByteArray::number(expires_at, 'f', 3) + "}\n";
+  };
+  pairing_panel.write(pairing_fixture("0123456789abcdef0123456789abcdef", steady_now() + 300));
   pairing_panel.flush();
   qputenv("RAPID_PAIRING_PANEL", pairing_panel.fileName().toUtf8());
   qputenv("RAPID_PAIRING_APPROVAL", pairing_approval.toUtf8());
@@ -91,6 +102,9 @@ int main(int argc, char **argv) {
                     {"g_x", 0.5}, {"g_z", -0.5}, {"telemetry_age_ms", 0},
                     {"steering_angle", 0.25}};
   bool fail = false;
+  // #70: the Wi-Fi mode the fake runtime reports; empty means the worker's
+  // state is unavailable (503).
+  QString served_mode = "ap";
   QObject::connect(&server, &QTcpServer::newConnection, &app, [&] {
     auto *socket = server.nextPendingConnection();
     QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
@@ -99,11 +113,12 @@ int main(int argc, char **argv) {
       if (!buffer.contains("\r\n\r\n")) { socket->setProperty("request", buffer); return; }
       const bool live = buffer.startsWith("GET /api/live ");
       const bool network_mode = buffer.startsWith("GET /api/v1/network/mode ");
+      const bool mode_unavailable = network_mode && served_mode.isEmpty();
       const QJsonObject reply = live ? state
-          : network_mode ? QJsonObject{{"available", true}, {"mode", "ap"}}
+          : network_mode && !mode_unavailable ? QJsonObject{{"available", true}, {"mode", served_mode}}
                          : QJsonObject{{"available", false}};
       const auto body = QJsonDocument(reply).toJson(QJsonDocument::Compact);
-      socket->write(QByteArray(fail && live ? "HTTP/1.1 503 Unavailable\r\n" : "HTTP/1.1 200 OK\r\n") +
+      socket->write(QByteArray((fail && live) || mode_unavailable ?"HTTP/1.1 503 Unavailable\r\n" : "HTTP/1.1 200 OK\r\n") +
                     "Content-Type: application/json\r\nContent-Length: " + QByteArray::number(body.size()) +
                     "\r\nConnection: close\r\n\r\n" + body);
       socket->disconnectFromHost();
@@ -315,6 +330,8 @@ int main(int argc, char **argv) {
     require(request.readAll().contains("\"action\":\"restart-setup\""),
             "the panel asks the root worker to restart the setup service");
   }
+  require(model.pairingSecondsLeft() > 0 && model.pairingSecondsLeft() <= 300,
+          "#71: the panel counts down the pending pairing request");
   require(model.pairingPending() && model.pairingLabel() == "Test PC" &&
               model.pairingCode() == "12345678" && model.approvePairing(),
           "Pairing panel metadata and approval action are exposed");
@@ -329,6 +346,15 @@ int main(int argc, char **argv) {
   pairing_panel.flush();
   spin(600);
   require(!model.pairingPending(), "Malformed pairing transaction is ignored");
+  // #71: an expired request stops showing its code even though the pairing
+  // service only removes the file on its next event.
+  pairing_panel.resize(0);
+  pairing_panel.write(pairing_fixture("fedcba9876543210fedcba9876543210", steady_now() - 1));
+  pairing_panel.flush();
+  spin(600);
+  require(!model.pairingPending() && model.pairingCode().isEmpty() &&
+              model.pairingSecondsLeft() == -1,
+          "#71: an expired pairing request is not shown or approvable");
   // #61: the settings page's pairing entry shows the address and the short
   // fingerprint a first-run companion needs, and its button writes the same
   // private control handoff the setup page uses. The window state comes from
@@ -523,5 +549,19 @@ int main(int argc, char **argv) {
   spin(700);
   require(!model.displayConfirmPending() && !model.displayConfirmSent(),
           "The orientation prompt clears once the applicator keeps it");
+  // #70: the card must never cover the dashboard on an enrolled device on Home
+  // Wi-Fi, and a mode the panel cannot read is not Access Point mode. Last in
+  // the test: each step waits for the 2 s mode poll, and the earlier graph
+  // assertions depend on the 30 s history window.
+  served_mode = "home";
+  spin(3200);
+  require(model.setupNotice().isEmpty(), "#70: an enrolled device on Home Wi-Fi shows no setup card");
+  served_mode = "ap";
+  spin(3200);
+  require(!model.setupNotice().isEmpty(), "#70: the card returns in Access Point mode");
+  served_mode.clear();
+  spin(3200);
+  require(model.setupNotice().isEmpty() && model.networkMode().isEmpty(),
+          "#70: an unreadable Wi-Fi mode clears the last known mode and hides the card");
   std::cout << "Qt model polling, deduplication, null, gap and calibration checks passed\n";
 }

@@ -1,4 +1,5 @@
 #include "rapid/pairing.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <openssl/crypto.h>
@@ -242,7 +243,7 @@ std::string open_pairing_key(const std::string &device_id,
 void PairingWindow::open(double now) {
   if (!std::isfinite(now)) throw std::invalid_argument("invalid pairing clock");
   window_open_ = true;
-  window_expires_at_ = now + 120;
+  window_expires_at_ = now + kPairingWindowSeconds;
   failures_ = 0;
   clear_pending();
 }
@@ -279,10 +280,13 @@ PendingPairing PairingWindow::request(const std::string &label,
   if (!lower_hex(companion_public_key, 64))
     throw std::invalid_argument("invalid companion public key");
   PendingPairing request{unique_id(), unique_id(), label, companion_public_key,
-                         {}, now + 120, false};
+                         {}, now + kPairingRequestSeconds, false};
   request.code = verification_code(device_id_, certificate_fingerprint_,
                                    request.transaction_id, request.nonce,
                                    request.companion_public_key);
+  // #71: a request gets its full approval time even when it arrives late in the
+  // window; otherwise the window closing would expire it early.
+  window_expires_at_ = std::max(window_expires_at_, request.expires_at);
   pending_ = request;
   return request;
 }

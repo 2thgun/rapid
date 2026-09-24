@@ -130,6 +130,9 @@ class DashboardModel final : public QObject {
   Q_PROPERTY(bool pairingPending READ pairingPending NOTIFY changed)
   Q_PROPERTY(QString pairingLabel READ pairingLabel NOTIFY changed)
   Q_PROPERTY(QString pairingCode READ pairingCode NOTIFY changed)
+  // #71: whole seconds left to approve the pending request, or -1 when the
+  // pairing service did not say. An expired request is not pending.
+  Q_PROPERTY(int pairingSecondsLeft READ pairingSecondsLeft NOTIFY changed)
   Q_PROPERTY(QString pairingTransaction READ pairingTransaction NOTIFY changed)
   Q_PROPERTY(bool pairingApprovalSent READ pairingApprovalSent NOTIFY changed)
   Q_PROPERTY(QVariantList graphSamples READ graphSamples NOTIFY changed)
@@ -174,6 +177,7 @@ public:
   bool pairingPending() const { return pairing_pending_; }
   QString pairingLabel() const { return pairing_label_; }
   QString pairingCode() const { return pairing_code_; }
+  int pairingSecondsLeft() const { return pairing_seconds_left_; }
   QString pairingTransaction() const { return pairing_transaction_; }
   bool pairingApprovalSent() const { return pairing_approval_sent_; }
   QVariantList graphSamples() const { return graph_samples_; }
@@ -266,6 +270,7 @@ private:
   bool pairing_pending_ = false;
   QString pairing_label_;
   QString pairing_code_;
+  int pairing_seconds_left_ = -1;
   QString pairing_transaction_;
   bool pairing_approval_sent_ = false;
   bool network_available_ = false;

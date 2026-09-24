@@ -58,6 +58,17 @@ Window {
         if (v !== undefined && v !== null && Number.isFinite(Number(v)) && Number(v) > 0) return "SIM"
         return dashboard.userSteeringLockDeg > 0 ? "SET" : "DEFAULT"
     }
+    // #71: "4:32 LEFT" for the pending pairing request, empty when unknown.
+    function pairingTimeLeft() {
+        const s = dashboard.pairingSecondsLeft
+        if (s < 0) return ""
+        const sec = s % 60
+        return Math.floor(s / 60) + ":" + (sec < 10 ? "0" : "") + sec + " LEFT"
+    }
+    function pairingPrompt() {
+        const left = root.pairingTimeLeft()
+        return "Compare with the PC, then approve" + (left.length > 0 ? "  •  " + left : "")
+    }
     function steeringDegrees() { return dashboard.steeringDisplay * root.steeringLockToLockDeg() / 2 }
     // Adjust the owner-set lock (0 clears it back to the sim/default).
     function adjustSteeringLock(step) {
@@ -134,7 +145,7 @@ Window {
             Label { x: 10; y: 7; width: 250; text: "PAIRING REQUEST  " + dashboard.pairingLabel; color: root.accent }
             Text { x: 280; y: 8; width: 178; text: dashboard.pairingCode; horizontalAlignment: Text.AlignRight
                 color: "#f4f7f9"; font.pixelSize: 24; font.bold: true; font.letterSpacing: 2 }
-            Label { x: 10; y: 27; width: 440; text: "Compare this code with the companion before approving" }
+            Label { x: 10; y: 27; width: 334; text: root.pairingPrompt() }
             Rectangle { x: 350; y: 27; width: 108; height: 17; opacity: dashboard.pairingApprovalSent ? 0.45 : 1; color: pairingApprove.pressed ? "#403519" : "#221c0d"; border.color: root.accent
                 Text { anchors.centerIn: parent; text: dashboard.pairingApprovalSent ? "SENT" : "APPROVE"; color: root.accent; font.pixelSize: 9; font.bold: true }
                 MouseArea { id: pairingApprove; anchors.fill: parent; enabled: !dashboard.pairingApprovalSent; onClicked: dashboard.approvePairing() }
@@ -383,8 +394,8 @@ Window {
                 Text { visible: dashboard.pairingPending; x: 260; y: 138; width: 166
                     text: dashboard.pairingCode; horizontalAlignment: Text.AlignRight
                     color: "#f4f7f9"; font.pixelSize: 22; font.bold: true; font.letterSpacing: 2 }
-                Label { visible: dashboard.pairingPending; x: 14; y: 162; width: 260
-                    text: "Compare this code with the companion before approving" }
+                Label { visible: dashboard.pairingPending; x: 14; y: 162; width: 268
+                    text: root.pairingPrompt() }
                 Rectangle { visible: dashboard.pairingPending; x: 288; y: 156; width: 138; height: 24; radius: 4
                     opacity: dashboard.pairingApprovalSent ? 0.45 : 1
                     color: pairApprove.pressed ? "#403519" : "#221c0d"; border.color: root.accent
