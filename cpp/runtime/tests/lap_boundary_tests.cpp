@@ -14,7 +14,7 @@
 //     was 0 in the exact packet that carried the increment, and never saw
 //     the sixth crossing at all.
 //
-// Part B speaks the authenticated v4 schema-2 wire. The former AC1 delta
+// Part B speaks the authenticated v4 schema-3 wire. The former AC1 delta
 // synthesis was deleted with #52: the wire now says explicitly whether a delta
 // exists, so the tests assert that a real delta (including 0) is carried as a
 // number and an absent one stays null, and that the recorder writes the

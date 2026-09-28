@@ -32,7 +32,11 @@ enum V4Channel {
   ch_g_z = 13,
   ch_lap_number = 45,
   ch_current_lap_ms = 46,
-  ch_lap_position = 47
+  ch_lap_position = 47,
+  ch_steering_deg = 48,
+  ch_wheel_speed_mps_fl = 49,
+  ch_tyre_air_temp_fl = 53,
+  ch_yaw_rate = 62
 };
 
 inline std::uint64_t v4_mask(std::initializer_list<int> bits) {
@@ -74,8 +78,8 @@ struct V4Stream {
     v4_put(b, 7, std::uint64_t(flags), 1);
     v4_put(b, 8, 52, 2);
     v4_put(b, 10, end - 52, 2);
-    v4_put(b, 12, 2, 2); // schema 2: lap-validity/delta-presence revision
-    v4_put(b, 14, 48, 2);
+    v4_put(b, 12, 3, 2); // schema 3: normalized ACC/MoTeC quantities
+    v4_put(b, 14, 63, 2);
     v4_put(b, 16, std::uint64_t(rate), 2);
     v4_put(b, 18, 0, 2);
     b.replace(20, 16, run);
@@ -124,7 +128,7 @@ struct V4Stream {
     std::uint64_t flags = 1;
     if (lap_valid >= 0) flags |= 0x04 | (lap_valid ? 0x08 : 0);
     if (delta_present) flags |= 0x10;
-    auto b = header(1, int(flags), 260, time_us);
+    auto b = header(1, int(flags), 68 + 63 * 4, time_us);
     v4_put(b, 52, mask, 8);
     v4_put(b, 60, std::uint32_t(completed_lap_ms), 4);
     v4_put(b, 64, std::uint32_t(delta_ms), 4);

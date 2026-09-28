@@ -45,6 +45,21 @@ const std::set<std::string> &live_channels() {
   }();
   return keys;
 }
+
+double owner_steering_lock(const fs::path &path) {
+  try {
+    const auto data = Json::parse(read_file(path));
+    const double value = data.contains("lock_to_lock_deg") &&
+                                 data["lock_to_lock_deg"].is_number()
+                             ? data["lock_to_lock_deg"].get<double>()
+                             : 0.0;
+    return std::isfinite(value) && value > 0.0 ? value : 0.0;
+  } catch (...) {
+    // Missing, malformed, or non-numeric owner data means unknown. Recording
+    // must never silently substitute the dashboard's visual default.
+    return 0.0;
+  }
+}
 } // namespace
 Runtime::Runtime(Config config)
     : config_(std::move(config)),
@@ -272,8 +287,25 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
         sim != "iRacing")
       throw std::runtime_error("invalid simulator");
     auto daemon = string(m, "state");
+    auto session = string(m, "session_id", string(m, "run_id"));
+    auto identity = sim + "/" + session;
+    if (session.empty())
+      identity += "/" + string(m, "track_name") + "/" + string(m, "car_model") +
+                  "/" + string(m, "session_name");
     Json frame;
     if (type == "status") {
+      // Metadata for a new active run may arrive without an ended/waiting
+      // packet. Clear steering authority and samples from the previous run
+      // before applying the new metadata/fallback. Same-run heartbeats retain
+      // the latest direct telemetry value.
+      if (m.contains("steering_lock_deg") && !session_.empty() &&
+          identity != session_) {
+        direct_steering_angle_deg_ = false;
+        recording_steering_lock_deg_ = 0;
+        state_["steering_angle"] = nullptr;
+        state_["steering_angle_deg"] = nullptr;
+        state_["steering_lock_deg"] = nullptr;
+      }
       state_["schema_version"] = 4;
       state_["packets_lost"] = number(state_, "packets_lost") + number(m, "_wire_gap");
       if (m.contains("session_id")) state_["session_id"] = m["session_id"];
@@ -286,6 +318,28 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       if (daemon != "waiting" && daemon != "ready" && daemon != "driving" &&
           daemon != "paused")
         throw std::runtime_error("invalid heartbeat");
+      // Active metadata is sent once per second. Refresh the owner's fallback
+      // here rather than parsing steering-lock.json on every telemetry sample;
+      // a simulator-provided lock remains authoritative whenever present.
+      if ((daemon == "driving" || daemon == "paused") &&
+          m.contains("steering_lock_deg")) {
+        const bool simulator_lock = m["steering_lock_deg"].is_number();
+        recording_steering_lock_deg_ = simulator_lock
+                                           ? m["steering_lock_deg"].get<double>()
+                                           : owner_steering_lock(config_.steering_lock);
+        // A fallback-file change is visible as soon as this heartbeat arrives,
+        // even before the next telemetry sample. Do not rewrite a simulator's
+        // direct degree channel here: iRacing/ACE remain authoritative.
+        if (!simulator_lock && !direct_steering_angle_deg_) {
+          if (recording_steering_lock_deg_ > 0.0 &&
+              state_["steering_angle"].is_number())
+            state_["steering_angle_deg"] =
+                state_["steering_angle"].get<double>() *
+                recording_steering_lock_deg_ / 2.0;
+          else
+            state_["steering_angle_deg"] = nullptr;
+        }
+      }
     } else if (type == "telemetry") {
       frame = m.value("telemetry", Json());
       if (!frame.is_object() || sim.empty())
@@ -337,11 +391,6 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       daemon = "driving";
     } else
       throw std::runtime_error("invalid packet type");
-    auto session = string(m, "session_id", string(m, "run_id"));
-    auto identity = sim + "/" + session;
-    if (session.empty())
-      identity += "/" + string(m, "track_name") + "/" + string(m, "car_model") +
-                  "/" + string(m, "session_name");
     std::int64_t sequence = -1;
     if (type == "telemetry" && m.contains("sequence") && !m["sequence"].is_null()) {
       if (!m["sequence"].is_number_integer() || number(m, "sequence") < 0 ||
@@ -378,6 +427,9 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
         // session-identity change, so drop the previous session's lock exactly
         // like a disconnect does (#47); fresh metadata re-populates it.
         state_["steering_lock_deg"] = nullptr;
+        state_["steering_angle_deg"] = nullptr;
+        recording_steering_lock_deg_ = 0;
+        direct_steering_angle_deg_ = false;
         session_.clear();
         sequence_ = -1;
       } else {
@@ -394,6 +446,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
     if (identity != session_) {
       session_ = identity;
       sequence_ = -1;
+      direct_steering_angle_deg_ = false;
       timing_lap_ = -1;
       best_lap_ = 0;
       splits_.clear();
@@ -404,16 +457,31 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       for (auto *key :
            {"best_lap_ms", "sector_1_ms", "sector_2_ms", "sector_3_ms",
             "sector_1_delta_ms", "sector_2_delta_ms", "sector_3_delta_ms",
-            "delta_ms", "steering_lock_deg"})
+            "delta_ms", "steering_lock_deg", "steering_angle_deg"})
         state_[key] = nullptr;
       // The stale lock is cleared above; a metadata packet carries the new
       // session's lock and re-applies it here (#47), so a car/session change
       // never shows the previous lock for a tick.
       if (m.contains("steering_lock_deg"))
         state_["steering_lock_deg"] = m["steering_lock_deg"];
+      recording_steering_lock_deg_ =
+          m.contains("steering_lock_deg") && m["steering_lock_deg"].is_number()
+              ? m["steering_lock_deg"].get<double>()
+              : owner_steering_lock(config_.steering_lock);
     }
     if (sequence >= 0)
       sequence_ = sequence;
+    // The companion supplies degrees directly where the simulator exposes them
+    // (ACE/iRacing). Otherwise retain normalized steering and derive the
+    // separate STEERANGLE value from a simulator lock, then the owner's lock.
+    // With neither source the wire null remains null and availability stays 0.
+    direct_steering_angle_deg_ = frame.contains("steering_angle_deg") &&
+                                 frame["steering_angle_deg"].is_number();
+    if (!direct_steering_angle_deg_ &&
+        frame.contains("steering_angle") && frame["steering_angle"].is_number() &&
+        recording_steering_lock_deg_ > 0.0)
+      frame["steering_angle_deg"] =
+          frame["steering_angle"].get<double>() * recording_steering_lock_deg_ / 2.0;
     sectors(frame);
     for (auto it = frame.begin(); it != frame.end(); ++it)
       if (live_channels().contains(it.key()) && state_.contains(it.key()))
@@ -487,9 +555,12 @@ void Runtime::expire() {
     last_recording_packet_ = 0;
     last_recording_heartbeat_ = 0;
     sequence_ = -1;
+    recording_steering_lock_deg_ = 0;
+    direct_steering_angle_deg_ = false;
     session_.clear();
     for (const auto *key :
-         {"rpm", "steering_angle", "steering_lock_deg", "g_x", "g_y", "g_z",
+          {"rpm", "steering_angle", "steering_angle_deg", "steering_lock_deg",
+           "g_x", "g_y", "g_z",
           "throttle", "brake", "companion_daemon_state", "companion_source_host"})
       state_[key] = nullptr;
     state_["companion_connected"] = false;

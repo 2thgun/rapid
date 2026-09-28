@@ -132,8 +132,8 @@ struct Stream {
     put(b, 7, flags, 1);
     put(b, 8, 52, 2);
     put(b, 10, end - 52, 2);
-    put(b, 12, 2, 2); // schema 2: lap-validity/delta-presence revision
-    put(b, 14, 48, 2);
+    put(b, 12, 3, 2); // schema 3: normalized ACC/MoTeC quantities
+    put(b, 14, 63, 2);
     put(b, 16, rate, 2);
     put(b, 18, 0, 2);
     b.replace(20, 16, run);
@@ -167,7 +167,7 @@ struct Stream {
   static float rpm_for(std::uint64_t sample) { return float(1000 + sample); }
   std::string telemetry(std::uint64_t sample) const {
     const auto sequence = sample + 2;
-    auto b = header(1, 1, 260, sequence);
+    auto b = header(1, 1, 68 + 63 * 4, sequence);
     std::uint64_t mask = (1ULL << 1) | (1ULL << 4) | (1ULL << 5) | (1ULL << 6) |
                          (1ULL << 11) | (1ULL << 12) | (1ULL << 13) |
                          (1ULL << 45) | (1ULL << 46) | (1ULL << 47);

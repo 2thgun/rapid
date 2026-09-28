@@ -257,6 +257,7 @@ struct SPageFileGraphicEvo {
 static_assert(offsetof(SPageFileGraphicEvo, status) == 4, "ACE graphics status offset");
 static_assert(offsetof(SPageFileGraphicEvo, delta_time_ms) == 184, "ACE graphics delta offset");
 static_assert(offsetof(SPageFileGraphicEvo, current_lap_time_ms) == 188, "ACE graphics lap-time offset");
+static_assert(offsetof(SPageFileGraphicEvo, steer_degrees) == 156, "ACE graphics signed steer degrees offset");
 static_assert(offsetof(SPageFileGraphicEvo, npos) == 1244, "ACE graphics npos offset");
 static_assert(offsetof(SPageFileGraphicEvo, car_model) == 3086, "ACE graphics car_model offset");
 static_assert(offsetof(SPageFileGraphicEvo, is_valid_lap) == 3121, "ACE graphics is_valid_lap offset");
@@ -309,6 +310,7 @@ void ace() {
     p.acc_g[0] = .4f; p.acc_g[1] = 1.1f; p.acc_g[2] = -.2f;
     p.wheel_slip[0] = .1f; p.wheels_pressure[0] = 27.5f; p.wheel_angular_speed[0] = 71.f;
     p.tyre_core_temperature[0] = 85.f; p.suspension_travel[0] = .03f;
+    p.local_angular_vel[1] = .35f; p.brake_temp[0] = 620.f; p.clutch = .55f;
     // The intensity fields (float, 204/252) and the boolean in-action fields
     // (int, 672/676) are deliberately given different values here so the test
     // tells them apart.
@@ -319,6 +321,7 @@ void ace() {
     g.status = 2;                        // AC_LIVE
     g.delta_time_ms = -123;
     g.current_lap_time_ms = 18000;
+    g.steer_degrees = -57;
     g.npos = .25f;
     g.is_valid_lap = true;
 
@@ -340,12 +343,14 @@ void ace() {
     require(close_enough(frame.value[throttle], .8) && close_enough(frame.value[brake], .3) &&
                 close_enough(frame.value[fuel], 20) && frame.value[gear] == 3 && frame.value[rpm] == 7000 &&
                 close_enough(frame.value[steering_angle], .25) && close_enough(frame.value[speed_kmh], 201.5) &&
+                close_enough(frame.value[steering_angle_deg], -57) &&
                 close_enough(frame.value[g_x], .4) && close_enough(frame.value[g_y], 1.1) &&
                 close_enough(frame.value[g_z], -.2),
             "ACE controls, steering, speed and acceleration");
     require(close_enough(frame.value[wheel_slip_fl], .1) && close_enough(frame.value[pressure_fl], 27.5) &&
                 close_enough(frame.value[wheel_speed_fl], 71) && close_enough(frame.value[core_temp_fl], 85) &&
-                close_enough(frame.value[suspension_fl], .03),
+                close_enough(frame.value[brake_temp_fl], 620) && close_enough(frame.value[clutch], .55) &&
+                close_enough(frame.value[yaw_rate], .35) && close_enough(frame.value[suspension_fl], .03),
             "ACE per-corner channels");
     // The adapter must read the documented float intensity fields, not the
     // boolean tcinAction/absInAction flags at 672/676 (the fixture sets those
@@ -360,7 +365,11 @@ void ace() {
     require(frame.valid_mask ==
                 (all_field_bits() & ~field_bit(pit_limiter) & ~field_bit(damage_front) &
                  ~field_bit(damage_rear) & ~field_bit(damage_left) & ~field_bit(damage_right) &
-                 ~field_bit(damage_center)),
+                  ~field_bit(damage_center) &
+                  ~field_bit(wheel_speed_mps_fl) & ~field_bit(wheel_speed_mps_fr) &
+                  ~field_bit(wheel_speed_mps_rl) & ~field_bit(wheel_speed_mps_rr) &
+                  ~field_bit(tyre_air_temp_fl) & ~field_bit(tyre_air_temp_fr) &
+                  ~field_bit(tyre_air_temp_rl) & ~field_bit(tyre_air_temp_rr)),
             "ACE unavailable-channel mask");
 
     // A lap reset from ~18 s to ~1 s derives the completed lap and increments
@@ -406,8 +415,8 @@ void ace() {
             "ACE refresh_metadata reflects a mid-session car/track/session change (#15)");
 
     std::cout << "ACE (Assetto Corsa EVO) adapter self-test passed: controls, metadata, laps, pause, replay, "
-                 "restart, ended/menu detection, mid-session car/track/session change, steering "
-                 "normalisation (lock unknown)\n";
+                 "restart, ended/menu detection, mid-session car/track/session change, normalized steering "
+                 "and signed live steering degrees (lock unknown)\n";
 }
 
 // ---- iRacing: official irsdk structures ------------------------------------
@@ -448,8 +457,8 @@ static_assert(offsetof(IrsdkVarHeader, offset) == 4, "irsdk_varHeader offset");
 static_assert(offsetof(IrsdkVarHeader, name) == 16, "irsdk_varHeader name");
 
 constexpr std::size_t kIracingVarTable = 256;
-constexpr std::size_t kIracingBuffer = 4096;
-constexpr std::size_t kIracingYaml = 6000;
+constexpr std::size_t kIracingBuffer = 8192;
+constexpr std::size_t kIracingYaml = 12000;
 
 void iracing_variable(Bytes& data, int index, int type, int offset, std::string_view name_text) {
     const std::size_t at = kIracingVarTable + static_cast<std::size_t>(index) * sizeof(IrsdkVarHeader);
@@ -507,7 +516,7 @@ void iracing() {
                       L"_" + std::to_wstring(GetTickCount64());
     assetto_self_test::TestMapping<Bytes> mapping(name);
     auto& data = mapping.value();
-    iracing_header(data, 27);
+    iracing_header(data, 33);
     int index = 0;
     iracing_variable(data, index++, 1, 0, "IsOnTrack");
     iracing_variable(data, index++, 1, 100, "IsOnTrackCar");
@@ -538,7 +547,13 @@ void iracing() {
     // The SDK's own delta-presence flag; without it a delta of 0 would be
     // indistinguishable from "no reference lap" (#20/#52).
     iracing_variable(data, index++, 1, 104, "LapDeltaToBestLap_OK");
-    require(index == 27, "iRacing fixture variable count");
+    iracing_variable(data, index++, 4, 108, "Clutch");
+    iracing_variable(data, index++, 4, 112, "YawRate");
+    iracing_variable(data, index++, 4, 116, "LFspeed");
+    iracing_variable(data, index++, 4, 120, "RFspeed");
+    iracing_variable(data, index++, 4, 124, "LRspeed");
+    iracing_variable(data, index++, 4, 128, "RRspeed");
+    require(index == 33, "iRacing fixture variable count");
     iracing_yaml(data, yaml);
     put<unsigned char>(data, kIracingBuffer + 0, 1);
     put<unsigned char>(data, kIracingBuffer + 100, 0);
@@ -569,6 +584,12 @@ void iracing() {
     // SteeringWheelAngleMax, not the 900 deg YAML lock, drives normalisation.
     put<float>(data, kIracingBuffer + 96, 6.5f);
     put<unsigned char>(data, kIracingBuffer + 104, 1);
+    put<float>(data, kIracingBuffer + 108, .4f);
+    put<float>(data, kIracingBuffer + 112, -.25f);
+    put<float>(data, kIracingBuffer + 116, 49.f);
+    put<float>(data, kIracingBuffer + 120, 50.f);
+    put<float>(data, kIracingBuffer + 124, 51.f);
+    put<float>(data, kIracingBuffer + 128, 52.f);
 
     auto adapter = IracingAdapter::open(name.c_str());
     require(bool(adapter) && adapter->connected() && adapter->live(), "iRacing opens and enters track state");
@@ -589,6 +610,15 @@ void iracing() {
                 close_enough(frame.value[g_x], 1) && close_enough(frame.value[g_y], 2) &&
                 close_enough(frame.value[g_z], -1),
             "iRacing controls, steering, speed, velocity and acceleration");
+    require(close_enough(frame.value[steering_angle_deg], -74.484513),
+            "iRacing steering angle in degrees");
+    require(close_enough(frame.value[clutch], .4), "iRacing clutch");
+    require(close_enough(frame.value[yaw_rate], -.25), "iRacing yaw rate");
+    require(close_enough(frame.value[wheel_speed_mps_fl], 49) &&
+                close_enough(frame.value[wheel_speed_mps_fr], 50) &&
+                close_enough(frame.value[wheel_speed_mps_rl], 51) &&
+                close_enough(frame.value[wheel_speed_mps_rr], 52),
+            "iRacing native linear wheel speeds");
     require(frame.value[lap_number] == 7 && frame.value[current_lap_ms] == 12500 &&
                 frame.completed_lap_ms == 91250 && frame.delta_ms == -500 &&
                 frame.delta_present && !frame.lap_valid_present &&
@@ -644,13 +674,15 @@ void iracing() {
     const auto name_b = name + L"_b";
     assetto_self_test::TestMapping<Bytes> mapping_b(name_b);
     auto& data_b = mapping_b.value();
-    iracing_header(data_b, 2);
+    iracing_header(data_b, 3);
     iracing_variable(data_b, 0, 1, 0, "IsOnTrack");
     iracing_variable(data_b, 1, 4, 4, "SteeringWheelAngle");
+    iracing_variable(data_b, 2, 4, 8, "LFspeed");
     iracing_yaml(data_b, "DriverInfo:\n DriverCarSteerWheelRange: 700.000\n");
     put<unsigned char>(data_b, kIracingBuffer + 0, 1);
     // 2.1380283 rad / (350 deg half-lock) = 0.35 normalised.
     put<float>(data_b, kIracingBuffer + 4, 2.1380283f);
+    put<float>(data_b, kIracingBuffer + 8, 47.f);
     auto adapter_b = IracingAdapter::open(name_b.c_str());
     require(bool(adapter_b) && adapter_b->connected() && adapter_b->live() &&
                 adapter_b->metadata.steering_lock_deg == 700.0,
@@ -658,6 +690,12 @@ void iracing() {
     Frame frame_b;
     require(adapter_b->read(frame_b) && close_enough(frame_b.value[steering_angle], .35),
             "iRacing steering falls back to the session YAML lock");
+    require(close_enough(frame_b.value[wheel_speed_mps_fl], 47) &&
+                (frame_b.valid_mask & field_bit(wheel_speed_mps_fl)) &&
+                !(frame_b.valid_mask & field_bit(wheel_speed_mps_fr)) &&
+                !(frame_b.valid_mask & field_bit(wheel_speed_mps_rl)) &&
+                !(frame_b.valid_mask & field_bit(wheel_speed_mps_rr)),
+            "iRacing wheel-speed validity follows each native variable independently");
 
     // Steering lock step 3: neither a live variable nor a session lock, so the
     // 450 deg default half-lock (900 deg lock-to-lock) applies.
@@ -683,7 +721,3 @@ void iracing() {
                  "fallback (live SteeringWheelAngleMax, session DriverCarSteerWheelRange, 450 deg default)\n";
 }
 } // namespace additional_adapter_self_test
-
-
-
-
