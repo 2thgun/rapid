@@ -51,29 +51,46 @@ void run(const fs::path &program, const std::vector<std::string> &arguments, boo
     throw std::runtime_error("NetworkManager command failed");
 }
 
-// #26: GLib key-file values need escaping only for a literal backslash; ssid
-// and password are already restricted to printable, non-control characters
-// (validated in main() before either ever reaches this function), so that is
-// the only byte that would otherwise change the value NetworkManager parses
-// back out of the file.
+// #26 / #50: GLib key-file values. A literal backslash is escaped, and so is
+// every space at the start or end of the value as \s: the parser drops leading
+// whitespace (real NetworkManager 1.46 stored "  a b  " as "a b  "), so a
+// network whose SSID or passphrase begins or ends with a space could never
+// connect. Interior spaces stay literal. Values are already restricted to
+// printable, non-control characters (validated in main() before either ever
+// reaches this function), so newline, tab and carriage return cannot occur.
 std::string escape_keyfile_value(const std::string &value) {
+  std::size_t first = 0;
+  while (first < value.size() && value[first] == ' ') ++first;
+  std::size_t last = value.size();
+  while (last > first && value[last - 1] == ' ') --last;
   std::string escaped;
-  escaped.reserve(value.size());
-  for (char c : value) {
-    if (c == '\\') escaped += '\\';
-    escaped += c;
+  escaped.reserve(value.size() + 4);
+  for (std::size_t i = 0; i < value.size(); ++i) {
+    const char c = value[i];
+    if (c == '\\') escaped += "\\\\";
+    else if (c == ' ' && (i < first || i >= last)) escaped += "\\s";
+    else escaped += c;
   }
   return escaped;
 }
 
 // The inverse of escape_keyfile_value, for reading a value NetworkManager (or
-// this program) wrote earlier.
+// this program) wrote earlier. NetworkManager writes \s for a leading space
+// itself, and the other GLib escapes are accepted so a profile it rewrote is
+// read the same way it will parse it. An unknown escape is kept as written.
 std::string unescape_keyfile_value(const std::string &value) {
   std::string unescaped;
   unescaped.reserve(value.size());
   for (std::size_t i = 0; i < value.size(); ++i) {
-    if (value[i] == '\\' && i + 1 < value.size() && value[i + 1] == '\\') { unescaped += '\\'; ++i; }
-    else unescaped += value[i];
+    if (value[i] != '\\' || i + 1 >= value.size()) { unescaped += value[i]; continue; }
+    switch (value[i + 1]) {
+      case '\\': unescaped += '\\'; ++i; break;
+      case 's': unescaped += ' '; ++i; break;
+      case 'n': unescaped += '\n'; ++i; break;
+      case 't': unescaped += '\t'; ++i; break;
+      case 'r': unescaped += '\r'; ++i; break;
+      default: unescaped += value[i]; break;
+    }
   }
   return unescaped;
 }
