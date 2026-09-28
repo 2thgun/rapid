@@ -5,8 +5,6 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
-- The physical owner reset now also ends any owner session that was already signed in, and such a session no longer carries over to whoever enrolls next. Before, a session opened before the reset stayed authorized for up to 30 minutes, including changing the device password (#44).
-- Fixed a race in the setup page's saved-Wi-Fi requests: a fast helper could write its result just before the setup server deleted the old one, leaving the page to wait out its 30-second timeout for a result that had already arrived.
 - The live view now runs at 50 Hz end to end: the Pi's WebSocket push ticks at
   20 ms (was a magic 33 ms), the Qt panel's data update path follows the push,
   and the Windows companion's default `sample_rate` is a permanent 50 Hz
@@ -139,6 +137,8 @@ last completed checks, not a guarantee of current device state.
   targets, a verification tap and automatic rollback when unconfirmed. Rotating
   the display to 180° now also rotates touch input, and an existing X server
   touch matrix is preserved.
+- The physical owner reset now also ends any owner session that was already signed in, and such a session no longer carries over to whoever enrolls next. Before, a session opened before the reset stayed authorized for up to 30 minutes, including changing the device password (#44).
+- Fixed a race in the setup page's saved-Wi-Fi requests: a fast helper could write its result just before the setup server deleted the old one, leaving the page to wait out its 30-second timeout for a result that had already arrived.
 - A changed display orientation now waits for the owner to keep it on the Pi
   screen or setup page. If it isn't kept within 30 seconds, the previous
   orientation returns. Saving without changing the orientation no longer
