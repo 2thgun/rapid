@@ -5,6 +5,7 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Fixed `rapid.service` taking 90 s to stop and being SIGKILLed on every restart, upgrade and reboot. With pairing enabled, the pairing listener waited in a blocking `accept()` and ignored the stop request until a client connected. It now stops in well under a second, so the recording is closed and the replay state flushed instead of being cut off (#75).
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
