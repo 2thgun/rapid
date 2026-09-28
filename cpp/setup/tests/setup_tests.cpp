@@ -399,7 +399,7 @@ int main(int argc, char **argv) {
     const auto wifi_log = root.path / "wifi.log";
     const auto wifi_connections = root.path / "nm-connections";
     const std::string wifi_password(64, 'a');
-    atomic_file(wifi_request, Json{{"revision", 2}, {"ssid", "test-network"}, {"password", wifi_password}}.dump());
+    atomic_file(wifi_request, Json{{"action", "save"}, {"revision", 2}, {"ssid", "test-network"}, {"password", wifi_password}}.dump());
     setenv("RAPID_TEST_HOSTNAME_LOG", wifi_log.c_str(), 1);
     const auto wifi = fork();
     require(wifi >= 0, "fork Wi-Fi applicator");

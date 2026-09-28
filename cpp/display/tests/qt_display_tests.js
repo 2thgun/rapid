@@ -57,6 +57,13 @@ if (!qmlSource.includes('dashboard.pairingAddress') ||
 if (qmlSource.includes('Seam: lane C')) {
   throw new Error('Main.qml pairing placeholder must be replaced by the real button (#61)');
 }
+// The settings menu surfaces the device TLS fingerprint and pairing address
+// at any time (not only while the setup AP is up), so a companion can be
+// paired without first switching to AP mode.
+if (!qmlSource.includes('"PAIRING  " + dashboard.pairingAddress') ||
+    !qmlSource.includes('"FINGERPRINT  " + dashboard.pairingFingerprint')) {
+  throw new Error('Main.qml must surface the pairing address and TLS fingerprint from the settings menu');
+}
 
 // steering-display-motion: the wheel must read the model's presentation-only
 // smoothed value, not the raw channel, so a ~30 Hz push renders as continuous
