@@ -5,6 +5,7 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Removed `display/rapid-kiosk`, the launcher for the old Chromium kiosk that nothing has used since the Qt panel became the only dashboard (#68). The panel's own launcher, `packaging/rapid-panel`, already keeps the screen awake.
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
