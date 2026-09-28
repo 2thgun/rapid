@@ -41,6 +41,27 @@ struct Process {
     }
   }
 };
+// #75: SIGTERM must stop a server process promptly and cleanly. The Process
+// destructor above only waits and then SIGKILLs, so a hung stop went unnoticed.
+double stop_promptly(Process &process, const char *what) {
+  const auto started = std::chrono::steady_clock::now();
+  kill(process.pid, SIGTERM);
+  int status = 0;
+  bool stopped = false;
+  while (std::chrono::steady_clock::now() - started < std::chrono::seconds(5)) {
+    if (waitpid(process.pid, &status, WNOHANG) == process.pid) {
+      stopped = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  if (stopped) process.pid = -1;
+  const std::string label(what);
+  require(stopped, ("#75: " + label + " exits within 5 s of SIGTERM").c_str());
+  require(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          ("#75: " + label + " exits cleanly on SIGTERM").c_str());
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+}
 http::response<http::string_body> request(int port, http::verb method,
                                           const std::string &path,
                                           const std::string &body = "",
@@ -503,24 +524,12 @@ int main(int argc, char **argv) {
       asio::io_context idle_io;
       tcp::socket idle(idle_io);
       idle.connect({asio::ip::make_address("127.0.0.1"), static_cast<unsigned short>(pairing_port)});
-      const auto stop_started = std::chrono::steady_clock::now();
-      kill(pairing_runtime.pid, SIGTERM);
-      int wait_status = 0;
-      bool stopped = false;
-      while (std::chrono::steady_clock::now() - stop_started < std::chrono::seconds(5)) {
-        if (waitpid(pairing_runtime.pid, &wait_status, WNOHANG) == pairing_runtime.pid) {
-          stopped = true;
-          break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-      }
-      if (stopped) pairing_runtime.pid = -1;
-      require(stopped, "#75: rapid-pi with the pairing listener exits within 5 s of SIGTERM");
-      require(WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0,
-              "#75: rapid-pi exits cleanly on SIGTERM with the pairing listener enabled");
-      std::cout << "Shutdown: pairing-enabled rapid-pi stopped in "
-                << std::chrono::duration<double>(std::chrono::steady_clock::now() - stop_started).count()
-                << " s\n";
+      const double pairing_stop = stop_promptly(pairing_runtime, "rapid-pi with the pairing listener");
+      // rapid-setup-server serves through the same serve_tls(), so it hung the
+      // same way whenever the setup page was up.
+      const double setup_stop = stop_promptly(tls_management, "rapid-setup-server");
+      std::cout << "Shutdown: pairing-enabled rapid-pi stopped in " << pairing_stop
+                << " s, rapid-setup-server in " << setup_stop << " s\n";
     }
     std::cout << "Native network: HTTP, UDP, WebSocket history, disconnect "
                  "finalization, HTTPS setup, prompt shutdown with the pairing listener "
