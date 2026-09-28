@@ -136,6 +136,9 @@ struct Config {
   // by "paused"/"driving" heartbeats) until this many seconds without a live
   // telemetry sample. Default is the owner-decided 10 minutes.
   double not_live_timeout_seconds = 600.0;
+  // #74: each distinct reason a v4 packet is rejected as invalid is written to
+  // the log when first seen and then at most once per this many seconds.
+  double invalid_log_interval_seconds = 10.0;
   bool acc_enabled = false, upload_enabled = false, pairing_enabled = false;
   // Set only when the runtime has adopted records from private setup state.
   // In this mode an empty refreshed set means every paired PC was revoked; it
@@ -218,6 +221,16 @@ class Runtime {
   double last_sender_seconds_ = -std::numeric_limits<double>::infinity();
   double sender_lag_current_ms_ = 0;
   std::deque<double> sender_lag_ms_, process_ms_, lock_wait_ms_;
+  // #74: why v4 packets were rejected as invalid, so a burst of packets_invalid
+  // in the field can be attributed to the check that failed. Bounded (see
+  // note_invalid) and never holds packet bytes.
+  struct InvalidReason {
+    std::uint64_t total = 0, since_report = 0;
+    double reported_at = 0;
+    bool reported = false;
+  };
+  std::map<std::string, InvalidReason> invalid_reasons_;
+  void note_invalid(const char *reason);
   // Lap boundaries use the same debounced rule as the recorder (#16) so timing
   // and recording close a lap on the same sample. The former AC1 delta
   // synthesis and its position->time traces were removed with #52: the v4 wire

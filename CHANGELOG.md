@@ -5,6 +5,7 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The Pi now logs why it rejected a v4 packet as invalid (for example a pedal or RPM out of range, or telemetry that arrived before its metadata). Each distinct reason is logged once and then at most every 10 s with how many were rejected in between, so a burst of `packets_invalid` in the field can be traced to the check that failed without flooding the journal (#74).
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
