@@ -86,6 +86,12 @@ int main(int argc, char **argv) {
   const auto network_control = helper_directory.filePath("network-control");
   QDir().mkpath(network_control);
   qputenv("RAPID_NETWORK_CONTROL", network_control.toUtf8());
+  // #44: the physical owner reset. The panel writes the shared queue request;
+  // the root helper consumes it and its result is polled back from the queue.
+  const auto owner_reset_request = helper_directory.filePath("owner-reset-request.json");
+  const auto owner_reset_result = helper_directory.filePath("owner-reset-result.json");
+  qputenv("RAPID_OWNER_RESET_REQUEST", owner_reset_request.toUtf8());
+  qputenv("RAPID_OWNER_RESET_RESULT", owner_reset_result.toUtf8());
   // #61: the panel's pairing entry writes the pairing service's private
   // control handoff and reads the window state it publishes.
   const auto pairing_state = helper_directory.filePath("pairing-state.json");
@@ -563,5 +569,53 @@ int main(int argc, char **argv) {
   spin(3200);
   require(model.setupNotice().isEmpty() && model.networkMode().isEmpty(),
           "#70: an unreadable Wi-Fi mode clears the last known mode and hides the card");
+  // #44: the physical owner reset. The hold queues a request in the shared
+  // queue; the helper's result is polled back and shown. A second hold while
+  // one is in flight is ignored, and a result from before this panel started
+  // is stale and dropped at startup.
+  require(model.resetOwnerAccount() && QFile::exists(owner_reset_request),
+          "#44: the hold queues the owner reset request");
+  {
+    QFile request(owner_reset_request);
+    require(request.open(QFileDevice::ReadOnly), "read the owner reset request");
+    const auto id = QJsonDocument::fromJson(request.readAll()).object().value("request_id").toString();
+    const bool hexadecimal = !id.isEmpty() && std::all_of(id.cbegin(), id.cend(), [](QChar c) {
+      return c.isDigit() || (c >= QLatin1Char('a') && c <= QLatin1Char('f'));
+    });
+    require(id.size() == 32 && hexadecimal, "#44: the request carries a 32-hex id");
+    const auto permissions = QFileInfo(owner_reset_request).permissions();
+    require(!(permissions & QFileDevice::ReadOther) && !(permissions & QFileDevice::WriteOther),
+            "#44: the owner reset request is not world-readable");
+  }
+  require(!model.resetOwnerAccount(), "#44: a second hold while one is in flight is ignored");
+  require(model.ownerResetStatus().contains("RESETTING"), "the panel shows the reset in progress");
+  {
+    QFile file(owner_reset_result);
+    require(file.open(QFileDevice::WriteOnly | QIODevice::Truncate) &&
+                file.write("{\"status\":\"applied\",\"owner_reset\":true}") > 0,
+            "write the owner reset result fixture");
+  }
+  spin(700);
+  require(model.ownerResetStatus().contains("ENROLLMENT REOPENED"),
+          "#44: the panel shows the reopened enrollment");
+  {
+    QFile file(owner_reset_result);
+    require(file.open(QFileDevice::WriteOnly | QIODevice::Truncate) &&
+                file.write("{\"status\":\"failed\",\"error\":\"token rejected\"}") > 0,
+            "write the owner reset failure fixture");
+  }
+  spin(700);
+  require(model.ownerResetStatus().contains("FAILED") && model.ownerResetStatus().contains("token rejected"),
+          "#44: the panel shows the reset failure reason");
+  {
+    QFile file(owner_reset_result);
+    require(file.open(QFileDevice::WriteOnly | QIODevice::Truncate) &&
+                file.write("{\"status\":\"applied\"}") > 0,
+            "write a stale owner reset result");
+  }
+  DashboardModel restarted(QUrl("http://127.0.0.1:" + QString::number(server.serverPort())));
+  spin(700);
+  require(restarted.ownerResetStatus().isEmpty(),
+          "#44: a result from before the panel started is not shown");
   std::cout << "Qt model polling, deduplication, null, gap and calibration checks passed\n";
 }

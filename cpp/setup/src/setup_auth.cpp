@@ -3,8 +3,11 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <array>
+#include <fcntl.h>
 #include <iomanip>
 #include <sstream>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace rapid::native {
 namespace {
@@ -72,9 +75,41 @@ std::string sha256_hex(const std::string &bytes) {
 }
 } // namespace
 
+std::string validated_enrollment_token(const fs::path &path) {
+  if (path.empty()) return {};
+  const int descriptor = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+  if (descriptor < 0) throw std::runtime_error("cannot open enrollment token file");
+  struct stat info {};
+  const bool safe = ::fstat(descriptor, &info) == 0 && S_ISREG(info.st_mode) &&
+      info.st_uid == ::geteuid() && (info.st_mode & 0077) == 0 && info.st_nlink == 1;
+  char data[66];
+  const auto length = safe ? ::read(descriptor, data, sizeof data) : -1;
+  ::close(descriptor);
+  if (!safe || length < 64 || length > 65 || (length == 65 && data[64] != '\n'))
+    throw std::runtime_error("enrollment token must be a private service-owned file containing 64 hexadecimal characters");
+  return std::string(data, 64);
+}
+
 void SetupAuth::set_network_ssid_file(fs::path ssid_file) {
   std::lock_guard lock(mutex_);
   network_ssid_file_ = std::move(ssid_file);
+}
+
+void SetupAuth::set_enrollment_token_file(fs::path token_file) {
+  std::lock_guard lock(mutex_);
+  enrollment_token_file_ = std::move(token_file);
+}
+
+void SetupAuth::reopen_enrollment() {
+  if (!store_.owner_hash().empty() || enrollment_token_file_.empty()) return;
+  try {
+    auto token = validated_enrollment_token(enrollment_token_file_);
+    if (token.empty()) return;
+    enrollment_token_ = std::move(token);
+  } catch (const std::exception &) {
+    // Fail closed: an unreadable or invalid token file leaves the current
+    // token unchanged rather than clearing it.
+  }
 }
 
 void SetupAuth::set_companion_artifact(fs::path artifact) {
@@ -188,6 +223,10 @@ Response SetupAuth::handle(const Request &request) {
   std::lock_guard lock(mutex_);
   const auto time = clock_();
   expire(time);
+  // #44: the physical owner reset rewrites the enrollment token file; while
+  // no owner is enrolled the file is the live source of the token, so the
+  // reset reopens enrollment without a service restart.
+  reopen_enrollment();
   if (path == "/api/v1/setup" && request.method == "GET") {
     auto status = setup_status(store_.snapshot());
     status["owner_configured"] = !store_.owner_hash().empty();
