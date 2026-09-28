@@ -142,8 +142,9 @@ struct Config {
   // must not silently fall back to a legacy configured shared key.
   bool paired_key_mode = false;
   fs::path database = "data/rapid.db", telemetry = "data/telemetry",
-           queue = "data/upload-queue.db", assets = "cpp/assets",
-           network_control = "/run/rapid-network", setup_directory;
+            queue = "data/upload-queue.db", assets = "cpp/assets",
+            network_control = "/run/rapid-network", setup_directory,
+            steering_lock = "/var/lib/rapid/steering-lock.json";
   static Config load(const fs::path &path);
 };
 
@@ -198,6 +199,8 @@ class Runtime {
   // distinguish a sim pause/menu/alt-tab gap from a lost connection.
   double last_recording_heartbeat_ = 0;
   std::int64_t sequence_ = -1;
+  double recording_steering_lock_deg_ = 0;
+  bool direct_steering_angle_deg_ = false;
   int timing_lap_ = -1, best_lap_ = 0;
   std::vector<int> splits_;
   std::vector<std::string> paired_keys_;

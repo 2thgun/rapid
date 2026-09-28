@@ -1,6 +1,7 @@
 #include "rapid/native.hpp"
 #include <chrono>
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <openssl/hmac.h>
 #include <thread>
@@ -94,7 +95,7 @@ int main(int argc, char **argv) {
       require(!r.receive(bad, "127.0.0.1"),
               "missing primary validity rejected");
       bad = telemetry;
-      bad[58] = 1;
+      bad[59] = char(0x80);
       resign(bad);
       require(!r.receive(bad, "127.0.0.1"), "unknown validity bit rejected");
       bad = telemetry;
@@ -116,7 +117,15 @@ int main(int argc, char **argv) {
                   state["car_model"] == "V4 Car",
               "pedals and metadata");
       require(std::abs(number(state, "steering_angle") - (-.3)) < 1e-6,
-              "steering channel is normalised, not degrees or radians");
+               "steering channel is normalised, not degrees or radians");
+      require(std::abs(number(state, "steering_angle_deg") - (-135.0)) < 1e-6 &&
+                  std::abs(number(state, "wheel_speed_mps_fl") - 22.4) < 1e-5 &&
+                  std::abs(number(state, "brake_temp_fl") - 640.0) < 1e-6 &&
+                  std::abs(number(state, "clutch") - .4) < 1e-6 &&
+                  std::abs(number(state, "yaw_rate") - .25) < 1e-6,
+              "schema-3 normalized channels reach runtime state");
+      require(state["tyre_air_temp_fl"].is_null(),
+              "an unavailable tyre-air temperature stays null");
       require(state["steering_lock_deg"] == 900,
               "known steering lock parsed from v4 metadata");
       require(state["recording"] == true && state["recorded_samples"] == 1,
@@ -161,6 +170,9 @@ int main(int argc, char **argv) {
           read_file(fs::path(bundle.get<std::string>()) / "manifest.json"));
       require(manifest["quality"]["recorded_samples"] == 2,
               "v4 samples exported");
+      require(manifest["quality"]["channel_available_samples"]["tyre_air_temp_fl"] == 0 &&
+                  manifest["quality"]["channel_available_samples"]["yaw_rate"] == 2,
+              "schema-3 unavailable slots stay unavailable and highest bit 62 records");
       require(r.receive(ready, "127.0.0.1"), "new authenticated idle stream");
     }
     // AC1 exposes no static steering-lock field, so its wire metadata carries
@@ -176,13 +188,38 @@ int main(int argc, char **argv) {
               "unknown steering lock is null, not a guessed default");
       require(r.receive(ac_telemetry, "127.0.0.1"), "AC1 telemetry accepted");
       require(std::abs(number(r.snapshot(), "steering_angle") - (-.4)) < 1e-6,
-              "AC1 steering channel is already normalised, unchanged by receipt");
-      // AC1's shared-memory page exposes no delta, so the schema-2 wire says
+               "AC1 steering channel is already normalised, unchanged by receipt");
+      require(r.snapshot()["steering_angle_deg"].is_null(),
+              "AC1 steering degrees stay null without a sim or owner lock");
+      // AC1's shared-memory page exposes no delta, so the schema-2 presence
+      // flag retained in schema 3 says
       // "absent" and the Pi must show blank rather than 0 (#52).
       require(r.snapshot()["delta_ms"].is_null(),
               "AC1's absent delta is null, not 0 (#52)");
     }
-    // v4 schema 2 delta presence: a real 0 stays a number; an absent delta
+    // When the simulator has no lock, the owner's persisted scalar is the only
+    // permitted fallback for the separate degrees channel. It never replaces
+    // the normalized steering channel and is not guessed when the file is absent.
+    {
+      const auto owner_lock = root / "steering-lock.json";
+      std::ofstream(owner_lock) << "{\"lock_to_lock_deg\":540}";
+      Config ac = c;
+      ac.database = root / "ac-owner-lock.db";
+      ac.telemetry = root / "ac-owner-lock";
+      ac.steering_lock = owner_lock;
+      Runtime r(ac);
+      require(r.receive(ac_metadata, "127.0.0.1") &&
+                  r.receive(ac_telemetry, "127.0.0.1"),
+              "AC1 stream with owner steering lock accepted");
+      const auto owner_state = r.snapshot();
+      require(std::abs(number(owner_state, "steering_angle") - (-.4)) < 1e-6,
+              "owner lock does not change normalized steering");
+      if (!owner_state["steering_angle_deg"].is_number() ||
+          std::abs(number(owner_state, "steering_angle_deg") - (-108.0)) >= 1e-5)
+        throw std::runtime_error("owner lock STEERANGLE was " +
+                                 owner_state["steering_angle_deg"].dump());
+    }
+    // Schema-2 delta presence retained in v4 schema 3: a real 0 stays a number; an absent delta
     // stays null, so the dashboard never shows an invented 0 (#20/#52).
     {
       Config deltas = c;
@@ -200,7 +237,7 @@ int main(int argc, char **argv) {
       require(r.snapshot()["delta_ms"].is_null(),
               "an absent delta is null, not a fabricated 0 (#52)");
     }
-    // v4 schema 2 lap validity: the crossing sample carries the completed
+    // Schema-2 lap validity retained in v4 schema 3: the crossing sample carries the completed
     // lap's validity and the manifest records it per lap (#16). The real
     // fixture packets were produced by one companion run, so each expected
     // validity is replayed as the crossing sample of its own fresh run: a

@@ -37,9 +37,10 @@ for a separate change. See "Not adopted" below.
 
 All simulators write exactly these names and units through the same C++
 `Recorder`; the only per-sim difference is that a simulator which does not
-provide a quantity leaves that channel's samples at zero (recorded in the
-manifest's `channel_available_samples`). No channel is renamed or re-united per
-sim.
+provide a quantity marks it unavailable on the wire (`null` in live state); the
+LD representation stores zero while the manifest's `channel_available_samples`
+records that those samples were unavailable. No channel is renamed or re-united
+per sim.
 
 The `key` column is the companion `Frame` field that feeds the channel. The
 sim-specific shared-memory field that fills each `Frame` field lives in the
@@ -98,11 +99,20 @@ names the source in ACC's own physics page / export.
 | lap_number | Lap Number | Lap | | 0 | (lap state, not a channel) |
 | current_lap_ms | Lap Time | Lap Time | s | 0 | (lap state) |
 | lap_position | Lap Position | Lap Pos | % | 0 | (lap state) |
+| steering_angle_deg | STEERANGLE | SteerDeg | deg | 0 | normalised steering × known lock / 2; ACE signed `steer_degrees`; iRacing angle rad→deg |
+| wheel_speed_mps_fl..rr | WHEEL_SPEED_LF..RR | WhlSp LF..RR | m/s | 0 | AC/ACC `wheelAngularSpeed[] * tyreRadius[]`; iRacing native `LFspeed`..`RRspeed` |
+| tyre_air_temp_fl..rr | TYRE_TAIR_LF..RR | T Air LF..RR | C | 0 | unavailable: current APIs expose core/tread/generic tyre temperatures, not identified air temperature |
+| brake_temp_fl..rr | BRAKE_TEMP_LF..RR | BrkT LF..RR | C | 0 | `brakeTemp[]` |
+| clutch | CLUTCH | Clutch | % | 0 | `clutch` |
+| yaw_rate | ROTY | Yaw Rate | rad/s | 0 | `localAngularVel[1]` |
 
 ## Adopted from the ACC/MoTeC ADL reference
 
 `THROTTLE`, `BRAKE`, `GEAR`, `RPMS`, `SPEED`, `G_LAT`, `G_LON`,
-`SUS_TRAVEL_LF/RF/LR/RR`, `TYRE_PRESS_LF/RF/LR/RR`, `TC`, `ABS`.
+`SUS_TRAVEL_LF/RF/LR/RR`, `TYRE_PRESS_LF/RF/LR/RR`, `TC`, `ABS`,
+`STEERANGLE`, `WHEEL_SPEED_LF/RF/LR/RR`, `BRAKE_TEMP_LF/RF/LR/RR`,
+`CLUTCH`, and `ROTY`. The `TYRE_TAIR_*` identifiers are reserved in the unified
+layout but are not populated by any current adapter.
 
 The corner order is MoTeC's own: **`LF`/`RF`/`LR`/`RR`** (left-front,
 right-front, left-rear, right-rear), exactly as ACC's export and the
@@ -140,8 +150,8 @@ the workspace, and why the same names cannot serve every workspace:
   `RPMS`, `GEAR`, `BRAKE`, `THROTTLE`, `STEERANGLE`, `WHEEL_SPEED_*`,
   `SUS_TRAVEL_*` plus the derived `glat`/`glong`, `Oversteer` and
   `Damper Vel *`. raPId now writes those names for the channels whose stored
-  quantity matches; `STEERANGLE` and `WHEEL_SPEED_*` stay empty by design
-  (see "Not adopted").
+  quantity matches, including the separate degree steering and linear wheel
+  speed channels when their required lock/radius source is known.
 
 The way to make the generic profile useful is **not** to rename channels back,
 because no single sim-agnostic name satisfies both workspaces. It is to ship a
@@ -152,18 +162,20 @@ profile's Ids. Tracked separately.
 
 | raPId channel | reference identifier | why not |
 | --- | --- | --- |
-| Steered Angle | `STEERANGLE` (deg) | raPId stores normalised -1..1, not degrees. Adopting the reference name would mislabel the value. |
-| Wheel Speed FL..RR | `WHEEL_SPEED_*` (m/s) | raPId stores angular speed in rad/s; rad/s is not a unit scaling of m/s. |
-| Tyre Temp FL..RR | `TYRE_TAIR_*` (C) | raPId stores tyre **core** temperature; `TYRE_TAIR` is tyre **air** temperature, a different quantity. |
-| Heading | `ROTY` (rad/s) | raPId stores a heading angle; `ROTY` is a yaw rate. |
-| - | `CLUTCH`, `BRAKE_TEMP_*`, `ROTY`, `LAP_BEACON`, `EN_*`, `BUMPSTOP*` | raPId does not record these quantities. |
+| - | `LAP_BEACON`, `EN_*`, `BUMPSTOP*` | No truthful current adapter source is available. Lap boundaries remain in the `.ldx` sidecar. |
 
-These are inherent workspace gaps, not naming choices. Closing them requires
-changing what the adapters/recorder store (normalised steering -> degrees,
-angular -> linear wheel speed, adding clutch/brake-temp/tyre-air/yaw-rate), not
-channel metadata, and is tracked as a separate proposed task. A richer option
-for 1.0.0 is to ship a raPId i2 workspace (#30) whose aliases map raPId names
-onto the ACC workspace's Ids.
+The existing normalised steering, angular wheel-speed, core-temperature and
+heading channels remain unchanged for consumers that use them. Their ACC/MoTeC
+counterparts are separate channels and are populated only from truthful sources:
+AC/ACC static tyre radii, iRacing native linear speeds, a simulator steering
+angle/lock or the owner's persisted lock, and simulator yaw-rate fields. ACE's
+official live graphics structure identifies `steer_degrees` as a signed current
+value (an `int32` among live vehicle values, rather than static configuration),
+so ACE uses it directly. `TYRE_TAIR_*` remains unavailable until an
+adapter has an explicitly identified air-temperature source; core, tread and
+generic tyre readings are not relabelled. A richer option for 1.0.0 is to ship a
+raPId i2 workspace (#30) whose aliases map the remaining raPId names onto the
+ACC workspace's Ids.
 
 ## Known differences from the reference file
 

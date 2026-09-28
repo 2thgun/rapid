@@ -57,8 +57,8 @@ struct Wire {
   std::uint64_t time_us = 0;
   explicit Wire(std::string run) : stream(std::move(run)) {}
   std::uint64_t tick() { return time_us += 20000; }
-  std::string metadata() {
-    return stream.metadata(0, "Spa", "GT3", "Test driver", "Race", "900");
+  std::string metadata(const std::string &lock = "900") {
+    return stream.metadata(tick(), "Spa", "GT3", "Test driver", "Race", lock);
   }
   std::string telemetry(int lap, double current_lap_ms, float throttle = .5f,
                         int completed_lap_ms = 0) {
@@ -68,7 +68,7 @@ struct Wire {
          rapid::test::ch_steering, rapid::test::ch_speed,
          rapid::test::ch_g_x, rapid::test::ch_g_y, rapid::test::ch_g_z,
          rapid::test::ch_lap_number, rapid::test::ch_current_lap_ms,
-         rapid::test::ch_lap_position});
+         rapid::test::ch_lap_position, rapid::test::ch_yaw_rate});
     return stream.telemetry(
         tick(), mask,
         {{rapid::test::ch_rpm, 6000.f},
@@ -82,8 +82,17 @@ struct Wire {
          {rapid::test::ch_gear, 3.f},
          {rapid::test::ch_lap_number, float(lap)},
          {rapid::test::ch_current_lap_ms, float(current_lap_ms)},
-         {rapid::test::ch_lap_position, 0.f}},
+         {rapid::test::ch_lap_position, 0.f},
+         {rapid::test::ch_yaw_rate, .25f}},
         completed_lap_ms);
+  }
+  std::string telemetry_with_direct_degrees(int lap, double current_lap_ms,
+                                             float degrees) {
+    auto packet = telemetry(lap, current_lap_ms);
+    packet[58] = char(static_cast<unsigned char>(packet[58]) | 0x01); // bit 48
+    rapid::test::v4_put(packet, 68 + rapid::test::ch_steering_deg * 4,
+                        std::bit_cast<std::uint32_t>(degrees), 4);
+    return stream.sign(std::move(packet));
   }
 };
 int main(int argc, char **argv) {
@@ -210,6 +219,8 @@ int main(int argc, char **argv) {
       lock_config.database = root / "steering-lock.db";
       lock_config.telemetry = root / "steering-lock-telemetry";
       lock_config.queue = root / "steering-lock-queue.db";
+      lock_config.steering_lock = root / "sim-authoritative-lock.json";
+      std::ofstream(lock_config.steering_lock) << "{\"lock_to_lock_deg\":540}";
       Runtime live(lock_config);
       Wire wire(v4_run_id());
       require(live.receive(wire.metadata(), "127.0.0.1"),
@@ -218,6 +229,14 @@ int main(int argc, char **argv) {
               "lock-test telemetry sample");
       require(live.snapshot()["steering_lock_deg"] == 900,
               "metadata lock exposed before the session change");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-90.0)) < 1e-5,
+              "simulator lock derives steering degrees");
+      std::ofstream(lock_config.steering_lock) << "{\"lock_to_lock_deg\":720}";
+      require(live.receive(wire.metadata(), "127.0.0.1") &&
+                  live.receive(wire.telemetry(1, 200), "127.0.0.1"),
+              "simulator-lock heartbeat and sample accepted");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-90.0)) < 1e-5,
+              "simulator metadata remains authoritative over owner changes");
       // A waiting status arrives on a new run id: the identity changes with no
       // fresh metadata, so the retained lock must be dropped rather than shown
       // for the next tick.
@@ -226,6 +245,8 @@ int main(int argc, char **argv) {
               "new-session waiting status accepted");
       require(live.snapshot()["steering_lock_deg"].is_null(),
               "steering lock cleared on session-identity change (#47)");
+      require(live.snapshot()["steering_angle_deg"].is_null(),
+              "steering degrees cleared on session reset");
       // The next car/session opens a fresh run whose metadata supplies the new
       // lock; the change must not leave it null once fresh metadata arrives.
       V4Stream fresh(v4_run_id());
@@ -235,6 +256,161 @@ int main(int argc, char **argv) {
               "new-session metadata accepted");
       require(live.snapshot()["steering_lock_deg"] == 540,
               "new session's lock replaces the previous session's (#47)");
+    }
+    {
+      // The owner fallback is refreshed by the once-per-second metadata
+      // heartbeat, not by every 50 Hz telemetry packet. Changes and deletion
+      // therefore take effect during an active run without filesystem I/O on
+      // the hot path.
+      Config owner = c;
+      owner.database = root / "owner-lock.db";
+      owner.telemetry = root / "owner-lock-telemetry";
+      owner.queue = root / "owner-lock-queue.db";
+      owner.steering_lock = root / "owner-lock.json";
+      std::ofstream(owner.steering_lock) << "{\"lock_to_lock_deg\":540}";
+      Runtime live(owner);
+      Wire wire(v4_run_id());
+      require(live.receive(wire.metadata(""), "127.0.0.1") &&
+                  live.receive(wire.telemetry(1, 100), "127.0.0.1"),
+              "owner-lock run starts");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-54.0)) < 1e-5,
+              "initial owner lock derives steering degrees");
+      std::ofstream(owner.steering_lock) << "{\"lock_to_lock_deg\":720}";
+      require(live.receive(wire.metadata(""), "127.0.0.1"),
+              "changed owner-lock heartbeat accepted");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-72.0)) < 1e-5,
+              "changed owner lock applies on the active-run heartbeat");
+      require(live.receive(wire.telemetry(1, 200), "127.0.0.1"),
+              "changed owner-lock sample accepted");
+      fs::remove(owner.steering_lock);
+      require(live.receive(wire.metadata(""), "127.0.0.1"),
+              "deleted owner-lock heartbeat accepted");
+      require(live.snapshot()["steering_angle_deg"].is_null(),
+              "deleting owner lock clears derived degrees on the heartbeat");
+      require(live.receive(wire.telemetry(1, 300), "127.0.0.1"),
+              "deleted owner-lock sample accepted");
+      std::ofstream(owner.steering_lock) << "{\"lock_to_lock_deg\":600}";
+      require(live.receive(wire.metadata(""), "127.0.0.1"),
+              "recreated owner-lock heartbeat accepted");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-60.0)) < 1e-5,
+              "recreated owner lock applies on the active-run heartbeat");
+      require(live.receive(wire.telemetry(1, 400), "127.0.0.1"),
+              "recreated owner-lock sample accepted");
+      require(live.receive(wire.stream.status(3, wire.tick()), "127.0.0.1"),
+              "owner-lock run ended");
+      require(live.snapshot()["steering_angle_deg"].is_null(),
+              "ended status clears derived steering degrees");
+      Json bundle;
+      for (int i = 0; i < 100 && !bundle.is_string(); ++i) {
+        bundle = live.snapshot()["last_bundle_path"];
+        if (!bundle.is_string())
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      require(bundle.is_string(), "owner-lock recording published");
+      const auto published = fs::path(bundle.get<std::string>());
+      const auto manifest = Json::parse(read_file(published / "manifest.json"));
+      require(manifest["quality"]["channel_available_samples"]["steering_angle_deg"] == 3 &&
+                  manifest["quality"]["channel_available_samples"]["tyre_air_temp_fl"] == 0 &&
+                  manifest["quality"]["channel_available_samples"]["tyre_air_temp_fr"] == 0 &&
+                  manifest["quality"]["channel_available_samples"]["tyre_air_temp_rl"] == 0 &&
+                  manifest["quality"]["channel_available_samples"]["tyre_air_temp_rr"] == 0 &&
+                  manifest["quality"]["channel_available_samples"]["wheel_speed_mps_fl"] == 0 &&
+                  manifest["quality"]["channel_available_samples"]["wheel_speed_mps_rr"] == 0 &&
+                  manifest["quality"]["channel_available_samples"]["yaw_rate"] == 4,
+              "schema-3 recorder availability covers derived, unavailable, and bit-62 channels");
+      const auto ld = read_file(published / "full-session.ld");
+      const auto data = u32(ld, 12);
+      const auto first_steer_deg = std::bit_cast<float>(u32(ld, data + 48 * 4 * 4));
+      require(std::abs(first_steer_deg - (-54.f)) < 1e-4,
+              "owner-derived STEERANGLE stored in the LD channel");
+    }
+    {
+      // A direct degree value from ACE/iRacing outranks the owner fallback.
+      // Heartbeats still refresh the cached fallback, but must not replace or
+      // clear the live direct value until telemetry withdraws that channel.
+      Config direct = c;
+      direct.database = root / "direct-steering.db";
+      direct.telemetry = root / "direct-steering-telemetry";
+      direct.queue = root / "direct-steering-queue.db";
+      direct.steering_lock = root / "direct-steering-owner.json";
+      std::ofstream(direct.steering_lock) << "{\"lock_to_lock_deg\":540}";
+      Runtime live(direct);
+      Wire wire(v4_run_id());
+      require(live.receive(wire.metadata(""), "127.0.0.1") &&
+                  live.receive(wire.telemetry_with_direct_degrees(1, 100, -33.f),
+                               "127.0.0.1"),
+              "direct-degree stream starts");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-33.0)) < 1e-6,
+              "direct steering degrees reach live state");
+      std::ofstream(direct.steering_lock) << "{\"lock_to_lock_deg\":720}";
+      require(live.receive(wire.metadata(""), "127.0.0.1"),
+              "direct-degree owner-change heartbeat accepted");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-33.0)) < 1e-6,
+              "owner change does not overwrite direct steering degrees");
+      fs::remove(direct.steering_lock);
+      require(live.receive(wire.metadata(""), "127.0.0.1"),
+              "direct-degree owner-deletion heartbeat accepted");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-33.0)) < 1e-6,
+              "owner deletion does not clear direct steering degrees");
+      require(live.receive(wire.telemetry(1, 200), "127.0.0.1"),
+              "direct-degree unavailable transition accepted");
+      require(live.snapshot()["steering_angle_deg"].is_null(),
+              "fallback resumes as unavailable when direct degrees disappear and owner is absent");
+      std::ofstream(direct.steering_lock) << "{\"lock_to_lock_deg\":600}";
+      require(live.receive(wire.metadata(""), "127.0.0.1"),
+              "post-direct fallback heartbeat accepted");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-60.0)) < 1e-5,
+              "owner fallback resumes after direct degrees become unavailable");
+    }
+    {
+      // A new run can announce active metadata directly, without an ended or
+      // waiting packet for the old run. Its metadata must invalidate both the
+      // previous direct-degree authority and the old normalized sample before
+      // considering the new run's fallback.
+      Config direct_change = c;
+      direct_change.database = root / "direct-session-change.db";
+      direct_change.telemetry = root / "direct-session-change-telemetry";
+      direct_change.queue = root / "direct-session-change-queue.db";
+      direct_change.steering_lock = root / "direct-session-change-owner.json";
+      std::ofstream(direct_change.steering_lock) << "{\"lock_to_lock_deg\":600}";
+      Runtime live(direct_change);
+      Wire first(v4_run_id());
+      require(live.receive(first.metadata(""), "127.0.0.1") &&
+                  live.receive(first.telemetry_with_direct_degrees(1, 100, -33.f),
+                               "127.0.0.1"),
+              "first direct-degree run starts");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-33.0)) < 1e-6 &&
+                  live.snapshot()["steering_angle"].is_number(),
+              "first run exposes direct and normalized steering");
+      Wire second(v4_run_id());
+      require(live.receive(second.metadata(""), "127.0.0.1"),
+              "new active metadata accepted without an end packet");
+      const auto between_runs = live.snapshot();
+      require(between_runs["steering_angle"].is_null() &&
+                  between_runs["steering_angle_deg"].is_null() &&
+                  between_runs["steering_lock_deg"].is_null(),
+              "new active metadata clears prior steering and does not derive fallback before telemetry");
+      require(live.receive(second.telemetry(1, 100), "127.0.0.1"),
+              "new run's first telemetry accepted");
+      require(std::abs(number(live.snapshot(), "steering_angle_deg") - (-60.0)) < 1e-5,
+              "new run derives fallback only from its fresh telemetry");
+    }
+    {
+      Config expiry = c;
+      expiry.database = root / "owner-expire.db";
+      expiry.telemetry = root / "owner-expire-telemetry";
+      expiry.queue = root / "owner-expire-queue.db";
+      expiry.steering_lock = root / "owner-expire.json";
+      std::ofstream(expiry.steering_lock) << "{\"lock_to_lock_deg\":540}";
+      Runtime live(expiry);
+      Wire wire(v4_run_id());
+      require(live.receive(wire.metadata(""), "127.0.0.1") &&
+                  live.receive(wire.telemetry(1, 100), "127.0.0.1"),
+              "expiry steering sample accepted");
+      std::this_thread::sleep_for(std::chrono::milliseconds(1600));
+      live.expire();
+      require(live.snapshot()["steering_angle_deg"].is_null(),
+              "connection expiry clears derived steering degrees");
     }
     // A datagram that is not authenticated v4 is rejected and counted, exactly
     // like malformed v4 -- the retired unauthenticated path is gone.
@@ -310,9 +486,9 @@ int main(int argc, char **argv) {
     auto data = read_file(path / "full-session.ld");
     auto meta = u32(data, 8), start = u32(data, 12);
     require(meta == 2916, "LD event pointer");
-    require(u32(data, 86) == 48, "channel count");
+    require(u32(data, 86) == 63, "channel count");
     require(u32(data, meta + 12) == 11, "LD sample count");
-    require(data.size() == start + 48 * 11 * 4, "LD size");
+    require(data.size() == start + 63 * 11 * 4, "LD size");
     require(std::abs(std::bit_cast<float>(u32(data, start + 11 * 4)) - 50) <
                 .001,
             "throttle scaling");

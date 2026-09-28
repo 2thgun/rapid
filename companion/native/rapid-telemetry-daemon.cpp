@@ -299,7 +299,7 @@ constexpr std::size_t kEventSize = 1154;
 constexpr std::size_t kChannelHeaderSize = 124;
 constexpr std::size_t kV4HeaderSize = 52;
 constexpr std::size_t kV4HmacSize = 32;
-constexpr std::uint16_t kV4SchemaVersion = 2;
+constexpr std::uint16_t kV4SchemaVersion = 3;
 
 enum Field : std::size_t {
     elapsed, throttle, brake, fuel, gear, rpm, steering_angle, speed_kmh,
@@ -312,6 +312,11 @@ enum Field : std::size_t {
     tc, heading, pitch, roll,
     damage_front, damage_rear, damage_left, damage_right, damage_center,
     pit_limiter, abs_activity, lap_number, current_lap_ms, lap_position,
+    steering_angle_deg,
+    wheel_speed_mps_fl, wheel_speed_mps_fr, wheel_speed_mps_rl, wheel_speed_mps_rr,
+    tyre_air_temp_fl, tyre_air_temp_fr, tyre_air_temp_rl, tyre_air_temp_rr,
+    brake_temp_fl, brake_temp_fr, brake_temp_rl, brake_temp_rr,
+    clutch, yaw_rate,
     field_count
 };
 
@@ -389,6 +394,21 @@ constexpr std::array<Channel, field_count> kChannels{{
     {"Lap Number", "Lap", "", "lap_number", 1.0, 0},
     {"Lap Time", "Lap Time", "s", "current_lap_ms", 0.001, 0},
     {"Lap Position", "Lap Pos", "%", "lap_position", 100.0, 0},
+    {"STEERANGLE", "SteerDeg", "deg", "steering_angle_deg", 1.0, 0},
+    {"WHEEL_SPEED_LF", "WhlSp LF", "m/s", "wheel_speed_mps_fl", 1.0, 0},
+    {"WHEEL_SPEED_RF", "WhlSp RF", "m/s", "wheel_speed_mps_fr", 1.0, 0},
+    {"WHEEL_SPEED_LR", "WhlSp LR", "m/s", "wheel_speed_mps_rl", 1.0, 0},
+    {"WHEEL_SPEED_RR", "WhlSp RR", "m/s", "wheel_speed_mps_rr", 1.0, 0},
+    {"TYRE_TAIR_LF", "T Air LF", "C", "tyre_air_temp_fl", 1.0, 0},
+    {"TYRE_TAIR_RF", "T Air RF", "C", "tyre_air_temp_fr", 1.0, 0},
+    {"TYRE_TAIR_LR", "T Air LR", "C", "tyre_air_temp_rl", 1.0, 0},
+    {"TYRE_TAIR_RR", "T Air RR", "C", "tyre_air_temp_rr", 1.0, 0},
+    {"BRAKE_TEMP_LF", "BrkT LF", "C", "brake_temp_fl", 1.0, 0},
+    {"BRAKE_TEMP_RF", "BrkT RF", "C", "brake_temp_fr", 1.0, 0},
+    {"BRAKE_TEMP_LR", "BrkT LR", "C", "brake_temp_rl", 1.0, 0},
+    {"BRAKE_TEMP_RR", "BrkT RR", "C", "brake_temp_rr", 1.0, 0},
+    {"CLUTCH", "Clutch", "%", "clutch", 100.0, 0},
+    {"ROTY", "Yaw Rate", "rad/s", "yaw_rate", 1.0, 0},
 }};
 
 constexpr std::uint64_t field_bit(Field field) {
@@ -404,7 +424,8 @@ struct Frame {
     std::uint64_t valid_mask = 0;
     int completed_lap_ms = 0;
     int delta_ms = 0;
-    // v4 schema 2. Tri-state validity of the most recently completed lap
+    // Introduced in v4 schema 2 and retained by schema 3: tri-state validity
+    // of the most recently completed lap
     // (present+valid, present+invalid, or absent when the simulator exposes no
     // lap-valid signal) and whether delta_ms came from the simulator at all.
     // Neither is ever guessed: a signal the simulator does not provide stays
@@ -1575,6 +1596,17 @@ public:
         if (last_packet_id_ && *last_packet_id_ == before) return false;
         const int graphics_before = graphics_.read<std::int32_t>(0);
         frame.valid_mask = all_field_bits();
+        frame.valid_mask &= ~field_bit(steering_angle_deg);
+        for (std::size_t i = 0; i < 4; ++i) {
+            frame.valid_mask &= ~field_bit(static_cast<Field>(tyre_air_temp_fl + i));
+            // AC1 and ACC publish unloaded tyre radii in their common static
+            // prefix. Read them with each sample because that page can be
+            // mapped before the simulator has populated it.
+            const double radius = static_.read<float>(436 + i * 4);
+            tyre_radius_m_[i] = std::isfinite(radius) && radius > 0.0 ? radius : 0.0;
+            if (tyre_radius_m_[i] == 0.0)
+                frame.valid_mask &= ~field_bit(static_cast<Field>(wheel_speed_mps_fl + i));
+        }
         auto& v = frame.value;
         v[throttle] = physics_.read<float>(4); v[brake] = physics_.read<float>(8);
         v[fuel] = physics_.read<float>(12); v[gear] = physics_.read<std::int32_t>(16) - 1;
@@ -1585,11 +1617,18 @@ public:
         v[g_y] = physics_.read<float>(48); v[g_z] = physics_.read<float>(52);
         read_corners(v, wheel_slip_fl, 56); read_corners(v, pressure_fl, 88);
         read_corners(v, wheel_speed_fl, 104); read_corners(v, core_temp_fl, 152);
+        for (std::size_t i = 0; i < 4; ++i)
+            v[wheel_speed_mps_fl + i] = v[wheel_speed_fl + i] * tyre_radius_m_[i];
         read_corners(v, suspension_fl, 184);
         v[tc] = physics_.read<float>(204); v[heading] = physics_.read<float>(208);
         v[pitch] = physics_.read<float>(212); v[roll] = physics_.read<float>(216);
         for (std::size_t i = 0; i < 5; ++i) v[damage_front + i] = physics_.read<float>(224 + i * 4);
         v[pit_limiter] = physics_.read<std::int32_t>(248); v[abs_activity] = physics_.read<float>(252);
+        read_corners(v, brake_temp_fl, 348);
+        v[clutch] = physics_.read<float>(364);
+        // localAngularVel[1] is rotation about the vertical (Y) axis: yaw
+        // rate, not the heading angle above.
+        v[yaw_rate] = physics_.read<float>(300);
         v[lap_number] = graphics_.read<std::int32_t>(132) + 1;
         const int lap_now = static_cast<int>(v[lap_number]);
         // A lap counter that goes backwards is a session restart (a real lap
@@ -1640,6 +1679,7 @@ private:
     Game game_ = Game::none;
     std::optional<int> last_packet_id_;
     CompletedLapValidity lap_validity_;
+    std::array<double, 4> tyre_radius_m_{};
     int last_lap_number_ = -1;
     bool session_restarted_ = false;
 };
@@ -1698,6 +1738,12 @@ public:
             frame.valid_mask &= ~(std::uint64_t{1} << i);
         }
         frame.valid_mask &= ~field_bit(pit_limiter);
+        for (std::size_t i = 0; i < 4; ++i) {
+            frame.valid_mask &= ~field_bit(static_cast<Field>(wheel_speed_mps_fl + i));
+            // ACE distinguishes generic per-tyre and L/C/R tread readings from
+            // core temperature, but does not identify a tyre-air quantity.
+            frame.valid_mask &= ~field_bit(static_cast<Field>(tyre_air_temp_fl + i));
+        }
         auto& v = frame.value;
         v[throttle] = physics_.read<float>(4); v[brake] = physics_.read<float>(8);
         v[fuel] = physics_.read<float>(12); v[gear] = physics_.read<std::int32_t>(16) - 1;
@@ -1714,6 +1760,12 @@ public:
         // AC1-compatible prefix fields AC1/ACC use. The previous code read the
         // boolean tcinAction/absInAction flags at 672/676 instead (#4).
         v[tc] = physics_.read<float>(204); v[abs_activity] = physics_.read<float>(252);
+        // Official SPageFileGraphicEvo places signed steer_degrees among the
+        // live controls/vehicle values (not in static/configuration data).
+        v[steering_angle_deg] = graphics_.read<std::int32_t>(156);
+        read_corners(v, brake_temp_fl, 348);
+        v[clutch] = physics_.read<float>(364);
+        v[yaw_rate] = physics_.read<float>(300);
         v[heading] = physics_.read<float>(208); v[pitch] = physics_.read<float>(212);
         v[roll] = physics_.read<float>(216); v[current_lap_ms] = std::max(0, graphics_.read<std::int32_t>(188));
         frame.delta_ms = graphics_.read<std::int32_t>(184); v[lap_position] = graphics_.read<float>(1244);
@@ -1817,6 +1869,14 @@ public:
             field_bit(suspension_rl) | field_bit(suspension_rr) |
             field_bit(pit_limiter) | field_bit(lap_number) |
             field_bit(current_lap_ms) | field_bit(lap_position);
+        if (variables_.contains("SteeringWheelAngle"))
+            frame.valid_mask |= field_bit(steering_angle_deg);
+        static constexpr const char* wheel_speeds[] = {"LFspeed", "RFspeed", "LRspeed", "RRspeed"};
+        for (std::size_t i = 0; i < 4; ++i)
+            if (variables_.contains(wheel_speeds[i]))
+                frame.valid_mask |= field_bit(static_cast<Field>(wheel_speed_mps_fl + i));
+        if (variables_.contains("Clutch")) frame.valid_mask |= field_bit(clutch);
+        if (variables_.contains("YawRate")) frame.valid_mask |= field_bit(yaw_rate);
         auto& v = frame.value;
         v[throttle] = number(offset, "Throttle"); v[brake] = number(offset, "Brake");
         v[fuel] = number(offset, "FuelLevel"); v[gear] = number(offset, "Gear");
@@ -1826,6 +1886,12 @@ public:
         // half-lock (SteeringWheelAngleMax, itself radians) to match AC1/ACC/ACE,
         // which already read a normalised value from shared memory.
         v[steering_angle] = number(offset, "SteeringWheelAngle") / half_lock_radians(offset);
+        constexpr double radians_to_degrees = 180.0 / 3.14159265358979323846;
+        v[steering_angle_deg] = number(offset, "SteeringWheelAngle") * radians_to_degrees;
+        v[clutch] = number(offset, "Clutch");
+        v[yaw_rate] = number(offset, "YawRate");
+        for (std::size_t i = 0; i < 4; ++i)
+            v[wheel_speed_mps_fl + i] = number(offset, wheel_speeds[i]);
         v[speed_kmh] = number(offset, "Speed") * 3.6;
         v[velocity_x] = number(offset, "VelocityX"); v[velocity_y] = number(offset, "VelocityY");
         v[velocity_z] = number(offset, "VelocityZ");
@@ -1972,10 +2038,9 @@ std::unique_ptr<Adapter> open_adapter(Game game) {
 // On telemetry only, bit 2 means the frame carries the completed lap's
 // validity, bit 3 is that validity (only meaningful with bit 2), and bit 4
 // means delta_ms is a real simulator value -- so a true delta of 0 stays
-// distinct from "the simulator provides no delta". Schema 2 is the
-// lap-validity/delta-presence revision: a schema-1 companion and a schema-2
-// Pi are a mixed pair and must not be driven.
-// Telemetry payload = valid-mask u64, completed/delta lap time i32, 48 float32.
+// distinct from "the simulator provides no delta". Schema 3 adds the normalized
+// ACC/MoTeC quantities; companion and Pi must therefore be upgraded together.
+// Telemetry payload = valid-mask u64, completed/delta lap time i32, 63 float32.
 // Metadata payload = five u16-length UTF-8 strings: venue, vehicle, driver,
 // session, steering lock (decimal degrees, full lock-to-lock; empty string
 // means the simulator does not expose one). Status payload = state u8,
@@ -2139,7 +2204,7 @@ public:
         for (const double value : frame.value) {
             append_float_le(payload, static_cast<float>(std::isfinite(value) ? value : 0.0));
         }
-        // v4 schema 2 telemetry flags: bit 2 says this frame carries the
+        // Schema-2 telemetry flags retained in schema 3: bit 2 says this frame carries the
         // completed lap's validity, bit 3 is that validity, bit 4 says
         // delta_ms is a simulator value (a real zero stays distinct from "no
         // delta"). Bits the simulator did not provide stay clear.
@@ -2837,6 +2902,14 @@ struct Physics {
     float drs, tc, heading, pitch, roll, cg_height, damage[5];
     int tyres_out, pit_limiter;
     float abs;
+    float kers_charge, kers_input;
+    int auto_shifter;
+    float ride_height[2], turbo_boost, ballast, air_density, air_temp, road_temp;
+    float local_angular_velocity[3], final_ff, performance_meter;
+    int engine_brake, ers_recovery, ers_power, ers_heat_charging, ers_charging;
+    float kers_current_kj;
+    int drs_available, drs_enabled;
+    float brake_temperature[4], clutch;
 };
 struct Graphics {
     int packet_id, status, session;
@@ -2867,7 +2940,9 @@ struct Static {
 };
 #pragma pack(pop)
 static_assert(sizeof(wchar_t) == 2 && sizeof(int) == 4);
-static_assert(offsetof(Physics, acceleration) == 44 && offsetof(Physics, abs) == 252);
+static_assert(offsetof(Physics, acceleration) == 44 && offsetof(Physics, abs) == 252 &&
+              offsetof(Physics, local_angular_velocity) == 296 &&
+              offsetof(Physics, brake_temperature) == 348 && offsetof(Physics, clutch) == 364);
 static_assert(offsetof(Graphics, current_ms) == 140 && offsetof(Graphics, normalized_position) == 248);
 static_assert(offsetof(Static, car) == 68 && offsetof(Static, layout) == 524);
 
@@ -2927,7 +3002,9 @@ std::pair<Frame, Metadata> run() {
     p.gear = 5; p.rpm = 6123; p.steer = -.4f; p.speed = 123.5f;
     p.acceleration[0] = .5f; p.acceleration[1] = 1; p.acceleration[2] = -.75f;
     p.pressure[0] = 27.5f; p.angular_speed[0] = 70; p.temperature[0] = 85;
+    info.value().radius[0] = .33f;
     p.suspension[0] = .03f; p.pit_limiter = 1; p.abs = .5f;
+    p.local_angular_velocity[1] = .45f; p.brake_temperature[0] = 510.f; p.clutch = .6f;
     auto& g = graphics.value();
     g.packet_id = 20; g.status = 2; g.session = 0; g.completed_laps = 2;
     g.current_ms = 12345; g.last_ms = 90567; g.normalized_position = .375f;
@@ -2951,6 +3028,13 @@ std::pair<Frame, Metadata> run() {
             frame.value[lap_number] == 3 && frame.value[current_lap_ms] == 12345 &&
             frame.completed_lap_ms == 90567 && approximately_equal(frame.value[lap_position], .375),
             "original AC corner fields and lap timing offsets");
+    require(approximately_equal(frame.value[wheel_speed_mps_fl], 23.1),
+            "original AC linear wheel speed uses the static tyre radius");
+    require(approximately_equal(frame.value[brake_temp_fl], 510) &&
+            approximately_equal(frame.value[clutch], .6) && approximately_equal(frame.value[yaw_rate], .45) &&
+            !(frame.valid_mask & field_bit(tyre_air_temp_fl)) &&
+            !(frame.valid_mask & field_bit(steering_angle_deg)),
+            "original AC derived wheel speed, brake temperature, clutch, yaw rate, and unavailable fields");
     // AC1's graphics page exposes no lap-valid flag and no delta: both stay
     // absent rather than being invented (schema 2, #16/#20/#52).
     require(!frame.lap_valid_present && !frame.delta_present,
@@ -3757,11 +3841,19 @@ bool run_self_test(const fs::path& directory, int sample_rate,
     wire_frame.value[rpm] = 6500; wire_frame.value[gear] = 4;
     wire_frame.value[throttle] = .8; wire_frame.value[brake] = .2;
     wire_frame.value[steering_angle] = -.3;
+    wire_frame.value[steering_angle_deg] = -135;
+    wire_frame.value[wheel_speed_mps_fl] = 22.4;
+    wire_frame.value[brake_temp_fl] = 640;
+    wire_frame.value[clutch] = .4;
+    wire_frame.value[yaw_rate] = .25;
+    for (std::size_t i = 0; i < 4; ++i)
+        wire_frame.valid_mask &= ~field_bit(static_cast<Field>(tyre_air_temp_fl + i));
     wire_frame.value[g_x] = .7; wire_frame.value[g_y] = 1; wire_frame.value[g_z] = -.4;
     wire_frame.value[speed_kmh] = 198; wire_frame.value[lap_number] = 1;
     wire_frame.value[current_lap_ms] = 1234;
     wire_frame.completed_lap_ms = 90000; wire_frame.delta_ms = -125;
-    // v4 schema 2: the reference frame carries the completed lap's validity
+    // Schema-2 lap flags retained in v4 schema 3: the reference frame carries
+    // the completed lap's validity
     // and a real simulator delta; AC1's frame (below) carries neither.
     wire_frame.lap_valid_present = true; wire_frame.lap_valid = true;
     wire_frame.delta_present = true;

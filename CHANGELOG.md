@@ -5,6 +5,11 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
+  speeds, brake temperatures, clutch, and yaw rate while retaining the existing
+  normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
+  identifiers and wire slots, but current adapters leave them unavailable
+  rather than recording guessed or mislabelled temperatures.
 - Pairing no longer times out before a person can approve it. A pairing
   request now has five minutes to be approved, counted from when the PC asks
   rather than from when the window was opened, and the companion waits longer
@@ -20,7 +25,7 @@ last completed checks, not a guarantee of current device state.
   of an invented 0. AC1's always-0 delta on v4 is gone, and a simulator session
   restart (lap counter reset) now ends the recording, so two same-type sessions
   cannot merge. The Pi package and the companion must be upgraded as a matched
-  pair; a schema-1 companion and a schema-2 Pi do not connect.
+  pair; mismatched companion/Pi schemas do not connect.
 - Fixed `rapid-setup` restart-looping with `226/NAMESPACE` after an upgrade or
   reboot when `/run/rapid-apply` was absent. The setup request queue is now
   created by systemd through `RuntimeDirectory` on the services that use it
