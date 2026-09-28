@@ -285,8 +285,9 @@ int main(int argc, char **argv) {
     boost::system::error_code ec;
     ws.next_layer().close(ec);
     // Display clients (Qt panel, browser dashboard) ask for ?mode=state
-    // instead: the same JSON shape GET /api/live returns, pushed on its own
-    // at ~30 Hz, with no per-client backlog -- the newest snapshot only.
+    // instead: a diffed frame (the changed subset plus a sequence number)
+    // pushed at 50 Hz, with no per-client backlog -- the newest state only.
+    // The first frame is the full snapshot (the diff from nothing).
     beast::websocket::stream<tcp::socket> live_state(io);
     live_state.next_layer().connect({asio::ip::make_address("127.0.0.1"),
                                      static_cast<unsigned short>(port)});
@@ -294,8 +295,10 @@ int main(int argc, char **argv) {
     beast::flat_buffer state_buffer;
     live_state.read(state_buffer);
     auto pushed = Json::parse(beast::buffers_to_string(state_buffer.data()));
-    require(pushed["runtime"] == "cpp" && pushed["rpm"] == 5011 &&
-                pushed.contains("sender_lag_ms") && pushed.contains("process_ms"),
+    require(pushed["seq"] == 0 && pushed["state"]["runtime"] == "cpp" &&
+                pushed["state"]["rpm"] == 5011 &&
+                pushed["state"].contains("sender_lag_ms") &&
+                pushed["state"].contains("process_ms"),
             "WebSocket state push sends the live /api/live snapshot shape");
     const auto fast_mask = rapid::test::v4_mask(
         {rapid::test::ch_throttle, rapid::test::ch_brake,
@@ -318,7 +321,7 @@ int main(int argc, char **argv) {
       state_buffer.consume(state_buffer.size());
       live_state.read(state_buffer);
       auto latest = Json::parse(beast::buffers_to_string(state_buffer.data()));
-      pushed_latest = latest["rpm"] == 9001;
+      pushed_latest = latest["state"]["rpm"] == 9001;
     }
     require(pushed_latest,
             "WebSocket state push coalesces to the newest runtime snapshot");

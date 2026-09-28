@@ -251,7 +251,16 @@ void DashboardModel::consumeLiveMessage(const QString &message) {
   const auto document = QJsonDocument::fromJson(message.toUtf8());
   if (!document.isObject()) return;
   live_push_active_ = true;
-  applyLiveState(document.object().toVariantMap());
+  const auto object = document.object();
+  // The ?mode=state push sends a diffed frame ({"seq":N,"state":{changed}});
+  // merge the changed subset into the live state. The HTTP fallback sends the
+  // full snapshot and replaces it wholesale in consumeLive().
+  const auto state = object.value("state");
+  if (!state.isObject()) return;
+  auto merged = state_;
+  for (auto it = state.toObject().begin(); it != state.toObject().end(); ++it)
+    merged[it.key()] = it.value().toVariant();
+  applyLiveState(merged);
 }
 
 QVariant DashboardModel::value(const QString &key) const { return state_.value(key); }
@@ -774,7 +783,7 @@ void DashboardModel::updateGraphHistory() {
 void DashboardModel::updateSteeringDisplay() {
   // Presentation-only: state_ keeps the raw steering_angle for value() and the
   // recorder; only the wheel reads the smoothed copy. Feed the newest target
-  // and let the ~60 Hz timer interpolate, so a 30 Hz push becomes continuous
+  // and let the ~60 Hz timer interpolate, so a 50 Hz push becomes continuous
   // motion without queueing anything.
   const auto raw = state_.value("steering_angle");
   bool ok = false;
