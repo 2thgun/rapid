@@ -295,10 +295,10 @@ Window {
             MouseArea { anchors.fill: parent; onClicked: root.wifiMenu = false }
             Card { x: 20; y: 16; width: 440; height: 288
                 Label { x: 14; y: 10; text: "SETTINGS"; font.pixelSize: 14 }
-                Label { x: 14; y: 32; text: "WI-FI MODE" }
-                Row { x: 12; y: 46; spacing: 8
+                Label { x: 14; y: 30; text: "WI-FI MODE" }
+                Row { x: 12; y: 42; spacing: 8
                     Repeater { model: [["home","HOME"],["ap","ACCESS POINT"],["off","WI-FI OFF"]]
-                        Rectangle { required property var modelData; width: 130; height: 46; radius: 4
+                        Rectangle { required property var modelData; width: 130; height: 42; radius: 4
                             color: "#19242b"; border.width: 2; border.color: dashboard.networkMode === modelData[0] ? root.accent : "#52616b"
                             Label { anchors.centerIn: parent; text: modelData[1]; color: "#f4f7f9"; font.pixelSize: 12 }
                             MouseArea { anchors.fill: parent; onClicked: { dashboard.setNetworkMode(modelData[0]); root.wifiMenu = false } }
@@ -308,9 +308,9 @@ Window {
                 // #18: user-settable steering lock. AC1/ACC/ACE expose no lock,
                 // so the owner sets one here; iRacing's own value still wins and
                 // AUTO clears the override. Held buttons repeat the step.
-                Label { x: 14; y: 98; text: "STEERING LOCK  " + root.steeringLockSource() }
-                Row { x: 12; y: 110; spacing: 6
-                    Rectangle { width: 54; height: 52; radius: 4
+                Label { x: 14; y: 90; text: "STEERING LOCK  " + root.steeringLockSource() }
+                Row { x: 12; y: 100; spacing: 6
+                    Rectangle { width: 54; height: 46; radius: 4
                         color: lockMinus.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                         Label { anchors.centerIn: parent; text: "−"; color: "#f4f7f9"; font.pixelSize: 22 }
                         MouseArea { id: lockMinus; anchors.fill: parent
@@ -318,10 +318,10 @@ Window {
                             onReleased: lockRepeat.stop(); onCanceled: lockRepeat.stop()
                         }
                     }
-                    Rectangle { width: 160; height: 52; radius: 4; color: "#10161b"; border.width: 2; border.color: "#394754"
+                    Rectangle { width: 160; height: 46; radius: 4; color: "#10161b"; border.width: 2; border.color: "#394754"
                         Text { anchors.centerIn: parent; text: dashboard.effectiveSteeringLockDeg + "°"; color: root.accent; font.pixelSize: 20; font.bold: true }
                     }
-                    Rectangle { width: 54; height: 52; radius: 4
+                    Rectangle { width: 54; height: 46; radius: 4
                         color: lockPlus.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                         Label { anchors.centerIn: parent; text: "+"; color: "#f4f7f9"; font.pixelSize: 22 }
                         MouseArea { id: lockPlus; anchors.fill: parent
@@ -329,19 +329,19 @@ Window {
                             onReleased: lockRepeat.stop(); onCanceled: lockRepeat.stop()
                         }
                     }
-                    Rectangle { width: 98; height: 52; radius: 4
+                    Rectangle { width: 98; height: 46; radius: 4
                         color: lockAuto.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                         Label { anchors.centerIn: parent; text: "AUTO"; color: "#f4f7f9"; font.pixelSize: 12 }
                         MouseArea { id: lockAuto; anchors.fill: parent; onClicked: dashboard.setUserSteeringLockDeg(0) }
                     }
                 }
                 Timer { id: lockRepeat; property int step: 0; interval: 120; repeat: true; onTriggered: root.adjustSteeringLock(step) }
-                Rectangle { x: 12; y: 168; width: 408; height: 42; radius: 4
+                Rectangle { x: 12; y: 152; width: 408; height: 40; radius: 4
                     color: calibrateTouch.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                     Label { anchors.centerIn: parent; text: "CALIBRATE TOUCH"; color: "#f4f7f9"; font.pixelSize: 12 }
                     MouseArea { id: calibrateTouch; anchors.fill: parent; onClicked: { root.wifiMenu = false; dashboard.startCalibration() } }
                 }
-                Label { x: 14; y: 212; width: 404; elide: Text.ElideRight
+                Label { x: 14; y: 198; width: 404; elide: Text.ElideRight
                     text: dashboard.setupUrl.length > 0 ? "SETUP PAGE  " + dashboard.setupUrl : "SETUP PAGE  not published yet"
                     color: root.muted }
                 // The device TLS fingerprint and pairing address, visible from
@@ -349,11 +349,11 @@ Window {
                 // up), so a companion can be paired without first switching to
                 // AP mode. The pairing screen below shows the same values with
                 // the approval controls.
-                Label { x: 14; y: 226; width: 404; elide: Text.ElideRight
+                Label { x: 14; y: 212; width: 404; elide: Text.ElideRight
                     text: (dashboard.pairingAddress.length > 0 ? "PAIRING  " + dashboard.pairingAddress + "  " : "") +
                           (dashboard.pairingFingerprint.length > 0 ? "FINGERPRINT  " + dashboard.pairingFingerprint : "FINGERPRINT  unavailable")
                     color: root.muted }
-                Rectangle { x: 12; y: 242; width: 198; height: 46; radius: 4
+                Rectangle { x: 12; y: 226; width: 200; height: 42; radius: 4
                     color: restartSetup.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                     Label { anchors.centerIn: parent; text: "RESTART SETUP SERVICE"; color: "#f4f7f9"; font.pixelSize: 10 }
                     MouseArea { id: restartSetup; anchors.fill: parent; onClicked: { dashboard.restartSetupService(); root.wifiMenu = false } }
@@ -361,11 +361,32 @@ Window {
                 // #61: the Pi-dash pairing entry. Opens the pairing screen
                 // that shows the pairing address and the short fingerprint to
                 // type into the companion, and arms the on-device window.
-                Rectangle { x: 218; y: 242; width: 202; height: 46; radius: 4
+                Rectangle { x: 218; y: 226; width: 202; height: 42; radius: 4
                     color: pairEntry.pressed ? "#403519" : "#221c0d"; border.width: 2; border.color: root.accent
                     Label { anchors.centerIn: parent; text: "PAIR A COMPANION"; color: root.accent; font.pixelSize: 12 }
                     MouseArea { id: pairEntry; anchors.fill: parent; onClicked: { root.wifiMenu = false; root.pairingScreen = true } }
                 }
+                // #44: the physical owner reset. The panel is the trust
+                // boundary — anyone standing at the touchscreen can reopen
+                // enrollment — so the button is hold-to-confirm; releasing early
+                // cancels it. The helper clears only the owner password; the
+                // device identity, paired PCs, calibration and device access
+                // are kept, and the new activation token is published on the
+                // setup card like at first boot.
+                Rectangle { x: 12; y: 280; width: 408; height: 38; radius: 4
+                    color: ownerReset.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
+                    Label { anchors.centerIn: parent
+                        text: dashboard.ownerResetStatus.length > 0 ? dashboard.ownerResetStatus
+                             : ownerResetHold.ticks > 0 ? "KEEP HOLDING…" : "RESET OWNER ACCOUNT"
+                        color: "#f4f7f9"; font.pixelSize: 11 }
+                    MouseArea { id: ownerReset; anchors.fill: parent
+                        onPressed: { ownerResetHold.ticks = 0; ownerResetHold.start() }
+                        onReleased: ownerResetHold.stop()
+                        onCanceled: ownerResetHold.stop()
+                    }
+                }
+                Timer { id: ownerResetHold; interval: 100; repeat: true; property int ticks: 0
+                    onTriggered: { if (++ticks >= 30) { stop(); ticks = 0; dashboard.resetOwnerAccount(); } } }
             }
         }
         // #61: the Pi-dash pairing screen. The owner opens it from the

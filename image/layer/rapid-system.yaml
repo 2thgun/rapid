@@ -51,4 +51,4 @@ mmdebstrap:
         > "$root/etc/ssh/sshd_config.d/10-rapid-owner.conf"
       chroot "$root" systemctl mask ssh.service ssh.socket
       chroot "$root" systemctl disable smbd nmbd
-      chroot "$root" systemctl enable rapid-firstboot rapid-provision rapid rapid-display rapid-log-status rapid-setup rapid-network-mode rapid-apply.path rapid-wifi.path rapid-account.path
+      chroot "$root" systemctl enable rapid-firstboot rapid-provision rapid rapid-display rapid-log-status rapid-setup rapid-network-mode rapid-apply.path rapid-wifi.path rapid-account.path rapid-owner-reset.path

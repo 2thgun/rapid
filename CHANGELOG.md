@@ -29,6 +29,12 @@ last completed checks, not a guarantee of current device state.
 - The Wi-Fi write path (`nmcli connection load` + GLib keyfile escaping) is now
   verified against real NetworkManager, including an SSID with spaces, special
   characters and a backslash.
+- Added a physical-presence owner reset: holding **RESET OWNER ACCOUNT** on the
+  panel's settings page clears only the owner password and reopens enrollment
+  with a new activation token, keeping the device identity, paired PCs,
+  calibration and device access. The privileged work runs through the existing
+  root helper/queue pattern (`rapid-owner-reset` on the shared `/run/rapid-apply`
+  queue); there is no network or API trigger (#44).
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
