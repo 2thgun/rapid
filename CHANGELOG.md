@@ -5,7 +5,6 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
-- Fixed `rapid-setup.service` restarting every 3 seconds, forever, whenever the device is on Home Wi-Fi. The setup page is only served on the setup access point's address, which does not exist then; the server used to exit with a bind error and be restarted. On the dev Pi that was 9,590 restarts and a journal held at its size cap. It now waits quietly for the address, says so once, and starts serving as soon as Access Point mode brings it up (#82).
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
@@ -99,6 +98,7 @@ last completed checks, not a guarantee of current device state.
   revoked individually. The Windows companion's `--pairing-url` command stores
   the key with DPAPI and checks the pinned Pi identity before reconnecting.
   Manual `telemetry.key` setup is deprecated for new pairings.
+- Fixed `rapid-setup.service` restarting every 3 seconds, forever, whenever the device is on Home Wi-Fi. The setup page is only served on the setup access point's address, which does not exist then; the server used to exit with a bind error and be restarted. On the dev Pi that was 9,590 restarts and a journal held at its size cap. It now waits quietly for the address, says so once, and starts serving as soon as Access Point mode brings it up (#82).
 - Added first-boot setup: a persistent device TLS identity, a device-specific
   setup AP and a physical setup card showing the activation details.
 - Added constrained settings application for hostname, Home Wi-Fi (with setup-AP
