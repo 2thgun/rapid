@@ -5,6 +5,16 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The live view now runs at 50 Hz end to end: the Pi's WebSocket push ticks at
+  20 ms (was a magic 33 ms), the Qt panel's data update path follows the push,
+  and the Windows companion's default `sample_rate` is a permanent 50 Hz
+  (configurable 1-100). The panel's steering-wheel smoothing stays at 60 Hz
+  and the 200 ms HTTP poll remains a fallback.
+- The `?mode=state` WebSocket push now sends a diffed frame (only the fields
+  that changed since the previous tick, plus a sequence number) instead of the
+  full `Runtime::snapshot()` JSON, so the 50 Hz push does not double live
+  traffic. The panel merges each frame into its live state; the HTTP fallback
+  still sends the full snapshot.
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`

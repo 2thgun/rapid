@@ -13,6 +13,10 @@ namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace http = beast::http;
 using tcp = asio::ip::tcp;
+// Live push tick: 50 Hz. Fast enough that the push, not the transport, sets
+// the display's update rate, without redoing work the runtime can't usefully
+// produce faster than telemetry arrives.
+constexpr auto kLivePushInterval = std::chrono::milliseconds(20);
 void serve(const std::string &host, int port, Handler handler,
            Runtime *runtime) {
   asio::io_context context;
@@ -107,20 +111,34 @@ void serve(const std::string &host, int port, Handler handler,
                 history = std::stoi(target.substr(pos + 8));
               } catch (...) {
               }
-            // ~30 Hz: fast enough that the push, not the transport, sets the
-            // display's update rate, without redoing work the runtime can't
-            // usefully produce faster than telemetry arrives.
-            constexpr auto tick = std::chrono::milliseconds(33);
+            // ?mode=state sends a diffed frame (the fields that changed since
+            // the previous tick, plus a sequence number) instead of the full
+            // snapshot, so the 50 Hz push does not re-send unchanged fields;
+            // the panel merges each frame into its live state. The engineering
+            // view's raw per-sample event history is unchanged.
+            Json last_state = Json::object();
+            std::uint64_t state_seq = 0;
             while (!stopping) {
               {
                 std::lock_guard client_lock(clients[i].mutex);
                 clients[i].deadline = monotonic() + 2;
               }
-              const std::string payload = state_mode
-                  ? runtime->snapshot().dump()
-                  : runtime->events(cursor, history).dump();
+              std::string payload;
+              if (state_mode) {
+                const auto current = runtime->snapshot();
+                Json diff;
+                for (auto it = current.begin(); it != current.end(); ++it)
+                  if (!last_state.contains(it.key()) ||
+                      last_state[it.key()] != it.value())
+                    diff[it.key()] = it.value();
+                last_state = std::move(current);
+                payload =
+                    Json{{"seq", state_seq++}, {"state", std::move(diff)}}.dump();
+              } else {
+                payload = runtime->events(cursor, history).dump();
+              }
               ws.write(asio::buffer(payload));
-              std::this_thread::sleep_for(tick);
+              std::this_thread::sleep_for(kLivePushInterval);
             }
             continue;
           }

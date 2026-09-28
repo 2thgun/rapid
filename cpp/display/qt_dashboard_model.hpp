@@ -18,9 +18,9 @@ class QWebSocket;
 
 // Presentation-only smoothing of the normalised steering display value
 // (steering-display-motion.md). The Qt panel receives the newest runtime
-// snapshot over a ~30 Hz WebSocket push, and the raw channel is neither sparse
+// snapshot over a 50 Hz WebSocket push, and the raw channel is neither sparse
 // nor quantised, so binding the wheel straight to it steps between positions.
-// This first-order lag bridges the ~33 ms gaps without touching telemetry:
+// This first-order lag bridges the 20 ms gaps without touching telemetry:
 //   * no queued animation: every tick moves the displayed value toward the
 //     latest target, so a newer sample replaces the old target and the lag
 //     stays bounded however fast updates arrive;
@@ -28,8 +28,8 @@ class QWebSocket;
 //   * reconnect/stale handling: the first valid value, and any jump larger
 //     than kSnapThreshold, snap to the target instead of sweeping the wheel.
 // Documented budget: with kTimeConstantSeconds = 0.018 a sustained ramp lags
-// ~18 ms (under one 30 Hz frame, preserving the responsiveness the receive-path
-// work removed) and a step settles to 95% in ~54 ms.
+// ~18 ms (just under one 50 Hz frame, preserving the responsiveness the
+// receive-path work removed) and a step settles to 95% in ~54 ms.
 class SteeringSmoother {
  public:
   static constexpr double kTimeConstantSeconds = 0.018;
