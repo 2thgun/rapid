@@ -133,6 +133,7 @@ last completed checks, not a guarantee of current device state.
 - Added constrained settings application for hostname, Home Wi-Fi (with setup-AP
   restore on failure) and display rotation (with preview, confirmation and
   boot-time rollback), plus an authenticated touchscreen calibration reset.
+- A Wi-Fi name or password that starts or ends with a space is now saved correctly. NetworkManager silently dropped leading spaces from the stored profile, so such a network could never connect; the setup page's saved-network list also showed the escaped form.
 - Added on-panel touch calibration (Wi-Fi menu → Calibrate touch). It uses five
   targets, a verification tap and automatic rollback when unconfirmed. Rotating
   the display to 180° now also rotates touch input, and an existing X server
