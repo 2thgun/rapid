@@ -1,5 +1,9 @@
 #include "rapid/setup_auth.hpp"
 #include <arpa/inet.h>
+#include <boost/system/system_error.hpp>
+#include <cerrno>
+#include <chrono>
+#include <thread>
 #include <csignal>
 #include <iostream>
 #include <fcntl.h>
@@ -159,10 +163,31 @@ int main(int argc, char **argv) {
             {"X-Content-Type-Options", "nosniff"}, {"Referrer-Policy", "no-referrer"}}};
       return auth.handle(request);
     };
-    if (tls_certificate.empty())
-      serve(listen_host, port, handler);
-    else
-      serve_tls(listen_host, port, handler, tls_certificate, tls_private_key);
+    // #82: the setup page is served only on the setup access point's fixed
+    // address, which exists only while Access Point mode is up. On Home Wi-Fi
+    // the bind fails with "cannot assign requested address"; exiting made
+    // systemd restart this service every 3 s forever (9,590 restarts and a
+    // journal pinned at its size cap on the dev Pi). Wait for the address
+    // instead, saying so once, and start serving as soon as it appears. Every
+    // other failure still exits.
+    bool announced = false;
+    while (!stopping) {
+      try {
+        if (tls_certificate.empty())
+          serve(listen_host, port, handler);
+        else
+          serve_tls(listen_host, port, handler, tls_certificate, tls_private_key);
+        break;
+      } catch (const boost::system::system_error &error) {
+        if (error.code().value() != EADDRNOTAVAIL) throw;
+        if (!announced) {
+          log("INFO setup: waiting for " + listen_host + " (the setup access point is not up)");
+          announced = true;
+        }
+        for (int i = 0; i < 20 && !stopping; ++i)
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+    }
     return 0;
   } catch (const std::exception &error) {
     log(std::string("ERROR setup: ") + error.what());

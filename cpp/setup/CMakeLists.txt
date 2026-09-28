@@ -72,6 +72,13 @@ if(BUILD_TESTING)
   target_link_libraries(rapid-wifi-secret-tests PRIVATE rapid_native)
   target_compile_options(rapid-wifi-secret-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   add_test(NAME rapid-wifi-secret-tests COMMAND rapid-wifi-secret-tests $<TARGET_FILE:rapid-wifi>)
+  # #82: the setup server waits for the AP address instead of exiting.
+  add_executable(rapid-setup-wait-tests tests/setup_wait_tests.cpp)
+  target_link_libraries(rapid-setup-wait-tests PRIVATE rapid_native)
+  target_compile_options(rapid-setup-wait-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME rapid-setup-wait-tests COMMAND rapid-setup-wait-tests
+           $<TARGET_FILE:rapid-setup-server> ${CMAKE_SOURCE_DIR}/assets)
+  set_tests_properties(rapid-setup-wait-tests PROPERTIES TIMEOUT 30)
   add_executable(rapid-display-recovery-tests tests/display_recovery_tests.cpp)
   target_link_libraries(rapid-display-recovery-tests PRIVATE rapid_native)
   target_compile_options(rapid-display-recovery-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
