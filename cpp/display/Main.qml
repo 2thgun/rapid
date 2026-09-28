@@ -341,10 +341,19 @@ Window {
                     Label { anchors.centerIn: parent; text: "CALIBRATE TOUCH"; color: "#f4f7f9"; font.pixelSize: 12 }
                     MouseArea { id: calibrateTouch; anchors.fill: parent; onClicked: { root.wifiMenu = false; dashboard.startCalibration() } }
                 }
-                Label { x: 14; y: 214; width: 404; elide: Text.ElideRight
+                Label { x: 14; y: 212; width: 404; elide: Text.ElideRight
                     text: dashboard.setupUrl.length > 0 ? "SETUP PAGE  " + dashboard.setupUrl : "SETUP PAGE  not published yet"
                     color: root.muted }
-                Rectangle { x: 12; y: 232; width: 198; height: 46; radius: 4
+                // The device TLS fingerprint and pairing address, visible from
+                // the settings menu at any time (not only while the setup AP is
+                // up), so a companion can be paired without first switching to
+                // AP mode. The pairing screen below shows the same values with
+                // the approval controls.
+                Label { x: 14; y: 226; width: 404; elide: Text.ElideRight
+                    text: (dashboard.pairingAddress.length > 0 ? "PAIRING  " + dashboard.pairingAddress + "  " : "") +
+                          (dashboard.pairingFingerprint.length > 0 ? "FINGERPRINT  " + dashboard.pairingFingerprint : "FINGERPRINT  unavailable")
+                    color: root.muted }
+                Rectangle { x: 12; y: 242; width: 198; height: 46; radius: 4
                     color: restartSetup.pressed ? "#403519" : "#19242b"; border.width: 2; border.color: "#52616b"
                     Label { anchors.centerIn: parent; text: "RESTART SETUP SERVICE"; color: "#f4f7f9"; font.pixelSize: 10 }
                     MouseArea { id: restartSetup; anchors.fill: parent; onClicked: { dashboard.restartSetupService(); root.wifiMenu = false } }
@@ -352,7 +361,7 @@ Window {
                 // #61: the Pi-dash pairing entry. Opens the pairing screen
                 // that shows the pairing address and the short fingerprint to
                 // type into the companion, and arms the on-device window.
-                Rectangle { x: 218; y: 232; width: 202; height: 46; radius: 4
+                Rectangle { x: 218; y: 242; width: 202; height: 46; radius: 4
                     color: pairEntry.pressed ? "#403519" : "#221c0d"; border.width: 2; border.color: root.accent
                     Label { anchors.centerIn: parent; text: "PAIR A COMPANION"; color: root.accent; font.pixelSize: 12 }
                     MouseArea { id: pairEntry; anchors.fill: parent; onClicked: { root.wifiMenu = false; root.pairingScreen = true } }

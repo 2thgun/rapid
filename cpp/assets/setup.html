@@ -95,6 +95,39 @@ PC, and the downloaded file is the same one this Pi's protocol was built for.</p
 </form>
 <p id="wifi-status" class="status" role="status" aria-live="polite"></p>
 </div>
+<div class="category" id="category-wifi-networks">
+<h3>Saved Wi-Fi networks</h3>
+<p>Wi-Fi networks this device has saved. A stored password is never shown again.</p>
+<div id="wifi-networks">No saved Wi-Fi networks.</div>
+<h4 id="wifi-network-form-title">Add a network</h4>
+<form id="wifi-network-form">
+<label for="wifi-network-name">Network name (optional)</label>
+<p class="hint"><span class="rec">Optional</span>leave empty to save the Home profile.</p>
+<input id="wifi-network-name" autocomplete="off" maxlength="64">
+<label for="wifi-network-ssid">Network name (SSID)</label>
+<input id="wifi-network-ssid" required maxlength="32" autocomplete="off">
+<label for="wifi-network-password">Password</label>
+<p class="hint"><span class="req">Required</span>at least 8 characters, as set on your router.</p>
+<input id="wifi-network-password" type="password" required minlength="8" maxlength="64" autocomplete="new-password">
+<button id="wifi-network-save" type="submit">Save network</button>
+<button id="wifi-network-cancel" type="button" hidden>Cancel edit</button>
+</form>
+<p id="wifi-network-status" class="status" role="status" aria-live="polite"></p>
+</div>
+<div class="category" id="category-setup-ap">
+<h3>Setup access point</h3>
+<p>The setup network is open by default so a fresh device bootstraps with no
+secret. Add a password to protect it, or clear it to go back to open. The
+password is cleared again the next time the device provisions the setup
+network (on reboot).</p>
+<form id="setup-ap-form">
+<label for="setup-ap-password">Setup network password (optional)</label>
+<p class="hint"><span class="rec">Optional</span>leave empty to keep the setup network open. At least 8 characters.</p>
+<input id="setup-ap-password" type="password" minlength="8" maxlength="64" autocomplete="new-password">
+<button id="save-setup-ap" type="submit">Save setup network password</button>
+</form>
+<p id="setup-ap-status" class="status" role="status" aria-live="polite"></p>
+</div>
 <div class="category" id="category-calibration">
 <h3>Touchscreen</h3>
 <p>Calibration runs on the Pi's own display, not in this browser. Start it here,
@@ -353,6 +386,7 @@ async function showProfile() {
   await showPeers();
   await showPairing();
   await showAccess();
+  await showWifiNetworks();
   return data;
 }
 
@@ -801,6 +835,121 @@ document.getElementById('wifi-form').addEventListener('submit', async event => {
     password.value = '';
     setStatus(status, 'Home Wi-Fi credentials saved. Connecting; the setup access point returns if it cannot connect.');
     await waitForWifiApplication(revision);
+  } catch (error) { setStatus(status, error.message, 'error'); }
+  finally { password.value = ''; button.disabled = false; }
+});
+// Saved Wi-Fi networks: list, edit and remove the saved NetworkManager
+// connections through the same /api/v1/wifi queue and rapid-wifi helper as
+// the Home join. A stored passphrase is never echoed back to the page;
+// editing fills only the SSID. The device's own setup access point is listed
+// for context but is owned by the provisioner, so it is not editable here.
+let wifiNetworkEditName = '';
+function renderNetworks(networks) {
+  const container = document.getElementById('wifi-networks');
+  container.replaceChildren();
+  if (!networks || !networks.length) { container.textContent = 'No saved Wi-Fi networks.'; return; }
+  for (const network of networks) {
+    const row = document.createElement('p');
+    row.className = 'key-row';
+    const label = document.createElement('span');
+    label.textContent = network.ssid || network.name;
+    row.appendChild(label);
+    if (network.owned) {
+      const note = document.createElement('span');
+      note.textContent = 'setup access point';
+      note.className = 'hint';
+      row.appendChild(note);
+    } else {
+      const edit = document.createElement('button');
+      edit.type = 'button'; edit.textContent = 'Edit';
+      edit.addEventListener('click', () => beginNetworkEdit(network));
+      row.appendChild(edit);
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.textContent = 'Remove';
+      remove.addEventListener('click', async () => {
+        const status = document.getElementById('wifi-network-status');
+        remove.disabled = true;
+        try {
+          const result = await api('/api/v1/wifi', 'POST', {action: 'remove', name: network.name});
+          setStatus(status, result.removed ? 'Wi-Fi network removed.'
+                                              : (result.error || 'The Wi-Fi network could not be removed.'),
+                    result.removed ? 'ok' : 'error');
+          await showWifiNetworks();
+        } catch (error) { setStatus(status, error.message, 'error'); }
+        finally { remove.disabled = false; }
+      });
+      row.appendChild(remove);
+    }
+    container.appendChild(row);
+  }
+}
+function beginNetworkEdit(network) {
+  wifiNetworkEditName = network.name;
+  document.getElementById('wifi-network-name').value = '';
+  document.getElementById('wifi-network-ssid').value = network.ssid || '';
+  document.getElementById('wifi-network-password').value = '';
+  document.getElementById('wifi-network-form-title').textContent = 'Edit ' + (network.ssid || network.name);
+  document.getElementById('wifi-network-cancel').hidden = false;
+  setStatus(document.getElementById('wifi-network-status'),
+            'Editing ' + (network.ssid || network.name) + '. Enter the password to save the change.');
+}
+function cancelNetworkEdit() {
+  wifiNetworkEditName = '';
+  document.getElementById('wifi-network-name').value = '';
+  document.getElementById('wifi-network-ssid').value = '';
+  document.getElementById('wifi-network-password').value = '';
+  document.getElementById('wifi-network-form-title').textContent = 'Add a network';
+  document.getElementById('wifi-network-cancel').hidden = true;
+}
+document.getElementById('wifi-network-cancel').addEventListener('click', () => { cancelNetworkEdit(); setStatus(document.getElementById('wifi-network-status'), ''); });
+async function showWifiNetworks() {
+  try {
+    const data = await api('/api/v1/wifi');
+    renderNetworks(data.connections);
+    // The setup access point is in the same list; surface its state here.
+    const ap = (data.connections || []).find(network => network.owned);
+    if (ap) setStatus(document.getElementById('setup-ap-status'),
+                      ap.secured ? 'The setup network "' + (ap.ssid || ap.name) + '" is password-protected.'
+                                 : 'The setup network "' + (ap.ssid || ap.name) + '" is open.');
+  } catch (error) { setStatus(document.getElementById('wifi-network-status'), error.message, 'error'); }
+}
+document.getElementById('wifi-network-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const ssid = document.getElementById('wifi-network-ssid');
+  const password = document.getElementById('wifi-network-password');
+  const button = document.getElementById('wifi-network-save');
+  const status = document.getElementById('wifi-network-status');
+  if (!password.value) { setStatus(status, 'Enter the network password.', 'error'); return; }
+  button.disabled = true;
+  setStatus(status, 'Saving Wi-Fi network…');
+  try {
+    // An edit names the connection it replaces; an add with an empty name
+    // saves the fixed Home profile.
+    const name = wifiNetworkEditName || document.getElementById('wifi-network-name').value.trim();
+    const body = {action: 'save', revision, ssid: ssid.value, password: password.value};
+    if (name) body.name = name;
+    await api('/api/v1/wifi', 'POST', body);
+    password.value = '';
+    setStatus(status, 'Wi-Fi network saved. Connecting; the setup access point returns if it cannot connect.');
+    await waitForWifiApplication(revision);
+    await showWifiNetworks();
+  } catch (error) { setStatus(status, error.message, 'error'); }
+  finally { password.value = ''; button.disabled = false; }
+});
+document.getElementById('setup-ap-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const password = document.getElementById('setup-ap-password');
+  const button = document.getElementById('save-setup-ap');
+  const status = document.getElementById('setup-ap-status');
+  button.disabled = true;
+  setStatus(status, 'Saving setup network password…');
+  try {
+    const result = await api('/api/v1/wifi', 'POST', {action: 'setup_ap', password: password.value});
+    password.value = '';
+    setStatus(status, result.secured ? 'The setup network "' + (result.ssid || 'rapid') + '" is now password-protected.'
+                                       : 'The setup network "' + (result.ssid || 'rapid') + '" is open again.',
+              'ok');
+    await showWifiNetworks();
   } catch (error) { setStatus(status, error.message, 'error'); }
   finally { password.value = ''; button.disabled = false; }
 });

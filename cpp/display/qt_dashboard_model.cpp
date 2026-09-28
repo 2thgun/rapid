@@ -301,9 +301,12 @@ void DashboardModel::pollSetupStatus() {
         const auto values = bootstrap.toObject();
         next_url = values.value("setup_url").toString();
         // #61: the same validation the setup card applies; only a full 64-hex
-        // digest becomes the short printed form the companion accepts.
+        // digest becomes the short printed form the companion accepts. The
+        // fingerprint is published on its own merit (not gated on the setup
+        // URL), so the pairing entry point can show it at any time, even on a
+        // device whose bootstrap predates the setup-URL field.
         const auto fingerprint = values.value("certificate_fingerprint").toString();
-        if (!next_url.isEmpty() && fingerprint.size() == 64)
+        if (fingerprint.size() == 64)
           next_fingerprint = short_fingerprint(fingerprint);
       }
     }

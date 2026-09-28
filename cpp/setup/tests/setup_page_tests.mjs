@@ -108,5 +108,31 @@ require(!html.includes('id="access-key"'),
 require(!/ssh_private_key|private_key_pem|private_key:/.test(html),
         'the page must never post a private-key field');
 
+// 7. Saved Wi-Fi networks and the setup access point are their own categories,
+//    separate from the Home Wi-Fi join, each with its own Save action and
+//    status line. The setup-AP password is optional (the default stays open),
+//    and every write routes through the existing /api/v1/wifi queue.
+for (const id of ['category-wifi-networks', 'wifi-networks', 'wifi-network-form',
+                  'wifi-network-name', 'wifi-network-ssid', 'wifi-network-password',
+                  'wifi-network-save', 'wifi-network-cancel'])
+  require(html.includes('id="' + id + '"'), 'missing saved-network element: ' + id);
+require(html.includes('id="wifi-network-status" class="status"'),
+        'the saved-network category must have its own status line');
+for (const id of ['category-setup-ap', 'setup-ap-form', 'setup-ap-password', 'save-setup-ap'])
+  require(html.includes('id="' + id + '"'), 'missing setup-AP element: ' + id);
+require(html.includes('id="setup-ap-status" class="status"'),
+        'the setup-AP category must have its own status line');
+require(/id="setup-ap-password"[^>]*minlength="8"/.test(html),
+        'the setup-AP password field must accept 8 characters');
+require(!/id="setup-ap-password"[^>]*required/.test(html),
+        'the setup-AP password field must be optional (default open)');
+require(html.includes("api('/api/v1/wifi', 'POST', {action: 'remove'"),
+        'network removal must go through the /api/v1/wifi queue');
+require(html.includes("api('/api/v1/wifi', 'POST', {action: 'setup_ap'"),
+        'the setup-AP password must go through the /api/v1/wifi queue');
+require(html.includes("api('/api/v1/wifi')"),
+        'the saved-network list must be read through /api/v1/wifi');
+
 console.log('ok: setup page categories, per-category Save actions, wording, the ' +
-            'shortened fingerprint and the separate SSH-key category match the reworked policy');
+             'shortened fingerprint, the separate SSH-key category and the ' +
+             'saved-network / setup-AP categories match the reworked policy');

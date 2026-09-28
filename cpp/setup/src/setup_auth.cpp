@@ -3,8 +3,10 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <array>
+#include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 namespace rapid::native {
 namespace {
@@ -55,6 +57,23 @@ std::string network_ssid(const fs::path &path) {
   } catch (const std::exception &) {
     return {};
   }
+}
+// Waits for the rapid-wifi helper to rewrite the result file, then returns
+// its parsed content. This class's mutex serializes every request, so
+// deleting the result file before queueing makes "it reappeared" a reliable
+// signal that this request's helper run finished.
+std::optional<Json> wait_for_wifi_result(const fs::path &result_file, double timeout) {
+  std::error_code error;
+  fs::remove(result_file, error);
+  const double deadline = monotonic() + timeout;
+  while (monotonic() < deadline) {
+    if (fs::is_regular_file(result_file, error)) {
+      try { return Json::parse(read_file(result_file)); }
+      catch (const std::exception &) { return std::nullopt; }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  return std::nullopt;
 }
 // #10: the SHA-256 the setup page shows for the bundled companion, so the
 // owner (or the release notes) can tell whether the served artifact matches
@@ -488,20 +507,84 @@ Response SetupAuth::handle(const Request &request) {
     if (!store_.revoke_peer(id)) return reply(404, {{"detail", "paired PC not found"}});
     return reply(200, {{"revoked", id}});
   }
+  // Saved Wi-Fi networks are managed through the same authenticated
+  // /api/v1/wifi queue and the same rapid-wifi helper as the Home join: an
+  // explicit action distinguishes a list, a removal and the setup-AP password
+  // from the default save. Only public material (name, SSID, whether a key is
+  // set) is ever listed; a stored passphrase is never read back.
+  if (path == "/api/v1/wifi" && request.method == "GET") {
+    if (wifi_request_file_.empty() || wifi_result_file_.empty())
+      return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
+    try {
+      atomic_file(wifi_request_file_, Json{{"action", "list"}}.dump());
+      auto result = wait_for_wifi_result(wifi_result_file_, 30);
+      if (!result) return reply(503, {{"detail", "the Wi-Fi list timed out"}});
+      return reply(200, *result);
+    } catch (const std::exception &) {
+      return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
+    }
+  }
   if (path == "/api/v1/wifi" && request.method == "POST") {
     if (!equal(header(request, "x-csrf-token"), session->second.csrf))
       return reply(403, {{"detail", "invalid CSRF token"}});
     const auto body = Json::parse(request.body, nullptr, false);
-    if (!body.is_object() || body.size() != 3 || !body.contains("revision") ||
+    if (!body.is_object() || !body.contains("action") || !body["action"].is_string())
+      return reply(400, {{"detail", "a Wi-Fi action is required"}});
+    const auto action = body["action"].get<std::string>();
+    const auto printable = [](const std::string &value) { for (unsigned char c : value) if (c < 0x20 || c == 0x7f) return false; return true; };
+    const auto valid_password = [&](const std::string &value) {
+      const bool hexadecimal = value.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
+      return value.empty() || (value.size() >= 8 && printable(value) &&
+              (value.size() <= 63 || (value.size() == 64 && hexadecimal)));
+    };
+    if (action == "remove") {
+      if (body.size() != 2 || !body.contains("name") || !body["name"].is_string())
+        return reply(400, {{"detail", "a connection name is required"}});
+      const auto name = body["name"].get<std::string>();
+      if (name.empty() || name.size() > 64)
+        return reply(400, {{"detail", "invalid connection name"}});
+      if (wifi_request_file_.empty()) return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
+      try {
+        atomic_file(wifi_request_file_, Json{{"action", "remove"}, {"name", name}}.dump());
+        auto result = wait_for_wifi_result(wifi_result_file_, 30);
+        if (!result) return reply(503, {{"detail", "the Wi-Fi removal timed out"}});
+        return reply(200, *result);
+      } catch (const std::exception &) {
+        return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
+      }
+    }
+    if (action == "setup_ap") {
+      if (body.size() != 2 || !body.contains("password") || !body["password"].is_string())
+        return reply(400, {{"detail", "a setup network password is required"}});
+      const auto password = body["password"].get<std::string>();
+      if (!valid_password(password))
+        return reply(400, {{"detail", "invalid setup network password"}});
+      if (wifi_request_file_.empty()) return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
+      try {
+        atomic_file(wifi_request_file_, Json{{"action", "setup_ap"}, {"password", password}}.dump());
+        auto result = wait_for_wifi_result(wifi_result_file_, 30);
+        if (!result) return reply(503, {{"detail", "the setup network password timed out"}});
+        return reply(200, *result);
+      } catch (const std::exception &) {
+        return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
+      }
+    }
+    if (action != "save")
+      return reply(400, {{"detail", "invalid Wi-Fi action"}});
+    if ((body.size() != 4 && body.size() != 5) || !body.contains("revision") ||
         !body["revision"].is_number_integer() || !body.contains("ssid") || !body["ssid"].is_string() ||
-        !body.contains("password") || !body["password"].is_string())
+        !body.contains("password") || !body["password"].is_string() ||
+        (body.size() == 5 && (!body.contains("name") || !body["name"].is_string())))
       return reply(400, {{"detail", "revision, Wi-Fi name and password required"}});
     const auto ssid = body["ssid"].get<std::string>(), password = body["password"].get<std::string>();
-    const auto printable = [](const std::string &value) { for (unsigned char c : value) if (c < 0x20 || c == 0x7f) return false; return true; };
-    const bool hexadecimal = password.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
-    if (ssid.empty() || ssid.size() > 32 || !printable(ssid) || password.size() < 8 || !printable(password) ||
-        (password.size() > 63 && (password.size() != 64 || !hexadecimal)))
+    if (ssid.empty() || ssid.size() > 32 || !printable(ssid) || !valid_password(password))
       return reply(400, {{"detail", "invalid Wi-Fi name or password"}});
+    // An optional connection name edits another saved network; the default
+    // stays the fixed Home profile.
+    std::string name;
+    if (body.contains("name")) name = body["name"].get<std::string>();
+    if (!name.empty() && (name.size() > 64 || !printable(name)))
+      return reply(400, {{"detail", "invalid Wi-Fi connection name"}});
     const auto state = store_.snapshot();
     if (body["revision"] != state.at("revision"))
       return reply(409, {{"detail", "settings changed; reload and try again"}, {"revision", state.at("revision")}});
@@ -511,7 +594,9 @@ Response SetupAuth::handle(const Request &request) {
     // can read it off disk in that window (rapid-wifi itself runs as root
     // and can read it regardless of group/other bits).
     try {
-      atomic_file(wifi_request_file_, Json{{"revision", state.at("revision")}, {"ssid", ssid}, {"password", password}}.dump());
+      Json queued{{"action", "save"}, {"revision", state.at("revision")}, {"ssid", ssid}, {"password", password}};
+      if (!name.empty()) queued["name"] = name;
+      atomic_file(wifi_request_file_, queued.dump());
       fs::permissions(wifi_request_file_, fs::perms::owner_read | fs::perms::owner_write,
                       fs::perm_options::replace);
     }

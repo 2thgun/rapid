@@ -5,6 +5,20 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The setup page now lists the saved Wi-Fi networks and lets the owner edit
+  (SSID/password) and remove them, like SSH keys, through the same privileged
+  `rapid-wifi` helper and `/run/rapid-apply` request queue. A stored password
+  is never shown again.
+- The setup access point can be given a password from the setup page
+  (optional; the default stays open so a fresh device bootstraps with no
+  secret). The password is cleared again the next time the device provisions the
+  setup network (on reboot).
+- The panel's settings page now shows the device TLS fingerprint and pairing
+  address at any time, so a companion can be paired without first switching to
+  AP mode.
+- The Wi-Fi write path (`nmcli connection load` + GLib keyfile escaping) is now
+  verified against real NetworkManager, including an SSID with spaces, special
+  characters and a backslash.
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`

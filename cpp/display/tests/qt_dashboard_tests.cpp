@@ -323,6 +323,32 @@ int main(int argc, char **argv) {
   // root Wi-Fi mode worker to start/restart the setup service.
   require(model.setupUrl() == "http://192.168.1.64:8002/setup",
           "the panel settings page shows the published setup page URL");
+  // The pairing entry point shows the TLS fingerprint at any time, even when
+  // the bootstrap carries no setup URL (e.g. an upgraded device): the
+  // fingerprint is published on its own merit, not gated on the URL.
+  {
+    const QByteArray no_url =
+        "{\"bootstrap\":{\"setup_port\":8002,"
+        "\"certificate_fingerprint\":\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"}}";
+    require(setup_status.resize(0) && setup_status.seek(0) &&
+                setup_status.write(no_url) == no_url.size(),
+            "rewrite the first-boot status without a setup URL");
+    setup_status.flush();
+    spin(2200);
+    require(model.pairingFingerprint() == "fedc ba98 7654 3210",
+            "the pairing fingerprint is published even without a setup URL");
+    // Restore the enrolled status (with its setup URL) so the later
+    // setup-URL and Wi-Fi-mode checks see the state they expect.
+    const QByteArray restored =
+        "{\"bootstrap\":{\"setup_address\":\"192.168.1.64\",\"setup_port\":8002,"
+        "\"setup_url\":\"http://192.168.1.64:8002/setup\","
+        "\"certificate_fingerprint\":\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"}}";
+    require(setup_status.resize(0) && setup_status.seek(0) &&
+                setup_status.write(restored) == restored.size(),
+            "restore the enrolled first-boot status");
+    setup_status.flush();
+    spin(2200);
+  }
   model.restartSetupService();
   {
     QFile request(QDir(network_control).filePath("request"));
