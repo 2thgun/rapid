@@ -277,6 +277,66 @@ int main(int argc, char **argv) {
     require(read_file(owner_ssid_again) == "rapid\n" &&
                 read_file(nmcli_legacy_log).find("connection up rapid-setup") == std::string::npos,
             "a repeat run keeps the SSID published and the AP down");
+    // The owner can protect the setup AP from the setup page (rapid-wifi writes
+    // a WPA key onto the owned profile). The provisioner runs on every boot and
+    // used to strip the security setting unconditionally, so the AP silently
+    // went back to open after any reboot. Only the legacy device-specific
+    // scheme ("rapid-" + 6 hex) still needs its key dropped; a profile that
+    // already has a current-scheme SSID keeps whatever key the owner set.
+    {
+      const auto provision_existing = [&](const std::string &tag, const std::string &existing_ssid,
+                                          const std::string &key_management, bool query_works) {
+        const auto fake = root.path / ("nmcli-existing-" + tag);
+        const auto log = root.path / ("nmcli-existing-" + tag + ".log");
+        {
+          std::ofstream script(fake);
+          script << "#!/bin/sh\n"
+                    "printf '%s\\n' \"$*\" >> \"$RAPID_TEST_NMCLI_LOG\"\n"
+                    "if [ \"$1 $2 $3 $4\" = \"-t -f NAME,TYPE connection\" ]; then exit 0; fi\n"
+                    "if [ \"$1 $2 $3\" = \"-t -f SSID\" ]; then printf 'some-other-network\\n'; exit 0; fi\n"
+                    "if [ \"$1 $2 $3\" = \"connection show rapid-setup\" ]; then exit 0; fi\n"
+                    "if [ \"$1\" = \"-g\" ] && [ \"$5\" = \"rapid-setup\" ]; then\n"
+                 << (query_works ? "  case \"$2\" in\n"
+                                   "    802-11-wireless.ssid) printf '%s\\n' '" + existing_ssid + "';;\n"
+                                   "    802-11-wireless-security.key-mgmt) printf '%s\\n' '" + key_management + "';;\n"
+                                   "  esac\n  exit 0\n"
+                                 : std::string("  exit 1\n"))
+                 << "fi\n"
+                    "exit 0\n";
+        }
+        fs::permissions(fake, fs::perms::owner_all);
+        const auto status = root.path / ("firstboot-existing-" + tag + ".json");
+        atomic_file(status, Json{{"owner_configured", true}, {"schema_version", 3}}.dump());
+        const auto ssid_path = root.path / ("network-ssid-existing-" + tag);
+        setenv("RAPID_TEST_NMCLI_LOG", log.c_str(), 1);
+        const auto child = fork();
+        require(child >= 0, "fork AP provisioner over an existing profile");
+        if (child == 0) {
+          execl(argv[2], argv[2], "--status-file", status.c_str(), "--ssid-file", ssid_path.c_str(),
+                "--nmcli", fake.c_str(), nullptr);
+          _exit(127);
+        }
+        int code = 0;
+        require(waitpid(child, &code, 0) == child && WIFEXITED(code) && WEXITSTATUS(code) == 0,
+                "the AP provisioner runs over an existing profile");
+        unsetenv("RAPID_TEST_NMCLI_LOG");
+        return read_file(log);
+      };
+      const std::string strip = "connection modify rapid-setup remove 802-11-wireless-security";
+      const std::string rewrite = "connection modify rapid-setup 802-11-wireless.ssid rapid ";
+      auto calls = provision_existing("owner-key", "rapid", "wpa-psk", true);
+      require(calls.find(strip) == std::string::npos && calls.find(rewrite) != std::string::npos,
+              "a WPA key the owner set on the setup AP survives the boot-time provisioner");
+      calls = provision_existing("owner-key-renamed", "rapid-1234", "wpa-psk", true);
+      require(calls.find(strip) == std::string::npos,
+              "the owner's key also survives when the AP was renamed after an SSID collision");
+      calls = provision_existing("legacy-key", "rapid-3f9a1c", "wpa-psk", true);
+      require(calls.find(strip) != std::string::npos,
+              "a legacy device-specific secured profile still has its key dropped");
+      calls = provision_existing("unreadable", "rapid", "wpa-psk", false);
+      require(calls.find(strip) != std::string::npos,
+              "a profile the provisioner cannot read falls back to the previous behavior");
+    }
     // #59 / setup-page-ux: an enrolled device still publishes the setup AP
     // address and TLS fingerprint so the panel can show its setup card while
     // the AP is up, but never the activation token (which would re-open owner
