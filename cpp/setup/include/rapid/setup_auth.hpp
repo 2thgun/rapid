@@ -5,7 +5,10 @@
 
 namespace rapid::native {
 class SetupAuth {
-  struct Session { double expires; std::string csrf; };
+  // owner: a digest of the owner credential the session was created for. The
+  // physical owner reset (#44) clears that credential from another process, so
+  // a session must notice it is gone rather than outlive it.
+  struct Session { double expires; std::string csrf; std::string owner; };
   SetupStore &store_;
   std::function<double()> clock_;
   std::mutex mutex_;
