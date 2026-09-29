@@ -626,11 +626,16 @@ int main(int argc, char **argv) {
         if (error.empty()) error = "the Telemetry share password could not be set";
       } else if (!executable(systemctl)) {
         samba_state = "unavailable";
-      } else if (run(systemctl, {"enable", "--now", "smbd", "nmbd"}) == 0) {
-        samba_state = "enabled";
       } else {
-        samba_state = "failed";
-        if (error.empty()) error = "the Telemetry share could not be started";
+        std::vector<std::string> units{"enable", "--now", "smbd", "nmbd"};
+        // wsdd2 lets Windows find the Pi (network discovery, LLMNR name lookup).
+        if (fs::exists(root / "usr/lib/systemd/system/wsdd2.service")) units.push_back("wsdd2");
+        if (run(systemctl, units) == 0) {
+          samba_state = "enabled";
+        } else {
+          samba_state = "failed";
+          if (error.empty()) error = "the Telemetry share could not be started";
+        }
       }
     }
     OPENSSL_cleanse(samba_hash.data(), samba_hash.size());

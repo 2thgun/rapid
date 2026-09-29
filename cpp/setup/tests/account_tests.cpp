@@ -676,6 +676,16 @@ void helper_tests(const fs::path &base, const std::string &helper) {
           "the share's services are enabled and started");
   require(files_containing(device.root, nt).empty(), "the NT hash is written nowhere below the device root");
 
+  // wsdd2 (Windows network discovery and LLMNR name lookup for \\rapid)
+  // starts with the share when the image has it.
+  device.reset("rapid:!:19000:0:99999:7:::\n", "/bin/bash");
+  write_text(device.root / "usr/lib/systemd/system/wsdd2.service", "[Unit]\n");
+  queue({{"request_id", id}, {"password_hash", hash}, {"samba_nt_hash", nt}});
+  require(device.run() == 0 && device.result()["samba"] == "enabled" &&
+              read_file(device.log_directory / "systemctl.log").find("enable --now smbd nmbd wsdd2\n") !=
+                  std::string::npos,
+          "wsdd2 starts with the share when it is installed");
+
   device.reset("rapid:!:19000:0:99999:7:::\n", "/bin/bash");
   write_text(device.tools / "pdbedit-exit", "1\n");
   queue({{"request_id", id}, {"password_hash", hash}, {"samba_nt_hash", nt}});

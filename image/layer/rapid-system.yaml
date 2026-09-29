@@ -18,6 +18,7 @@
 mmdebstrap:
   packages:
     - samba
+    - wsdd2
   customize-hooks:
     - |-
       set -eu
@@ -51,8 +52,9 @@ mmdebstrap:
         'PermitEmptyPasswords no' 'KbdInteractiveAuthentication no' 'PasswordAuthentication no' \
         > "$root/etc/ssh/sshd_config.d/10-rapid-owner.conf"
       chroot "$root" systemctl mask ssh.service ssh.socket
-      # #66: \\rapid\Telemetry. Samba stays off until rapid-account sets the
-      # share's password from the owner's device password and starts it.
+      # #66: \\rapid\Telemetry. Samba (and wsdd2, which lets Windows find the
+      # Pi) stays off until rapid-account sets the share's password from the
+      # owner's device password and starts it.
       printf '\ninclude = /usr/share/rapid/samba/telemetry.conf\n' >> "$root/etc/samba/smb.conf"
-      chroot "$root" systemctl disable smbd nmbd
+      chroot "$root" systemctl disable smbd nmbd wsdd2
       chroot "$root" systemctl enable rapid-firstboot rapid-provision rapid rapid-display rapid-log-status rapid-setup rapid-network-mode rapid-apply.path rapid-wifi.path rapid-account.path
