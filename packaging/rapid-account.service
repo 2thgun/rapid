@@ -33,6 +33,9 @@ ProtectHome=read-only
 ReadWritePaths=/etc -/home/rapid
 # Consumer-side grant for the queue owned by rapid-setup.service (#25).
 ReadWritePaths=/run/rapid-apply
+# #66: pdbedit writes the Telemetry share's password to Samba's passdb and
+# takes its locks under /run/samba. Optional, so an image without Samba starts.
+ReadWritePaths=-/var/lib/samba -/run/samba
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

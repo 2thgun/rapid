@@ -36,4 +36,6 @@ The layer fails the build unless all of these hold:
 - every account password is locked, and there are no `authorized_keys`;
 - there are no SSH host keys, password login is off, and `ssh` is masked until
   the owner turns on device access on the setup page;
-- Samba is installed but disabled.
+- Samba is installed but off. It starts when the owner sets the device
+  password, and shares the recordings read-only as `\\rapid\Telemetry`
+  (user `rapid`, the device password).

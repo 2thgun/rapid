@@ -23,6 +23,7 @@ foreach(path IN ITEMS
     "./usr/lib/rapid/rapid-account"
     "./usr/lib/rapid/rapid-network-mode"
     "./usr/share/rapid/setup.html"
+    "./usr/share/rapid/samba/telemetry.conf"
     "./usr/lib/systemd/system/rapid.service"
     "./usr/lib/systemd/system/rapid-display.service"
     "./usr/lib/systemd/system/rapid-display-recovery.service"
@@ -77,6 +78,7 @@ read_service("./usr/lib/systemd/system/rapid-wifi.service" wifi_service)
 read_service("./usr/lib/systemd/system/rapid-display-recovery.service" display_recovery_service)
 read_service("./usr/lib/rapid/rapid-panel" panel_script)
 read_service("./usr/lib/tmpfiles.d/rapid.conf" tmpfiles_file)
+read_service("./usr/share/rapid/samba/telemetry.conf" samba_share)
 file(REMOVE "${data_tar}")
 set(nl "\n")
 # #22: the setup AP is the fixed, open network "rapid" (or "rapid-NNNN" only
@@ -173,6 +175,8 @@ assert_writable_path("${provision_service}" "rapid-provision.service" "/run/rapi
 assert_writable_path("${setup_service}" "rapid-setup.service" "/run/rapid/calibration-request.json")
 assert_writable_path("${apply_service}" "rapid-apply.service" "/run/rapid-apply/request.json")
 assert_writable_path("${account_service}" "rapid-account.service" "/run/rapid-apply/account-request.json")
+# #66: rapid-account sets the Telemetry share's password with pdbedit.
+assert_writable_path("${account_service}" "rapid-account.service" "/var/lib/samba/private/passdb.tdb")
 assert_writable_path("${wifi_service}" "rapid-wifi.service" "/run/rapid-apply/wifi-result.json")
 assert_writable_path("${display_recovery_service}" "rapid-display-recovery.service" "/var/lib/rapid/display-recovery.json")
 # /run/rapid-apply is the shared setup request/result queue. It used to be
@@ -259,6 +263,15 @@ if(NOT apply_service MATCHES "--display-confirm-file /run/rapid-apply/display-co
    NOT apply_service MATCHES "--display-calibration-file /var/lib/rapid-setup/touch-calibration[.]conf" OR
    NOT panel_script MATCHES "--calibration-file /var/lib/rapid-setup/touch-calibration[.]conf --rollback-calibration --record-input-baseline")
   message(FATAL_ERROR "Orientation must await bounded owner confirmation; touch must follow rotation and roll back unconfirmed calibration")
+endif()
+# #66: the recordings are shared read-only, and only to the rapid account,
+# whose Samba password rapid-account sets from the owner's device password.
+if(NOT samba_share MATCHES "${nl}\\[Telemetry\\]${nl}" OR
+   NOT samba_share MATCHES "${nl} *path = /var/lib/rapid/telemetry${nl}" OR
+   NOT samba_share MATCHES "${nl} *valid users = rapid${nl}" OR
+   NOT samba_share MATCHES "${nl} *read only = yes${nl}" OR
+   samba_share MATCHES "guest|writ|public")
+  message(FATAL_ERROR "The Telemetry share must be read-only and only for the rapid account")
 endif()
 # #23: the device password reaches root only as a hash in a request file that
 # the setup service queues and a sandboxed, path-activated helper consumes.

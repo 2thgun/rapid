@@ -4,6 +4,7 @@
 // password never lands in any artifact the flow produces, logs included.
 #include "rapid/account.hpp"
 #include "rapid/setup_auth.hpp"
+#include <algorithm>
 #include <crypt.h>
 #include <fcntl.h>
 #include <fstream>
@@ -127,14 +128,21 @@ struct FakeDevice {
                  "echo \"$@\" >> '" + (log_directory / "sshd.log").string() + "'\n"
                  "exit \"$(cat '" + (tools / "sshd-exit").string() + "')\"\n");
     write_script(tools / "ssh-keygen", "echo \"$@\" >> '" + (log_directory / "ssh-keygen.log").string() + "'\n");
+    // #66: the import file is an in-memory file the helper hands over as fd 3.
+    write_script(tools / "pdbedit",
+                 "echo \"$@\" >> '" + (log_directory / "pdbedit.args").string() + "'\n"
+                 "cat \"${2#smbpasswd:}\" > '" + (log_directory / "pdbedit.input").string() + "'\n"
+                 "exit \"$(cat '" + (tools / "pdbedit-exit").string() + "')\"\n");
     write_text(tools / "socket-active", "3\n");
     write_text(tools / "sshd-exit", "0\n");
+    write_text(tools / "pdbedit-exit", "0\n");
   }
 
   void reset(const std::string &shadow, const std::string &shell) {
     std::error_code error;
     fs::remove_all(root, error);
-    for (const auto *name : {"chpasswd.args", "chpasswd.input", "systemctl.log", "sshd.log", "ssh-keygen.log"})
+    for (const auto *name : {"chpasswd.args", "chpasswd.input", "systemctl.log", "sshd.log", "ssh-keygen.log",
+                             "pdbedit.args", "pdbedit.input"})
       fs::remove(log_directory / name, error);
     write_text(root / "etc/passwd", "root:x:0:0:root:/root:/bin/bash\nrapid:x:" + std::to_string(uid) + ":" +
                                         std::to_string(gid) + ":raPId:/home/rapid:" + shell + "\n");
@@ -156,7 +164,8 @@ struct FakeDevice {
                                        result_file().string(), "--root", root.string(), "--chpasswd",
                                        (tools / "chpasswd").string(), "--systemctl",
                                        (tools / "systemctl").string(), "--sshd", (tools / "sshd").string(),
-                                       "--ssh-keygen", (tools / "ssh-keygen").string()};
+                                       "--ssh-keygen", (tools / "ssh-keygen").string(), "--pdbedit",
+                                       (tools / "pdbedit").string()};
     arguments.insert(arguments.end(), extra.begin(), extra.end());
     const auto child = fork();
     require(child >= 0, "fork helper");
@@ -166,6 +175,9 @@ struct FakeDevice {
         ::dup2(out, STDOUT_FILENO);
         ::dup2(out, STDERR_FILENO);
       }
+      // systemd starts the helper with only fds 0-2 open; match that, so a
+      // descriptor the helper opens gets the same low numbers as on a device.
+      ::close_range(3, ~0U, 0);
       std::vector<char *> argv;
       for (auto &argument : arguments) argv.push_back(argument.data());
       argv.push_back(nullptr);
@@ -245,6 +257,23 @@ void policy_tests() {
   require(!account::valid_crypt_hash(hash + ":0"), "hash cannot inject a shadow field");
   require(!account::valid_crypt_hash("$1$abcdefgh$abcdefghijklmnopqrstuv"), "MD5-crypt rejected");
   require(!account::valid_crypt_hash("Tr4ck-day-at-Spa-plaintext"), "plaintext is never a hash");
+  // #66: the Telemetry share's Samba password is the NT hash, MD4 of the
+  // UTF-16LE password. Reference values are from real Samba 4.19
+  // (pdbedit -a -t, then pdbedit -L -w).
+  require(account::nt_hash("password") == "8846F7EAEE8FB117AD06BDD830B7586C", "NT hash of an ASCII password");
+  require(account::nt_hash("Tr4ck-day-at-Spa") == "82607112CF216734A89660D1D89DA2BA", "NT hash of a longer password");
+  require(account::nt_hash("Caf\xc3\xa9 Stra\xc3\x9f" "e") == "5F6AC3ED7E3D942778A0C17891421C44",
+          "NT hash of a non-ASCII password");
+  require(account::nt_hash("pit\xf0\x9f\x98\x80lane") == "05348C531F4326D2CB1777DE233DFC35",
+          "NT hash of a password outside the BMP (UTF-16 surrogate pair)");
+  require(account::nt_hash("bad\xff").empty() && account::nt_hash("\xc0\xaf").empty(),
+          "invalid UTF-8 has no NT hash");
+  require(account::valid_nt_hash("8846F7EAEE8FB117AD06BDD830B7586C"), "an NT hash is 32 uppercase hex digits");
+  require(!account::valid_nt_hash("8846f7eaee8fb117ad06bdd830b7586c") &&
+              !account::valid_nt_hash("8846F7EAEE8FB117AD06BDD830B7586") &&
+              !account::valid_nt_hash("8846F7EAEE8FB117AD06BDD830B7586C:") &&
+              !account::valid_nt_hash("8846F7EAEE8FB117AD06BDD830B7586C\nroot"),
+          "an NT hash cannot carry another smbpasswd field or line");
   require(!account::shadow_password_usable("") && !account::shadow_password_usable("!") &&
               !account::shadow_password_usable("*") && !account::shadow_password_usable("!$y$abc") &&
               account::shadow_password_usable(hash),
@@ -357,9 +386,11 @@ void api_tests(const fs::path &base) {
   const auto contents = read_file(request_file);
   require(contents.find(password) == std::string::npos, "request never contains the plaintext password");
   const auto queued = Json::parse(contents);
-  require(queued.size() == 4 && queued["request_id"] == id && queued["authorized_key"] == key &&
+  require(queued.size() == 5 && queued["request_id"] == id && queued["authorized_key"] == key &&
               queued["replace_existing_password"] == true,
-          "request carries id, normalized key and explicit confirmation");
+          "request carries id, normalized key, explicit confirmation and the two hashes");
+  require(queued["samba_nt_hash"] == account::nt_hash(password),
+          "request carries the NT hash for the Telemetry share (#66)");
   const auto hash = queued["password_hash"].get<std::string>();
   crypt_data data{};
   require(hash.starts_with("$y$") && std::string(crypt_rn(password.c_str(), hash.c_str(), &data, sizeof data)) == hash,
@@ -369,11 +400,13 @@ void api_tests(const fs::path &base) {
   require(status["queued"] == true && !status.contains("result"), "status reports the queued change");
 
   atomic_file(result_file, Json{{"request_id", id}, {"status", "applied"}, {"password_set", true},
-                                {"ssh", "enabled"}, {"password_hash", hash}, {"extra", {{"x", 1}}}}.dump());
+                                {"ssh", "enabled"}, {"samba", "enabled"}, {"password_hash", hash},
+                                {"extra", {{"x", 1}}}}.dump());
   fs::remove(request_file);
   status = Json::parse(auth.handle(authed(request("/api/v1/account"))).body);
   require(status["queued"] == false && status["result"]["status"] == "applied" &&
-              status["result"]["ssh"] == "enabled" && !status["result"].contains("password_hash") &&
+              status["result"]["ssh"] == "enabled" && status["result"]["samba"] == "enabled" &&
+              !status["result"].contains("password_hash") &&
               !status["result"].contains("extra"),
           "only allowlisted status fields reach the browser");
 
@@ -616,6 +649,57 @@ void helper_tests(const fs::path &base, const std::string &helper) {
   require(device.run() == 1 && !fs::exists(device.log_directory / "chpasswd.input") &&
               fs::exists(base / "linked-request.json"),
           "a symlinked request is refused without following it");
+
+  // 7. #66: the owner's password is also the Telemetry share's Samba password,
+  // and the share is switched on once it has one.
+  const auto nt = account::nt_hash(password);
+  rejected("Samba hash without a password",
+           Json{{"request_id", id}, {"samba_nt_hash", nt}, {"authorized_key", ed25519_key(8)}}.dump());
+  rejected("Samba hash line injection",
+           Json{{"request_id", id}, {"password_hash", hash}, {"samba_nt_hash", nt + "\nroot:0"}}.dump());
+  require(!fs::exists(device.log_directory / "pdbedit.input"), "a rejected request never reaches pdbedit");
+
+  device.reset("rapid:!:19000:0:99999:7:::\n", "/bin/bash");
+  queue({{"request_id", id}, {"password_hash", hash}, {"samba_nt_hash", nt}});
+  require(device.run() == 0, "password and Samba hash apply");
+  result = device.result();
+  require(result["status"] == "applied" && result["password_changed"] == true && result["samba"] == "enabled",
+          "the result reports the share enabled: " + result.dump());
+  const auto imported = read_file(device.log_directory / "pdbedit.input");
+  require(imported.starts_with("rapid:" + std::to_string(device.uid) + ":" + std::string(32, 'X') + ":" + nt +
+                               ":[U          ]:LCT-") &&
+              imported.ends_with(":\n") && std::count(imported.begin(), imported.end(), '\n') == 1,
+          "pdbedit imports exactly one smbpasswd line for the account: " + imported);
+  require(read_file(device.log_directory / "pdbedit.args") == "-i smbpasswd:/proc/self/fd/3\n",
+          "pdbedit reads the in-memory import file, never a path on disk");
+  require(read_file(device.log_directory / "systemctl.log").find("enable --now smbd nmbd\n") != std::string::npos,
+          "the share's services are enabled and started");
+  require(files_containing(device.root, nt).empty(), "the NT hash is written nowhere below the device root");
+
+  device.reset("rapid:!:19000:0:99999:7:::\n", "/bin/bash");
+  write_text(device.tools / "pdbedit-exit", "1\n");
+  queue({{"request_id", id}, {"password_hash", hash}, {"samba_nt_hash", nt}});
+  require(device.run() == 1, "a failed Samba import is a failure");
+  result = device.result();
+  require(result["status"] == "failed" && result["samba"] == "failed" && result["password_changed"] == true &&
+              read_file(device.log_directory / "systemctl.log").find("smbd") == std::string::npos,
+          "the share stays off when its password could not be set: " + result.dump());
+  write_text(device.tools / "pdbedit-exit", "0\n");
+
+  device.reset("rapid:!:19000:0:99999:7:::\n", "/bin/bash");
+  queue({{"request_id", id}, {"password_hash", hash}, {"samba_nt_hash", nt}});
+  require(device.run({"--pdbedit", (device.tools / "no-samba").string()}) == 0,
+          "an image without Samba still applies the password");
+  result = device.result();
+  require(result["status"] == "applied" && result["samba"] == "unavailable" &&
+              read_file(device.log_directory / "systemctl.log").find("smbd") == std::string::npos,
+          "without Samba the share is reported unavailable: " + result.dump());
+
+  device.reset("rapid:" + yescrypt("Existing-dev-pass1") + ":19000:0:99999:7:::\n", "/bin/bash");
+  queue({{"request_id", id}, {"password_hash", hash}, {"samba_nt_hash", nt}});
+  require(device.run() == 0 && device.result()["status"] == "confirmation_required" &&
+              !fs::exists(device.log_directory / "pdbedit.input"),
+          "an unconfirmed password change leaves the share password alone");
 }
 
 // #22 follow-up for f5-open-ap: the public setup status names the AP in use.
@@ -650,7 +734,7 @@ void secret_tests(const fs::path &base, const std::string &helper) {
   const auto server_log = flow / "logs/setup-server.log";
   std::ofstream server_log_stream(server_log);
   auto *previous = std::cerr.rdbuf(server_log_stream.rdbuf());
-  std::string hash;
+  std::string hash, nt;
   {
     SetupStore store(flow / "setup-state");
     SetupAuth auth(store, 8002, monotonic, {}, "127.0.0.1", {}, {}, {}, {}, {}, nullptr, true);
@@ -668,6 +752,7 @@ void secret_tests(const fs::path &base, const std::string &helper) {
     server_log_stream << response.body << "\n";
     require(response.status == 202, "flow change queued");
     hash = Json::parse(read_file(device.request_file()))["password_hash"].get<std::string>();
+    nt = Json::parse(read_file(device.request_file()))["samba_nt_hash"].get<std::string>();
     require(device.run() == 0, "flow helper applies");
     auto status = request("/api/v1/account");
     status.headers["cookie"] = change.headers["cookie"];
@@ -690,6 +775,9 @@ void secret_tests(const fs::path &base, const std::string &helper) {
   for (const auto &path : files_containing(flow, hash))
     require(path == device.root / "etc/shadow" || path == device.log_directory / "chpasswd.input",
             "password hash persisted outside shadow: " + path.string());
+  require(nt == account::nt_hash(password), "flow NT hash matches the password");
+  for (const auto &path : files_containing(flow, nt))
+    require(path == device.log_directory / "pdbedit.input", "NT hash persisted outside Samba: " + path.string());
   require(!fs::exists(device.request_file()), "flow request removed");
 }
 

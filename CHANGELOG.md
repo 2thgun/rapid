@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The `\\rapid\Telemetry` share is now part of the image instead of a manual
+  setup. It is read-only, for the `rapid` account only, and uses the device
+  password: setting that password on the setup page also sets the share's
+  password and starts Samba (#66).
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
