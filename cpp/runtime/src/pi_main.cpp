@@ -162,6 +162,13 @@ int main(int argc, char **argv) {
               value["available"] = true;
               return {200, value.dump()};
             }
+            // These two writes are unauthenticated, so only the device itself
+            // (the panel, or an SSH tunnel) may make them, even when [app] host
+            // is set to listen on every address.
+            if ((req.method == "POST" && path == "/api/v1/network/mode") ||
+                (req.method == "PUT" && path == "/api/v1/session/upload"))
+              if (!req.loopback)
+                return {403, "{\"detail\":\"only the device itself can change this\"}"};
             if (req.method == "POST" && path == "/api/v1/network/mode") {
               auto body = Json::parse(req.body);
               if (!body.is_object() || !body.contains("mode") ||

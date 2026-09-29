@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The runtime API's two unauthenticated writes (Wi-Fi mode and session
+  upload) now accept only requests from the device itself. A config that sets
+  `[app] host = "0.0.0.0"` no longer lets anyone on the network turn the Pi's
+  Wi-Fi off; reads still work from the network.
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
