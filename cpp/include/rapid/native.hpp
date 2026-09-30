@@ -257,6 +257,8 @@ struct Response {
 struct Request {
   std::string method, target, body;
   std::map<std::string, std::string> headers;
+  // The peer is this device itself (127.0.0.0/8 or ::1), not another machine.
+  bool loopback = false;
 };
 using Handler = std::function<Response(const Request &)>;
 void serve(const std::string &host, int port, Handler handler,

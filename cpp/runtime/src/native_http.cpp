@@ -13,6 +13,14 @@ namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace http = beast::http;
 using tcp = asio::ip::tcp;
+static bool loopback_peer(const tcp::socket &socket) {
+  boost::system::error_code error;
+  auto address = socket.remote_endpoint(error).address();
+  if (error) return false;
+  if (address.is_v6() && address.to_v6().is_v4_mapped())
+    address = asio::ip::make_address_v4(asio::ip::v4_mapped, address.to_v6());
+  return address.is_loopback();
+}
 void serve(const std::string &host, int port, Handler handler,
            Runtime *runtime) {
   asio::io_context context;
@@ -124,8 +132,8 @@ void serve(const std::string &host, int port, Handler handler,
             }
             continue;
           }
-          Request request{
-              std::string(req.method_string()), target, req.body(), {}};
+          Request request{std::string(req.method_string()), target,
+                          req.body(), {}, loopback_peer(socket)};
           for (const auto &field : req) {
             auto name = std::string(field.name_string());
             for (auto &c : name)
@@ -266,7 +274,8 @@ void serve_tls(const std::string &host, int port, Handler handler,
           http::read(stream, buffer, parser);
           auto req = parser.release();
           Request request{std::string(req.method_string()),
-                          std::string(req.target()), req.body(), {}};
+                          std::string(req.target()), req.body(), {},
+                          loopback_peer(stream.next_layer())};
           for (const auto &field : req) {
             auto name = std::string(field.name_string());
             for (auto &c : name)
