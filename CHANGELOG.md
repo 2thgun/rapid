@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The `\\rapid\Telemetry` share is now part of the image instead of a manual
+  setup. It is read-only, for the `rapid` account only, and uses the device
+  password: setting that password on the setup page also sets the share's
+  password and starts Samba and wsdd2 (#66).
 - The runtime API's two unauthenticated writes (Wi-Fi mode and session
   upload) now accept only requests from the device itself. A config that sets
   `[app] host = "0.0.0.0"` no longer lets anyone on the network turn the Pi's

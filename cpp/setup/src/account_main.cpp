@@ -8,15 +8,20 @@
 // It never receives a plaintext password. The setup server hashes the owner's
 // password (yescrypt) and queues only the hash; this helper re-validates every
 // field because the request directory is writable by the setup service user.
+// The same request may carry the password's NT hash, which becomes the Samba
+// password of the Telemetry share (#66).
 #include "rapid/account.hpp"
 #include "rapid/native.hpp"
 #include <csignal>
+#include <cstdio>
+#include <ctime>
 #include <fcntl.h>
 #include <grp.h>
 #include <iostream>
 #include <openssl/crypto.h>
 #include <optional>
 #include <sstream>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -104,9 +109,10 @@ char *const clean_environment[] = {const_cast<char *>("PATH=/usr/sbin:/usr/bin:/
                                    const_cast<char *>("LC_ALL=C"), nullptr};
 
 // Runs a fixed program with a clean environment and silenced output. Optional
-// stdin data travels through a pipe, never through argv or the environment.
+// stdin data travels through a pipe, never through argv or the environment. An
+// optional descriptor is handed to the program as fd 3.
 int run(const fs::path &program, const std::vector<std::string> &arguments,
-        const std::string *input = nullptr) {
+        const std::string *input = nullptr, int descriptor = -1) {
   int pipe_fds[2] = {-1, -1};
   if (input && ::pipe2(pipe_fds, O_CLOEXEC) != 0) throw Failure("cannot create helper pipe");
   const auto child = fork();
@@ -119,6 +125,10 @@ int run(const fs::path &program, const std::vector<std::string> &arguments,
       ::dup2(null, STDOUT_FILENO);
       ::dup2(null, STDERR_FILENO);
     }
+    // dup2 onto itself keeps close-on-exec, and under systemd the descriptor
+    // often already is fd 3, so clear the flag directly in that case.
+    if (descriptor == 3 && ::fcntl(3, F_SETFD, 0) != 0) _exit(127);
+    if (descriptor >= 0 && descriptor != 3 && ::dup2(descriptor, 3) != 3) _exit(127);
     auto argv = argv_of(program, arguments);
     ::execve(program.c_str(), argv.data(), clean_environment);
     _exit(127);
@@ -141,6 +151,24 @@ int run(const fs::path &program, const std::vector<std::string> &arguments,
 bool executable(const fs::path &program) {
   std::error_code error;
   return fs::is_regular_file(program, error) && ::access(program.c_str(), X_OK) == 0;
+}
+
+// #66: sets the account's Samba password from its NT hash. pdbedit imports an
+// smbpasswd-format line, which it only reads from a real file (a pipe is
+// silently ignored), so the line lives in an in-memory file and never on disk.
+bool import_samba_password(const fs::path &pdbedit, const std::string &user, uid_t uid, std::string &nt_hash) {
+  char stamp[9];
+  std::snprintf(stamp, sizeof stamp, "%08llX", static_cast<unsigned long long>(::time(nullptr)) & 0xffffffffULL);
+  auto line = user + ":" + std::to_string(uid) + ":" + std::string(32, 'X') + ":" + nt_hash +
+              ":[U          ]:LCT-" + stamp + ":\n";
+  OPENSSL_cleanse(nt_hash.data(), nt_hash.size());
+  const int memory = ::memfd_create("rapid-samba", MFD_CLOEXEC);
+  bool ok = memory >= 0 && ::write(memory, line.data(), line.size()) == static_cast<ssize_t>(line.size()) &&
+            ::lseek(memory, 0, SEEK_SET) == 0;
+  OPENSSL_cleanse(line.data(), line.size());
+  if (ok) ok = run(pdbedit, {"-i", "smbpasswd:/proc/self/fd/3"}, nullptr, memory) == 0;
+  if (memory >= 0) ::close(memory);
+  return ok;
 }
 
 // Appends the key as the account itself, so a symlink or hard link planted in
@@ -372,7 +400,7 @@ int main(int argc, char **argv) {
   fs::path request_file, result_file, root = "/";
   std::string user = "rapid";
   fs::path chpasswd = "/usr/sbin/chpasswd", systemctl = "/usr/bin/systemctl", sshd = "/usr/sbin/sshd",
-           ssh_keygen = "/usr/bin/ssh-keygen";
+           ssh_keygen = "/usr/bin/ssh-keygen", pdbedit = "/usr/bin/pdbedit";
   std::string request_id;
   Json result{{"status", "failed"}};
   try {
@@ -380,9 +408,9 @@ int main(int argc, char **argv) {
       const std::string option = argv[i];
       if (option == "--help") {
         std::cout << "rapid-account --request-file PATH --result-file PATH [--user NAME] [--root PATH] "
-                     "[--chpasswd PATH] [--systemctl PATH] [--sshd PATH] [--ssh-keygen PATH]\n"
+                     "[--chpasswd PATH] [--systemctl PATH] [--sshd PATH] [--ssh-keygen PATH] [--pdbedit PATH]\n"
                      "Applies an owner-chosen password hash and SSH public key for the local account, "
-                     "then enables SSH. Never accepts a plaintext password.\n";
+                     "then enables SSH and the Telemetry share. Never accepts a plaintext password.\n";
         return 0;
       } else if (option == "--request-file" && i + 1 < argc) request_file = argv[++i];
       else if (option == "--result-file" && i + 1 < argc) result_file = argv[++i];
@@ -392,6 +420,7 @@ int main(int argc, char **argv) {
       else if (option == "--systemctl" && i + 1 < argc) systemctl = argv[++i];
       else if (option == "--sshd" && i + 1 < argc) sshd = argv[++i];
       else if (option == "--ssh-keygen" && i + 1 < argc) ssh_keygen = argv[++i];
+      else if (option == "--pdbedit" && i + 1 < argc) pdbedit = argv[++i];
       else throw Failure("unknown or incomplete argument; use --help");
     }
     require(!request_file.empty() && !result_file.empty(), "request and result files are required");
@@ -408,7 +437,8 @@ int main(int argc, char **argv) {
     result["request_id"] = request_id;
     for (const auto &[key, value] : request.items())
       require(key == "request_id" || key == "password_hash" || key == "authorized_key" ||
-                  key == "replace_existing_password" || key == "action" || key == "remove_fingerprint",
+                  key == "replace_existing_password" || key == "action" || key == "remove_fingerprint" ||
+                  key == "samba_nt_hash",
               "invalid account request");
     // #28 management: an explicit action distinguishes a key list or removal
     // from the default password/key apply. Only the same fixed request file
@@ -419,7 +449,7 @@ int main(int argc, char **argv) {
       action = request["action"].get<std::string>();
       require(action == "list_keys" || action == "remove_key", "invalid account request");
     }
-    std::string hash, key_line, remove_fingerprint;
+    std::string hash, key_line, remove_fingerprint, samba_hash;
     bool replace = false;
     if (request.contains("password_hash")) {
       require(request["password_hash"].is_string(), "invalid account request");
@@ -443,10 +473,18 @@ int main(int argc, char **argv) {
                   remove_fingerprint.find_first_not_of("0123456789abcdef") == std::string::npos,
               "invalid SSH key fingerprint");
     }
-    if (request.contains("password_hash")) {
-      auto &stored = request["password_hash"].get_ref<std::string &>();
-      OPENSSL_cleanse(stored.data(), stored.size());
+    if (request.contains("samba_nt_hash")) {
+      require(request["samba_nt_hash"].is_string(), "invalid account request");
+      samba_hash = request["samba_nt_hash"].get<std::string>();
+      require(account::valid_nt_hash(samba_hash), "invalid Samba password hash");
+      // The share password is always the account password, never on its own.
+      require(!hash.empty(), "invalid account request");
     }
+    for (const char *secret : {"password_hash", "samba_nt_hash"})
+      if (request.contains(secret)) {
+        auto &stored = request[secret].get_ref<std::string &>();
+        OPENSSL_cleanse(stored.data(), stored.size());
+      }
     if (action == "list_keys")
       require(hash.empty() && key_line.empty() && remove_fingerprint.empty(), "invalid account request");
     if (action == "remove_key")
@@ -492,6 +530,7 @@ int main(int argc, char **argv) {
     // explicitly confirmed it. Nothing at all is changed otherwise.
     if (!hash.empty() && had_password && !replace) {
       OPENSSL_cleanse(hash.data(), hash.size());
+      OPENSSL_cleanse(samba_hash.data(), samba_hash.size());
       result = {{"request_id", request_id}, {"status", "confirmation_required"}, {"password_set", true}};
       write_public_file(result_file, result.dump() + "\n");
       log("INFO account: an existing password needs explicit confirmation; nothing changed");
@@ -576,6 +615,30 @@ int main(int argc, char **argv) {
         }
       }
     }
+    // #66: the Telemetry share uses the account password. Samba ships disabled
+    // and starts only once the account has a password it can check.
+    std::string samba_state = "unchanged";
+    if (password_changed && !samba_hash.empty()) {
+      if (!executable(pdbedit)) {
+        samba_state = "unavailable";
+      } else if (!import_samba_password(pdbedit, user, target->uid, samba_hash)) {
+        samba_state = "failed";
+        if (error.empty()) error = "the Telemetry share password could not be set";
+      } else if (!executable(systemctl)) {
+        samba_state = "unavailable";
+      } else {
+        std::vector<std::string> units{"enable", "--now", "smbd", "nmbd"};
+        // wsdd2 lets Windows find the Pi (network discovery, LLMNR name lookup).
+        if (fs::exists(root / "usr/lib/systemd/system/wsdd2.service")) units.push_back("wsdd2");
+        if (run(systemctl, units) == 0) {
+          samba_state = "enabled";
+        } else {
+          samba_state = "failed";
+          if (error.empty()) error = "the Telemetry share could not be started";
+        }
+      }
+    }
+    OPENSSL_cleanse(samba_hash.data(), samba_hash.size());
     result = {{"request_id", request_id},
               {"status", error.empty() ? "applied" : "failed"},
               {"password_set", has_password},
@@ -583,11 +646,12 @@ int main(int argc, char **argv) {
               {"ssh_key", key_state},
               {"ssh", ssh_state},
               {"ssh_password_login", has_password && ssh_state == "enabled"},
+              {"samba", samba_state},
               {"keys", enrolled_keys(*target, home)}};
     if (!error.empty()) result["error"] = error;
     write_public_file(result_file, result.dump() + "\n");
     log(std::string("INFO account: password ") + (password_changed ? "updated" : "unchanged") +
-        "; SSH key " + key_state + "; SSH " + ssh_state);
+        "; SSH key " + key_state + "; SSH " + ssh_state + "; Telemetry share " + samba_state);
     return error.empty() ? 0 : 1;
   } catch (const std::exception &failure) {
     // Messages are fixed strings or filesystem paths; no request content.

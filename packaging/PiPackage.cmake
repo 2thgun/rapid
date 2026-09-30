@@ -40,6 +40,7 @@ install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.service"
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.sysusers" DESTINATION lib/sysusers.d RENAME rapid.conf)
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/rapid.tmpfiles" DESTINATION lib/tmpfiles.d RENAME rapid.conf)
 install(PROGRAMS "${CMAKE_CURRENT_LIST_DIR}/rapid-panel" DESTINATION lib/rapid)
+install(FILES "${CMAKE_CURRENT_LIST_DIR}/samba-telemetry.conf" DESTINATION share/rapid/samba RENAME telemetry.conf)
 # Off by default: the marker means "this package is the complete first-time
 # flow" and must not appear on ordinary main builds. Release.yml turns it on.
 if(RAPID_IMAGE_READY)
