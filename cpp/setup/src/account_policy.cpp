@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <iomanip>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <set>
 #include <sstream>
@@ -36,6 +37,76 @@ bool well_formed_utf8(const std::string &text) {
     i += extra + 1;
   }
   return true;
+}
+
+// UTF-8 to UTF-16LE for a string that already passed well_formed_utf8.
+std::vector<unsigned char> utf16le(const std::string &text) {
+  std::vector<unsigned char> out;
+  out.reserve(text.size() * 2);
+  const auto put = [&](std::uint32_t unit) {
+    out.push_back(static_cast<unsigned char>(unit & 0xff));
+    out.push_back(static_cast<unsigned char>(unit >> 8));
+  };
+  std::size_t i = 0;
+  while (i < text.size()) {
+    const auto c = static_cast<unsigned char>(text[i]);
+    const std::size_t extra = c < 0x80 ? 0 : c < 0xe0 ? 1 : c < 0xf0 ? 2 : 3;
+    std::uint32_t code = extra == 0 ? c : c & (0x3f >> extra);
+    for (std::size_t k = 1; k <= extra; ++k) code = (code << 6) | (static_cast<unsigned char>(text[i + k]) & 0x3f);
+    i += extra + 1;
+    if (code < 0x10000) {
+      put(code);
+    } else {
+      code -= 0x10000;
+      put(0xd800 | (code >> 10));
+      put(0xdc00 | (code & 0x3ff));
+    }
+  }
+  return out;
+}
+
+// MD4 (RFC 1320). OpenSSL 3 keeps it in the legacy provider, which Debian does
+// not load by default, and Samba's NT hash still needs it.
+std::array<unsigned char, 16> md4(const std::vector<unsigned char> &message) {
+  std::uint32_t a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+  auto padded = message;
+  padded.push_back(0x80);
+  while (padded.size() % 64 != 56) padded.push_back(0);
+  const std::uint64_t bits = static_cast<std::uint64_t>(message.size()) * 8;
+  for (int k = 0; k < 8; ++k) padded.push_back(static_cast<unsigned char>(bits >> (8 * k)));
+  const auto rotl = [](std::uint32_t x, int s) { return (x << s) | (x >> (32 - s)); };
+  for (std::size_t block = 0; block < padded.size(); block += 64) {
+    std::uint32_t x[16];
+    for (int k = 0; k < 16; ++k)
+      x[k] = static_cast<std::uint32_t>(padded[block + 4 * k]) | static_cast<std::uint32_t>(padded[block + 4 * k + 1]) << 8 |
+             static_cast<std::uint32_t>(padded[block + 4 * k + 2]) << 16 |
+             static_cast<std::uint32_t>(padded[block + 4 * k + 3]) << 24;
+    const std::uint32_t aa = a, bb = b, cc = c, dd = d;
+    const auto f = [](std::uint32_t x1, std::uint32_t y, std::uint32_t z) { return (x1 & y) | (~x1 & z); };
+    const auto g = [](std::uint32_t x1, std::uint32_t y, std::uint32_t z) { return (x1 & y) | (x1 & z) | (y & z); };
+    const auto h = [](std::uint32_t x1, std::uint32_t y, std::uint32_t z) { return x1 ^ y ^ z; };
+    constexpr int s1[4] = {3, 7, 11, 19}, s2[4] = {3, 5, 9, 13}, s3[4] = {3, 9, 11, 15};
+    constexpr int order3[16] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
+    for (int k = 0; k < 16; ++k) {
+      const auto t = rotl(a + f(b, c, d) + x[k], s1[k % 4]);
+      a = d; d = c; c = b; b = t;
+    }
+    for (int k = 0; k < 16; ++k) {
+      const auto t = rotl(a + g(b, c, d) + x[(k % 4) * 4 + k / 4] + 0x5a827999, s2[k % 4]);
+      a = d; d = c; c = b; b = t;
+    }
+    for (int k = 0; k < 16; ++k) {
+      const auto t = rotl(a + h(b, c, d) + x[order3[k]] + 0x6ed9eba1, s3[k % 4]);
+      a = d; d = c; c = b; b = t;
+    }
+    a += aa; b += bb; c += cc; d += dd;
+    OPENSSL_cleanse(x, sizeof x);
+  }
+  OPENSSL_cleanse(padded.data(), padded.size());
+  std::array<unsigned char, 16> digest{};
+  const std::uint32_t words[4] = {a, b, c, d};
+  for (int k = 0; k < 16; ++k) digest[k] = static_cast<unsigned char>(words[k / 4] >> (8 * (k % 4)));
+  return digest;
 }
 
 std::string lower_ascii(std::string text) {
@@ -232,6 +303,25 @@ bool valid_crypt_hash(const std::string &hash) {
   if (!hash.starts_with("$y$") && !hash.starts_with("$6$")) return false;
   return hash.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./$=") ==
          std::string::npos;
+}
+
+std::string nt_hash(const std::string &password) {
+  if (!well_formed_utf8(password)) return {};
+  auto units = utf16le(password);
+  auto digest = md4(units);
+  OPENSSL_cleanse(units.data(), units.size());
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  std::string hex;
+  for (const auto byte : digest) {
+    hex.push_back(kHex[byte >> 4]);
+    hex.push_back(kHex[byte & 0x0f]);
+  }
+  OPENSSL_cleanse(digest.data(), digest.size());
+  return hex;
+}
+
+bool valid_nt_hash(const std::string &hash) {
+  return hash.size() == 32 && hash.find_first_not_of("0123456789ABCDEF") == std::string::npos;
 }
 
 bool shadow_password_usable(const std::string &field) {

@@ -92,7 +92,7 @@ Response SetupAuth::handle_account(const Request &request, const std::string &,
         // public key material only (type/comment/line/fingerprint).
         Json status = Json::object();
         for (const char *key : {"request_id", "status", "password_set", "password_changed", "ssh_key", "ssh",
-                                "ssh_password_login", "error"})
+                                "ssh_password_login", "samba", "error"})
           if (result.contains(key) && (result[key].is_string() || result[key].is_boolean()))
             status[key] = result[key];
         if (result.contains("keys") && result["keys"].is_array()) {
@@ -211,13 +211,16 @@ Response SetupAuth::handle_account(const Request &request, const std::string &,
       scrub();
       return json_reply(503, {{"detail", "password hashing is unavailable"}});
     }
+    // #66: the Telemetry share takes the same password. Samba needs the NT
+    // hash, which only the plaintext can give, so it is computed here too.
+    queued_request["samba_nt_hash"] = account::nt_hash(password);
     scrub();
     queued_request["replace_existing_password"] = body.value("replace_existing_password", false);
   }
   const auto id = queued_request["request_id"].get<std::string>();
   auto serialized = queued_request.dump();
-  if (queued_request.contains("password_hash"))
-    cleanse(queued_request["password_hash"].get_ref<std::string &>());
+  for (const char *secret : {"password_hash", "samba_nt_hash"})
+    if (queued_request.contains(secret)) cleanse(queued_request[secret].get_ref<std::string &>());
   try {
     write_private_request(account_request_file_, serialized);
   } catch (const std::exception &) {

@@ -238,6 +238,13 @@ void serve_tls(const std::string &host, int port, Handler handler,
   const tcp::endpoint endpoint{asio::ip::make_address(host),
                                 static_cast<unsigned short>(port)};
   acceptor.open(endpoint.protocol());
+  // The same two properties serve() gets from its acceptor constructor and
+  // non_blocking(true) (#75). Non-blocking is what lets the accept loop below
+  // see `stopping`: a blocking accept() ignored SIGTERM until a client
+  // connected, so rapid-pi with pairing enabled hung until systemd's 90 s stop
+  // timeout SIGKILLed it. Address reuse lets a restart rebind straight away.
+  acceptor.set_option(tcp::acceptor::reuse_address(true));
+  acceptor.non_blocking(true);
   acceptor.bind(endpoint);
   acceptor.listen(tcp::acceptor::max_listen_connections);
   std::mutex mutex;

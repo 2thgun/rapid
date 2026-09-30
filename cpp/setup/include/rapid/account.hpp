@@ -40,6 +40,16 @@ std::string key_fingerprint(const std::string &blob_base64);
 // so it can never inject another chpasswd line or field.
 bool valid_crypt_hash(const std::string &hash);
 
+// Samba's NT hash of the password (#66): uppercase hex MD4 of its UTF-16LE
+// form. The Telemetry share takes the same password as the account, and Samba
+// cannot derive this from a crypt hash, so the setup server computes it while
+// it still holds the plaintext. Empty when the password is not valid UTF-8.
+std::string nt_hash(const std::string &password);
+
+// Exactly 32 uppercase hex digits, so it can never inject another smbpasswd
+// field or line.
+bool valid_nt_hash(const std::string &hash);
+
 // Whether a shadow password field allows password authentication. Empty,
 // locked ("!...") and disabled ("*...") fields do not.
 bool shadow_password_usable(const std::string &field);

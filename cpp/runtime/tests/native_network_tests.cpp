@@ -42,6 +42,27 @@ struct Process {
     }
   }
 };
+// #75: SIGTERM must stop a server process promptly and cleanly. The Process
+// destructor above only waits and then SIGKILLs, so a hung stop went unnoticed.
+double stop_promptly(Process &process, const char *what) {
+  const auto started = std::chrono::steady_clock::now();
+  kill(process.pid, SIGTERM);
+  int status = 0;
+  bool stopped = false;
+  while (std::chrono::steady_clock::now() - started < std::chrono::seconds(5)) {
+    if (waitpid(process.pid, &status, WNOHANG) == process.pid) {
+      stopped = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  if (stopped) process.pid = -1;
+  const std::string label(what);
+  require(stopped, ("#75: " + label + " exits within 5 s of SIGTERM").c_str());
+  require(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          ("#75: " + label + " exits cleanly on SIGTERM").c_str());
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+}
 http::response<http::string_body> request_to(const std::string &host, int port, http::verb method,
                                              const std::string &path,
                                              const std::string &body = "",
@@ -499,8 +520,65 @@ int main(int argc, char **argv) {
       std::cerr << "HTTPS response status=" << tls_status << " cache="
                 << tls_cache_control << " error=" << tls_error << "\n";
     require(tls_ready, "setup transport serves a real HTTPS request");
+
+    // #75: rapid-pi with the pairing TLS listener enabled (as on the Pi) must
+    // stop promptly on SIGTERM. serve_tls() used to leave its acceptor
+    // blocking, so its thread sat in accept() ignoring `stopping` and systemd
+    // had to SIGKILL the process after its 90 s stop timeout on every restart
+    // and upgrade. The Process helper above only waits and kills, so it never
+    // noticed; this measures the stop and requires a clean exit.
+    {
+      const auto pairing_setup = root / "pairing-setup";
+      fs::create_directories(pairing_setup);
+      fs::permissions(pairing_setup, fs::perms::owner_all);
+      test_tls_material(pairing_setup / "device.crt", pairing_setup / "device.key");
+      const int pairing_port = port + 4;
+      Process pairing_runtime{fork()};
+      if (pairing_runtime.pid == 0) {
+        setenv("RAPID_CONFIG", "/nonexistent/rapid-test.toml", 1);
+        setenv("RAPID_APP_HOST", "127.0.0.1", 1);
+        setenv("RAPID_APP_PORT", std::to_string(port + 5).c_str(), 1);
+        setenv("RAPID_COMPANION_PORT", std::to_string(udp + 5).c_str(), 1);
+        setenv("RAPID_NETWORK_CONTROL_DIRECTORY", (root / "pairing-network-control").c_str(), 1);
+        setenv("RAPID_ASSETS_DIRECTORY", argv[2], 1);
+        setenv("RAPID_DATABASE_PATH", (root / "pairing-rapid.db").c_str(), 1);
+        setenv("RAPID_SETUP_STATE_DIRECTORY", pairing_setup.c_str(), 1);
+        setenv("RAPID_TELEMETRY_DIRECTORY", (root / "pairing-telemetry").c_str(), 1);
+        setenv("RAPID_PAIRING_ENABLED", "true", 1);
+        setenv("RAPID_PAIRING_HOST", "127.0.0.1", 1);
+        setenv("RAPID_PAIRING_PORT", std::to_string(pairing_port).c_str(), 1);
+        setenv("RAPID_UPLOAD_ENABLED", "false", 1);
+        setenv("RAPID_ACC_ENABLED", "false", 1);
+        int fd = ::open((root / "pairing-runtime.log").c_str(), O_WRONLY | O_CREAT, 0600);
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
+        ::close(fd);
+        execl(argv[1], argv[1], nullptr);
+        _exit(127);
+      }
+      bool pairing_ready = false;
+      for (int i = 0; i < 100 && !pairing_ready; ++i) {
+        try {
+          pairing_ready = tls_request(pairing_port, http::verb::get, "/api/v1/setup").result_int() == 200;
+        } catch (const std::exception &) {
+        }
+        if (!pairing_ready) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      require(pairing_ready, "the pairing listener answers over TLS");
+      // A client that connects and never speaks, as a stalled companion would.
+      asio::io_context idle_io;
+      tcp::socket idle(idle_io);
+      idle.connect({asio::ip::make_address("127.0.0.1"), static_cast<unsigned short>(pairing_port)});
+      const double pairing_stop = stop_promptly(pairing_runtime, "rapid-pi with the pairing listener");
+      // rapid-setup-server serves through the same serve_tls(), so it hung the
+      // same way whenever the setup page was up.
+      const double setup_stop = stop_promptly(tls_management, "rapid-setup-server");
+      std::cout << "Shutdown: pairing-enabled rapid-pi stopped in " << pairing_stop
+                << " s, rapid-setup-server in " << setup_stop << " s\n";
+    }
     std::cout << "Native network: HTTP, UDP, WebSocket history, disconnect "
-                 "finalization, HTTPS setup and authenticated recorder-to-archive upload "
+                 "finalization, HTTPS setup, prompt shutdown with the pairing listener "
+                 "and authenticated recorder-to-archive upload "
                  "passed\nEvidence: "
               << root << "\n";
     return 0;

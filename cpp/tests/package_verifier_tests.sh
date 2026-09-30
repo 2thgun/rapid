@@ -23,6 +23,8 @@ stage_package() {
   done
   cp "$source_root/packaging/rapid-panel" "$stage/usr/lib/rapid/rapid-panel"
   cp "$source_root/cpp/assets/setup.html" "$stage/usr/share/rapid/setup.html"
+  mkdir -p "$stage/usr/share/rapid/samba"
+  cp "$source_root/packaging/samba-telemetry.conf" "$stage/usr/share/rapid/samba/telemetry.conf"
   for unit in "$source_root"/packaging/*.service "$source_root"/packaging/*.path; do
     cp "$unit" "$stage/usr/lib/systemd/system/"
   done
@@ -123,6 +125,24 @@ expect_fail "a missing request watcher" "Package is missing ./usr/lib/systemd/sy
 stage_package
 replace_in "$units/rapid-account.path" 'account-request.json' 'request.json'
 expect_fail "a watcher on another queue" "rapid-account helper from its fixed request file"
+
+# #66: the Telemetry share ships as a read-only share for the rapid account,
+# and rapid-account may write Samba's password database.
+stage_package
+rm "$work/stage/usr/share/rapid/samba/telemetry.conf"
+expect_fail "a missing Telemetry share" "Package is missing ./usr/share/rapid/samba/telemetry.conf"
+
+stage_package
+replace_in "$work/stage/usr/share/rapid/samba/telemetry.conf" 'read only = yes' 'read only = no'
+expect_fail "a writable Telemetry share" "The Telemetry share must be read-only and only for the rapid account"
+
+stage_package
+replace_in "$work/stage/usr/share/rapid/samba/telemetry.conf" 'valid users = rapid' 'guest ok = yes'
+expect_fail "a guest Telemetry share" "The Telemetry share must be read-only and only for the rapid account"
+
+stage_package
+replace_in "$units/rapid-account.service" '^ReadWritePaths=-/var/lib/samba -/run/samba$' '#'
+expect_fail "a helper that cannot write Samba's passdb" "does not grant write access to /var/lib/samba/private/passdb.tdb"
 
 stage_package
 replace_in "$units/rapid-setup.service" ' --account-request-file /run/rapid-apply/account-request.json' ''
