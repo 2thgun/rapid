@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The runtime API's two unauthenticated writes (Wi-Fi mode and session
+  upload) now accept only requests from the device itself. A config that sets
+  `[app] host = "0.0.0.0"` no longer lets anyone on the network turn the Pi's
+  Wi-Fi off; reads still work from the network.
 - Added ACC/MoTeC-unit recording channels for steering degrees, linear wheel
   speeds, brake temperatures, clutch, and yaw rate while retaining the existing
   normalized/angular/core/heading channels. Schema 3 reserves `TYRE_TAIR_*`
@@ -58,6 +62,7 @@ last completed checks, not a guarantee of current device state.
 - An upgraded device now gets the open `rapid-setup` access point profile
   created and its SSID published even when the owner is already configured, so
   Access Point mode works after an upgrade from the old secured-profile scheme.
+- The Pi now logs why it rejected a v4 packet as invalid (for example a pedal or RPM out of range, or telemetry that arrived before its metadata). Each distinct reason is logged once and then at most every 10 s with how many were rejected in between, so a burst of `packets_invalid` in the field can be traced to the check that failed without flooding the journal (#74).
 - The setup page's SSH keys are now their own category, separate from the
   device password/PIN: enrolled keys can be listed, added, edited (comment) and
   removed through the same authenticated `/api/v1/account` endpoint and
@@ -77,6 +82,7 @@ last completed checks, not a guarantee of current device state.
   upgrade rather than a downgrade and no longer needs `--allow-downgrades`. A
   build with no git metadata and no explicit `-DRAPID_PACKAGE_VERSION` now fails
   loudly instead of producing an untraceable `0.9.9~dev+unknown` package.
+- Removed `display/rapid-kiosk`, the launcher for the old Chromium kiosk that nothing has used since the Qt panel became the only dashboard (#68). The panel's own launcher, `packaging/rapid-panel`, already keeps the screen awake.
 - `/run/rapid` now has a single lifecycle owner (`rapid-firstboot.service`), so
   stopping or restarting `rapid-provision.service` no longer deletes the shared
   directory while `rapid-setup.service` and `rapid.service` still need it.
@@ -99,6 +105,7 @@ last completed checks, not a guarantee of current device state.
   revoked individually. The Windows companion's `--pairing-url` command stores
   the key with DPAPI and checks the pinned Pi identity before reconnecting.
   Manual `telemetry.key` setup is deprecated for new pairings.
+- Fixed `rapid-setup.service` restarting every 3 seconds, forever, whenever the device is on Home Wi-Fi. The setup page is only served on the setup access point's address, which does not exist then; the server used to exit with a bind error and be restarted. On the dev Pi that was 9,590 restarts and a journal held at its size cap. It now waits quietly for the address, says so once, and starts serving as soon as Access Point mode brings it up (#82).
 - Added first-boot setup: a persistent device TLS identity, a device-specific
   setup AP and a physical setup card showing the activation details.
 - Added constrained settings application for hostname, Home Wi-Fi (with setup-AP

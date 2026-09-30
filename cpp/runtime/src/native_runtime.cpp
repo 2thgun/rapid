@@ -538,10 +538,41 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
   } catch (const ReplayDeferred &) {
     state_["packets_deferred"] = number(state_, "packets_deferred") + 1;
     return false;
-  } catch (const std::exception &) {
+  } catch (const std::exception &e) {
     state_["packets_invalid"] = number(state_, "packets_invalid") + 1;
+    note_invalid(e.what());
     return false;
   }
+}
+// #74: the decoder rejects a packet with a specific check (mask, pedal range,
+// RPM range, integer channels, lap timing, ...), but the receive path used to
+// keep only a counter, so a burst of packets_invalid could not be attributed.
+// Each distinct reason is logged when first seen, then at most once per
+// Config::invalid_log_interval_seconds with how many were rejected in between.
+// At most 32 reasons are tracked (the rest share "other") and only the check's
+// own fixed text is logged, sanitised and capped, never any packet content.
+void Runtime::note_invalid(const char *what) {
+  constexpr std::size_t kMaxReasons = 32, kMaxReasonLength = 96;
+  std::string reason;
+  for (const char *p = what ? what : ""; *p && reason.size() < kMaxReasonLength; ++p)
+    reason += (*p >= 0x20 && *p < 0x7f) ? *p : '?';
+  if (reason.empty()) reason = "unspecified";
+  if (invalid_reasons_.size() >= kMaxReasons && !invalid_reasons_.count(reason))
+    reason = "other";
+  auto &entry = invalid_reasons_[reason];
+  ++entry.total;
+  ++entry.since_report;
+  const double at = monotonic();
+  if (entry.reported && at - entry.reported_at < config_.invalid_log_interval_seconds)
+    return;
+  std::string line = "WARN v4 packet rejected as invalid: " + reason;
+  if (entry.reported)
+    line += " (" + std::to_string(entry.since_report) + " since the last report, " +
+            std::to_string(entry.total) + " total)";
+  log(line);
+  entry.reported = true;
+  entry.reported_at = at;
+  entry.since_report = 0;
 }
 void Runtime::expire() {
   std::lock_guard lock(mutex_);
