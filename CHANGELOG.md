@@ -50,6 +50,7 @@ last completed checks, not a guarantee of current device state.
   companion entry for manual address and pinned-fingerprint pairing.
 - Added browser-generated Ed25519 (ECDSA P-256 fallback) SSH key enrollment on
   the setup page; only the public key leaves the browser.
+- Fixed `rapid.service` taking 90 s to stop and being SIGKILLed on every restart, upgrade and reboot. With pairing enabled, the pairing listener waited in a blocking `accept()` and ignored the stop request until a client connected. It now stops in well under a second, so the recording is closed and the replay state flushed instead of being cut off (#75).
 - Made privileged setup request/status files private from creation and widened
   the package verifier to check every sandbox write path.
 - Added official-layout ACE and iRacing adapter self-tests and fixed two ACE
