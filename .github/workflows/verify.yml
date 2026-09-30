@@ -40,7 +40,11 @@ jobs:
       matrix:
         build_type: [Debug, Release]
     steps:
+      # Full history: the package version and the companion's build identity both
+      # count commits, and a shallow clone counts 1 (#73).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: windows-v4-fixtures
@@ -76,6 +80,9 @@ jobs:
             exit 1
           fi
           cmake -DPACKAGE="$PWD/${debs[0]}" -P packaging/CheckPackage.cmake
+          expected="$(sh packaging/expected-version.sh)"
+          actual="$(dpkg-deb -f "${debs[0]}" Version)"
+          test "$actual" = "$expected" || { echo "package version is $actual, expected $expected" >&2; exit 1; }
       - if: matrix.build_type == 'Release'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -91,7 +98,11 @@ jobs:
       matrix:
         build_type: [Debug, Release]
     steps:
+      # Full history: the package version and the companion's build identity both
+      # count commits, and a shallow clone counts 1 (#73).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: windows-v4-fixtures
@@ -114,6 +125,9 @@ jobs:
             exit 1
           fi
           cmake -DPACKAGE="$PWD/${debs[0]}" -P packaging/CheckPackage.cmake
+          expected="$(sh packaging/expected-version.sh)"
+          actual="$(dpkg-deb -f "${debs[0]}" Version)"
+          test "$actual" = "$expected" || { echo "package version is $actual, expected $expected" >&2; exit 1; }
       - if: matrix.build_type == 'Release'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -124,7 +138,11 @@ jobs:
     needs: pairing-pi-seals-fixture
     runs-on: windows-latest
     steps:
+      # Full history: the package version and the companion's build identity both
+      # count commits, and a shallow clone counts 1 (#73).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: pi-seals-pairing-fixture
@@ -133,7 +151,16 @@ jobs:
         run: ./companion/build-native-daemon.ps1 -Compiler MSVC
       - run: node cpp/display/tests/qt_display_tests.js
       - shell: pwsh
-        run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test" --pairing-pi-seals-fixtures "$env:GITHUB_WORKSPACE/build/pi-seals-pairing-fixture"
+        run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test" --pairing-pi-seals-fixtures "$env:GITHUB_WORKSPACE/build/pi-seals-pairing-fixture" | Tee-Object -FilePath build/companion-self-test.log
+      - name: The companion names the same build as the Pi package (#73)
+        shell: bash
+        run: |
+          expected="$(sh packaging/expected-version.sh)"
+          grep -qF "status reports Version: $expected" build/companion-self-test.log || {
+            echo "the companion does not report build identity $expected" >&2
+            grep -F "Version" build/companion-self-test.log >&2 || true
+            exit 1
+          }
       - shell: pwsh
         run: dotnet tool install --global wix --version 4.0.6
       - shell: pwsh

@@ -8,6 +8,7 @@
 #include <boost/asio/ssl.hpp>
 #include <csignal>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <iostream>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
@@ -41,16 +42,16 @@ struct Process {
     }
   }
 };
-http::response<http::string_body> request(int port, http::verb method,
-                                          const std::string &path,
-                                          const std::string &body = "",
-                                          const std::map<std::string, std::string> &headers = {}) {
+http::response<http::string_body> request_to(const std::string &host, int port, http::verb method,
+                                             const std::string &path,
+                                             const std::string &body = "",
+                                             const std::map<std::string, std::string> &headers = {}) {
   asio::io_context io;
   tcp::socket socket(io);
   socket.connect(
-      {asio::ip::make_address("127.0.0.1"), static_cast<unsigned short>(port)});
+      {asio::ip::make_address(host), static_cast<unsigned short>(port)});
   http::request<http::string_body> req{method, path, 11};
-  req.set(http::field::host, "127.0.0.1:" + std::to_string(port));
+  req.set(http::field::host, host + ":" + std::to_string(port));
   req.set(http::field::content_type, "application/json");
   for (const auto &[name, value] : headers) req.set(name, value);
   req.body() = body;
@@ -60,6 +61,28 @@ http::response<http::string_body> request(int port, http::verb method,
   http::response<http::string_body> reply;
   http::read(socket, buffer, reply);
   return reply;
+}
+http::response<http::string_body> request(int port, http::verb method,
+                                          const std::string &path,
+                                          const std::string &body = "",
+                                          const std::map<std::string, std::string> &headers = {}) {
+  return request_to("127.0.0.1", port, method, path, body, headers);
+}
+// A non-loopback IPv4 address of this host, so a test can reach a server
+// bound to 0.0.0.0 the way another machine on the network would. Empty when
+// the host has none.
+std::string lan_address() {
+  ifaddrs *list = nullptr;
+  if (getifaddrs(&list) != 0) return {};
+  std::string found;
+  for (auto *entry = list; entry && found.empty(); entry = entry->ifa_next) {
+    if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
+    const auto *address = reinterpret_cast<const sockaddr_in *>(entry->ifa_addr);
+    const auto value = asio::ip::address_v4(ntohl(address->sin_addr.s_addr));
+    if (!value.is_loopback()) found = value.to_string();
+  }
+  freeifaddrs(list);
+  return found;
 }
 http::response<http::string_body> tls_request(int port, http::verb method,
                                               const std::string &path) {
@@ -160,7 +183,7 @@ int main(int argc, char **argv) {
     Process child{fork()};
     if (child.pid == 0) {
       setenv("RAPID_CONFIG", "/nonexistent/rapid-test.toml", 1);
-      setenv("RAPID_APP_HOST", "127.0.0.1", 1);
+      setenv("RAPID_APP_HOST", "0.0.0.0", 1);
       setenv("RAPID_APP_PORT", std::to_string(port).c_str(), 1);
       setenv("RAPID_COMPANION_PORT", std::to_string(udp).c_str(), 1);
       setenv("RAPID_COMPANION_KEY", companion_key_hex.c_str(), 1);
@@ -217,6 +240,25 @@ int main(int argc, char **argv) {
       require(response.result_int() == 202, "network mode request accepted");
       require(Json::parse(read_file(root / "network-control" / "request"))["mode"] ==
                   mode, "network mode queued in isolated test directory");
+    }
+    // A device configured to listen on every address must still refuse
+    // writes from the network: these routes are unauthenticated, so only the
+    // device itself (the panel, an SSH tunnel) may use them.
+    if (const auto lan = lan_address(); lan.empty()) {
+      std::cout << "SKIP: no non-loopback address; the remote-write check needs one\n";
+    } else {
+      fs::remove(root / "network-control" / "request");
+      require(request_to(lan, port, http::verb::post, "/api/v1/network/mode",
+                         Json{{"mode", "off"}}.dump())
+                      .result_int() == 403 &&
+                  !fs::exists(root / "network-control" / "request"),
+              "a network-mode change from another machine is refused");
+      require(request_to(lan, port, http::verb::put, "/api/v1/session/upload",
+                         "{\"enabled\":false}")
+                      .result_int() == 403,
+              "an upload change from another machine is refused");
+      require(request_to(lan, port, http::verb::get, "/healthz").result_int() == 200,
+              "reads from another machine still work");
     }
     atomic_file(root / "network-control" / "state", "{\"mode\":\"ap\"}");
     auto network_status = request(port, http::verb::get, "/api/v1/network/mode");

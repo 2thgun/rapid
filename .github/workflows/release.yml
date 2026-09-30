@@ -33,7 +33,11 @@ jobs:
     needs: pairing-pi-seals-fixture
     runs-on: windows-latest
     steps:
+      # Full history: the package version and the companion's build identity both
+      # count commits, and a shallow clone counts 1 (#73).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: pi-seals-pairing-fixture
@@ -94,7 +98,11 @@ jobs:
         shell: bash
     timeout-minutes: 60
     steps:
+      # Full history: the package version and the companion's build identity both
+      # count commits, and a shallow clone counts 1 (#73).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: windows-v4-fixtures
