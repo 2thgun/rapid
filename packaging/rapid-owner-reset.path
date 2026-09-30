@@ -1,0 +1,9 @@
+[Unit]
+Description=raPId physical owner reset request watcher
+
+[Path]
+PathExists=/run/rapid-apply/owner-reset-request.json
+Unit=rapid-owner-reset.service
+
+[Install]
+WantedBy=multi-user.target

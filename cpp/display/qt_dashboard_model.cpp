@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
+#include <QUuid>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -199,6 +200,10 @@ DashboardModel::DashboardModel(QUrl endpoint, QObject *parent)
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayConfirmation);
   QTimer::singleShot(0, this, &DashboardModel::pollDisplayRotation);
   QTimer::singleShot(0, this, &DashboardModel::pollSteeringLock);
+  QTimer::singleShot(0, this, &DashboardModel::pollOwnerReset);
+  // A result from before this panel started is stale; drop it so the status
+  // line only reflects a reset made from this panel.
+  QFile::remove(qEnvironmentVariable("RAPID_OWNER_RESET_RESULT", "/run/rapid-apply/owner-reset-result.json"));
   // The HTTP poll loop keeps running underneath the socket (it is a no-op
   // fetch while the push is active, see pollLive()) so that losing the
   // socket at any moment falls straight back to it without a gap.
@@ -251,7 +256,16 @@ void DashboardModel::consumeLiveMessage(const QString &message) {
   const auto document = QJsonDocument::fromJson(message.toUtf8());
   if (!document.isObject()) return;
   live_push_active_ = true;
-  applyLiveState(document.object().toVariantMap());
+  const auto object = document.object();
+  // The ?mode=state push sends a diffed frame ({"seq":N,"state":{changed}});
+  // merge the changed subset into the live state. The HTTP fallback sends the
+  // full snapshot and replaces it wholesale in consumeLive().
+  const auto state = object.value("state");
+  if (!state.isObject()) return;
+  auto merged = state_;
+  for (auto it = state.toObject().begin(); it != state.toObject().end(); ++it)
+    merged[it.key()] = it.value().toVariant();
+  applyLiveState(merged);
 }
 
 QVariant DashboardModel::value(const QString &key) const { return state_.value(key); }
@@ -301,9 +315,12 @@ void DashboardModel::pollSetupStatus() {
         const auto values = bootstrap.toObject();
         next_url = values.value("setup_url").toString();
         // #61: the same validation the setup card applies; only a full 64-hex
-        // digest becomes the short printed form the companion accepts.
+        // digest becomes the short printed form the companion accepts. The
+        // fingerprint is published on its own merit (not gated on the setup
+        // URL), so the pairing entry point can show it at any time, even on a
+        // device whose bootstrap predates the setup-URL field.
         const auto fingerprint = values.value("certificate_fingerprint").toString();
-        if (!next_url.isEmpty() && fingerprint.size() == 64)
+        if (fingerprint.size() == 64)
           next_fingerprint = short_fingerprint(fingerprint);
       }
     }
@@ -774,7 +791,7 @@ void DashboardModel::updateGraphHistory() {
 void DashboardModel::updateSteeringDisplay() {
   // Presentation-only: state_ keeps the raw steering_angle for value() and the
   // recorder; only the wheel reads the smoothed copy. Feed the newest target
-  // and let the ~60 Hz timer interpolate, so a 30 Hz push becomes continuous
+  // and let the ~60 Hz timer interpolate, so a 50 Hz push becomes continuous
   // motion without queueing anything.
   const auto raw = state_.value("steering_angle");
   bool ok = false;
@@ -880,6 +897,62 @@ void DashboardModel::restartSetupService() {
   log_notice_ = "Restarting setup…";
   bump();
   QTimer::singleShot(3000, this, [this] { log_notice_.clear(); bump(); });
+}
+
+bool DashboardModel::resetOwnerAccount() {
+  // #44: the physical owner reset. The panel is the trust boundary, so the
+  // QML holds the button for three seconds before this runs. The request
+  // travels the same /run/rapid-apply queue as the setup page's privileged
+  // actions; the root rapid-owner-reset helper consumes it and clears only
+  // the owner password. A second hold while one is in flight is ignored
+  // rather than queueing a second reset.
+  const auto request = qEnvironmentVariable("RAPID_OWNER_RESET_REQUEST", "/run/rapid-apply/owner-reset-request.json");
+  if (QFile::exists(request)) return false;
+  const QFileInfo info(request);
+  QDir().mkpath(info.absolutePath());
+  const auto temporary = request + ".tmp";
+  QFile file(temporary);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+  const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+  const QJsonObject object{{"request_id", id}};
+  if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0 || !file.flush()) {
+    file.close();
+    QFile::remove(temporary);
+    return false;
+  }
+  file.close();
+  if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                           QFileDevice::ReadGroup)) {
+    QFile::remove(temporary);
+    return false;
+  }
+  QFile::remove(request);
+  if (!QFile::rename(temporary, request)) return false;
+  owner_reset_status_ = "RESETTING OWNER…";
+  bump();
+  return true;
+}
+
+void DashboardModel::pollOwnerReset() {
+  // #44: the helper's result carries status only; the new activation token
+  // reaches the panel through the first-boot status document.
+  QFile file(qEnvironmentVariable("RAPID_OWNER_RESET_RESULT", "/run/rapid-apply/owner-reset-result.json"));
+  QString status;
+  if (file.open(QIODevice::ReadOnly)) {
+    const auto object = QJsonDocument::fromJson(file.readAll()).object();
+    const auto value = object.value("status").toString();
+    if (value == "applied") {
+      status = "OWNER RESET — ENROLLMENT REOPENED";
+    } else if (value == "failed") {
+      const auto error = object.value("error").toString();
+      status = error.isEmpty() ? "OWNER RESET FAILED" : "OWNER RESET FAILED: " + error;
+    }
+  }
+  if (owner_reset_status_ != status) {
+    owner_reset_status_ = status;
+    bump();
+  }
+  QTimer::singleShot(500, this, &DashboardModel::pollOwnerReset);
 }
 
 bool DashboardModel::write_pairing_control(const QString &action) {

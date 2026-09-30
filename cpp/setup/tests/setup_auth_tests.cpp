@@ -6,6 +6,7 @@
 #include <openssl/evp.h>
 #include <sstream>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 using namespace rapid::native;
 namespace {
@@ -201,10 +202,95 @@ int main() {
                       ["capabilities"]["companion_download"] == false,
               "a missing companion clears the download capability");
     }
+    const std::string password = "test-only-owner-password";
+    // The saved-Wi-Fi and setup-AP endpoints queue through the same rapid-wifi
+    // helper as the Home join. A mock helper stands in for the
+    // path-unit-triggered one: it waits for the request file and writes a
+    // result, so the endpoints' wait is exercised without systemd.
+    {
+      const auto wifi_directory = root.path / "wifi";
+      fs::create_directory(wifi_directory);
+      const auto wifi_request = wifi_directory / "wifi-request.json";
+      const auto wifi_result = wifi_directory / "wifi-result.json";
+      const auto mock = wifi_directory / "mock-wifi";
+      {
+        std::ofstream script(mock);
+        script << R"wifi(#!/bin/sh
+request=$1
+result=$2
+while [ ! -f "$request" ]; do sleep 0.05; done
+action=$(sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$request" | head -n 1)
+# Like the real helper, consume the request as soon as it is read. Without
+# this a mock started for the next action found the previous, stale request
+# and answered that one instead.
+rm -f "$request"
+case "$action" in
+  list) printf '{"connections":[{"name":"rapid-home","ssid":"Home","secured":true,"owned":false}]}\n' > "$result" ;;
+  remove) printf '{"removed":true}\n' > "$result" ;;
+  setup_ap) printf '{"secured":true,"ssid":"rapid"}\n' > "$result" ;;
+  save) printf '{"revision":1,"connected":true}\n' > "$result" ;;
+  *) printf '{"error":"unknown action"}\n' > "$result" ;;
+esac
+)wifi";
+      }
+      fs::permissions(mock, fs::perms::owner_all);
+      SetupStore wifi_store(root.path / "wifi-state");
+      SetupAuth wifi_auth(wifi_store, 8002, [&] { return time; }, {}, "127.0.0.1",
+                          {}, {}, {}, wifi_request, wifi_result, nullptr,
+                          false, {}, true, {}, {}, {});
+      require(wifi_auth.enroll(password), "wifi endpoint test owner enrollment");
+      auto wifi_login = request("/api/v1/auth/login", "POST", {{"password", password}});
+      const auto wifi_login_response = wifi_auth.handle(wifi_login);
+      const auto wifi_cookie = cookie(wifi_login_response);
+      const auto wifi_parsed = Json::parse(wifi_login_response.body);
+      const auto wifi_csrf = wifi_parsed["csrf_token"].get<std::string>();
+      auto wifi = [&](const std::string &path, const std::string &method = "GET", const Json &body = {}) {
+        auto result = request(path, method, body);
+        result.headers["cookie"] = wifi_cookie;
+        result.headers["x-csrf-token"] = wifi_csrf;
+        return result;
+      };
+      auto run_mock = [&] {
+        const auto child = fork();
+        require(child >= 0, "fork mock wifi helper");
+        if (child == 0) {
+          execl(mock.c_str(), mock.c_str(), wifi_request.c_str(), wifi_result.c_str(), nullptr);
+          _exit(127);
+        }
+        return child;
+      };
+      auto reap_mock = [](pid_t child) {
+        int status = 0;
+        return waitpid(child, &status, 0) == child;
+      };
+      // The list endpoint returns the saved connections (no secrets).
+      const auto list_child = run_mock();
+      auto listed = wifi_auth.handle(wifi("/api/v1/wifi"));
+      require(listed.status == 200 && reap_mock(list_child),
+              "the saved-network list is returned to the owner");
+      require(Json::parse(listed.body)["connections"].size() == 1,
+              "the mock helper's connection list is returned");
+      // The remove endpoint returns the helper's result.
+      const auto remove_child = run_mock();
+      auto removed = wifi_auth.handle(wifi("/api/v1/wifi", "POST", {{"action", "remove"}, {"name", "rapid-home"}}));
+      require(removed.status == 200 && Json::parse(removed.body)["removed"] == true && reap_mock(remove_child),
+              "the removal result is returned to the owner");
+      // The setup-AP endpoint returns the helper's result.
+      const auto ap_child = run_mock();
+      auto ap = wifi_auth.handle(wifi("/api/v1/wifi", "POST", {{"action", "setup_ap"}, {"password", "setup-pass"}}));
+      require(ap.status == 200 && Json::parse(ap.body)["secured"] == true && reap_mock(ap_child),
+              "the setup-AP result is returned to the owner");
+      // Validation: bad requests are rejected before anything is queued.
+      require(wifi_auth.handle(wifi("/api/v1/wifi", "POST", {{"action", "bogus"}})).status == 400,
+              "an unknown Wi-Fi action is rejected");
+      require(wifi_auth.handle(wifi("/api/v1/wifi", "POST", {{"action", "setup_ap"}, {"password", "short"}})).status == 400,
+              "a short setup-AP password is rejected");
+      require(wifi_auth.handle(wifi("/api/v1/wifi", "POST", {{"action", "remove"}})).status == 400,
+              "a removal without a name is rejected");
+    }
     bool rejected = false;
     try { auth.enroll("short"); } catch (const std::invalid_argument &) { rejected = true; }
     require(rejected, "short owner password rejected");
-    const std::string password = "test-only-owner-password";
     require(auth.enroll(password) && !auth.enroll("replacement-password"), "owner claimed exactly once");
     require(store.owner_hash().starts_with("$argon2id$") && store.owner_hash().find(password) == std::string::npos,
             "password stored as salted Argon2id hash");

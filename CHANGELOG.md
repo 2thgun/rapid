@@ -5,6 +5,36 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The live view now runs at 50 Hz end to end: the Pi's WebSocket push ticks at
+  20 ms (was a magic 33 ms), the Qt panel's data update path follows the push,
+  and the Windows companion's default `sample_rate` is a permanent 50 Hz
+  (configurable 1-100). The panel's steering-wheel smoothing stays at 60 Hz
+  and the 200 ms HTTP poll remains a fallback.
+- The `?mode=state` WebSocket push now sends a diffed frame (only the fields
+  that changed since the previous tick, plus a sequence number) instead of the
+  full `Runtime::snapshot()` JSON, so the 50 Hz push does not double live
+  traffic. The panel merges each frame into its live state; the HTTP fallback
+  still sends the full snapshot.
+- The setup page now lists the saved Wi-Fi networks and lets the owner edit
+  (SSID/password) and remove them, like SSH keys, through the same privileged
+  `rapid-wifi` helper and `/run/rapid-apply` request queue. A stored password
+  is never shown again.
+- The setup access point can be given a password from the setup page
+  (optional; the default stays open so a fresh device bootstraps with no
+  secret). The password is cleared again the next time the device provisions the
+  setup network (on reboot).
+- The panel's settings page now shows the device TLS fingerprint and pairing
+  address at any time, so a companion can be paired without first switching to
+  AP mode.
+- The Wi-Fi write path (`nmcli connection load` + GLib keyfile escaping) is now
+  verified against real NetworkManager, including an SSID with spaces, special
+  characters and a backslash.
+- Added a physical-presence owner reset: holding **RESET OWNER ACCOUNT** on the
+  panel's settings page clears only the owner password and reopens enrollment
+  with a new activation token, keeping the device identity, paired PCs,
+  calibration and device access. The privileged work runs through the existing
+  root helper/queue pattern (`rapid-owner-reset` on the shared `/run/rapid-apply`
+  queue); there is no network or API trigger (#44).
 - The `\\rapid\Telemetry` share is now part of the image instead of a manual
   setup. It is read-only, for the `rapid` account only, and uses the device
   password: setting that password on the setup page also sets the share's
@@ -76,6 +106,7 @@ last completed checks, not a guarantee of current device state.
   the setup page address and a Start/Restart setup service button. Its setup
   card (SSID, address, TLS fingerprint) also shows in Access Point mode on an
   already-enrolled device, without the activation token.
+- A password set on the setup access point from the setup page is no longer removed at every boot. The boot-time provisioner used to strip the WPA setting unconditionally, so the network went back to open after any reboot; only the old device-specific secured profile is now cleaned up.
 - Added the 0.9.9 release pipeline: the package version derives from a git tag
   (`0.9.9`, or `0.9.9~dev.<commit-count>+<sha>` untagged), hosted ARM64 CI builds
   and verifies the `.deb` with `-Werror`, and a `v*` tag assembles a flashable
@@ -115,10 +146,13 @@ last completed checks, not a guarantee of current device state.
 - Added constrained settings application for hostname, Home Wi-Fi (with setup-AP
   restore on failure) and display rotation (with preview, confirmation and
   boot-time rollback), plus an authenticated touchscreen calibration reset.
+- A Wi-Fi name or password that starts or ends with a space is now saved correctly. NetworkManager silently dropped leading spaces from the stored profile, so such a network could never connect; the setup page's saved-network list also showed the escaped form.
 - Added on-panel touch calibration (Wi-Fi menu → Calibrate touch). It uses five
   targets, a verification tap and automatic rollback when unconfirmed. Rotating
   the display to 180° now also rotates touch input, and an existing X server
   touch matrix is preserved.
+- The physical owner reset now also ends any owner session that was already signed in, and such a session no longer carries over to whoever enrolls next. Before, a session opened before the reset stayed authorized for up to 30 minutes, including changing the device password (#44).
+- Fixed a race in the setup page's saved-Wi-Fi requests: a fast helper could write its result just before the setup server deleted the old one, leaving the page to wait out its 30-second timeout for a result that had already arrived.
 - A changed display orientation now waits for the owner to keep it on the Pi
   screen or setup page. If it isn't kept within 30 seconds, the previous
   orientation returns. Saving without changing the orientation no longer

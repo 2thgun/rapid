@@ -17,7 +17,8 @@ stage_package() {
   cp "$source_root/packaging/rapid.tmpfiles" "$stage/usr/lib/tmpfiles.d/rapid.conf"
   cp "$source_root/packaging/rapid.sysusers" "$stage/usr/lib/sysusers.d/rapid.conf"
   for binary in rapid-pi rapid-qt-display rapid-log-status rapid-setup-server rapid-firstboot \
-      rapid-provision rapid-apply rapid-display-recovery rapid-wifi rapid-account rapid-network-mode; do
+      rapid-provision rapid-apply rapid-display-recovery rapid-wifi rapid-account rapid-owner-reset \
+      rapid-network-mode; do
     : > "$stage/usr/lib/rapid/$binary"
   done
   cp "$source_root/packaging/rapid-panel" "$stage/usr/lib/rapid/rapid-panel"
@@ -347,6 +348,44 @@ expect_fail "a helper that cannot write the shared queue" "does not grant write 
 stage_package
 replace_in "$units/rapid-account.service" '^Group=rapid$' ''
 expect_fail "a helper outside the shared queue group" "must run in the rapid group"
+
+# #44: the physical owner reset helper follows the same shared-queue rules as
+# the other transient consumers, and carries no secret on its command line.
+stage_package
+rm "$units/rapid-owner-reset.path"
+expect_fail "a missing owner reset request watcher" "Package is missing ./usr/lib/systemd/system/rapid-owner-reset.path"
+
+stage_package
+replace_in "$units/rapid-owner-reset.path" 'owner-reset-request.json' 'request.json'
+expect_fail "an owner reset watcher on another queue" "rapid-owner-reset helper from its fixed request file"
+
+stage_package
+replace_in "$units/rapid-owner-reset.service" '^User=root$' 'User=rapid'
+expect_fail "an owner reset helper that is not root" "rapid-owner-reset.service must keep 'User=root'"
+
+stage_package
+replace_in "$units/rapid-owner-reset.service" ' --status-file /run/rapid/firstboot[.]json$' ' --status-file /run/rapid/firstboot.json --token x'
+expect_fail "an owner reset helper with a secret on its command line" "rapid-owner-reset helper from its fixed request file"
+
+stage_package
+printf '\nRuntimeDirectory=rapid-apply\n' >> "$units/rapid-owner-reset.service"
+expect_fail "an owner reset helper that also claims the shared queue directory" "must not declare RuntimeDirectory=rapid-apply"
+
+stage_package
+replace_in "$units/rapid-owner-reset.service" '^Requires=rapid-setup[.]service$' ''
+expect_fail "an owner reset helper with no dependency on the queue owner" "must require rapid-setup.service"
+
+stage_package
+replace_in "$units/rapid-owner-reset.service" '^After=rapid-setup[.]service$' ''
+expect_fail "an owner reset helper not ordered after the queue owner" "must be ordered After=rapid-setup.service"
+
+stage_package
+replace_in "$units/rapid-owner-reset.service" '^ReadWritePaths=/run/rapid-apply$' ''
+expect_fail "an owner reset helper that cannot write the shared queue" "does not grant write access to /run/rapid-apply/owner-reset-request.json"
+
+stage_package
+replace_in "$units/rapid-owner-reset.service" '^Group=rapid$' ''
+expect_fail "an owner reset helper outside the shared queue group" "must run in the rapid group"
 
 stage_package
 printf 'd /run/rapid-apply 0770 root rapid -\n' >> "$tmpfiles"

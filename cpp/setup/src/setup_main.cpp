@@ -32,21 +32,6 @@ std::string certificate_fingerprint(const fs::path &path) {
     result << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(digest[i]);
   return result.str();
 }
-
-std::string enrollment_token(const fs::path &path) {
-  if (path.empty()) return {};
-  const int descriptor = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-  if (descriptor < 0) throw std::runtime_error("cannot open enrollment token file");
-  struct stat info {};
-  const bool safe = ::fstat(descriptor, &info) == 0 && S_ISREG(info.st_mode) &&
-      info.st_uid == ::geteuid() && (info.st_mode & 0077) == 0 && info.st_nlink == 1;
-  char data[66];
-  const auto length = safe ? ::read(descriptor, data, sizeof data) : -1;
-  ::close(descriptor);
-  if (!safe || length < 64 || length > 65 || (length == 65 && data[64] != '\n'))
-    throw std::runtime_error("enrollment token must be a private service-owned file containing 64 hexadecimal characters");
-  return std::string(data, 64);
-}
 }
 int main(int argc, char **argv) {
   try {
@@ -108,7 +93,9 @@ int main(int argc, char **argv) {
     // Keep validating the bootstrap file after the owner claim: it remains the
     // explicit authorization for the AP listener, while SetupAuth receives no
     // token after enrollment and therefore cannot reopen owner creation.
-    const auto bootstrap_token = enrollment_token(token_file);
+    // (#44: SetupAuth re-reads this file while no owner is enrolled, so the
+    // physical owner reset reopens enrollment without a service restart.)
+    const auto bootstrap_token = validated_enrollment_token(token_file);
     if (listen_host != "127.0.0.1" && bootstrap_token.empty())
       throw std::invalid_argument("a non-loopback listener requires an enrollment token");
     if (tls_certificate.empty() != tls_private_key.empty())
@@ -145,6 +132,7 @@ int main(int argc, char **argv) {
     if (!account_request_file.empty()) auth.set_account_files(account_request_file, account_result_file);
     if (!network_ssid_file.empty()) auth.set_network_ssid_file(network_ssid_file);
     if (!companion_artifact.empty()) auth.set_companion_artifact(companion_artifact);
+    auth.set_enrollment_token_file(token_file);
     if (enroll) {
       std::string password;
       if (!std::getline(std::cin, password) || !auth.enroll(password))

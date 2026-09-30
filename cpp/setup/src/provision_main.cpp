@@ -241,11 +241,28 @@ int main(int argc, char **argv) {
     if (!exists)
       run(nmcli, {"connection", "add", "type", "wifi", "ifname", "wlan0",
                   "con-name", connection, "autoconnect", "yes", "ssid", ssid});
-    // Best-effort: a fresh connection never has this setting, so there is
-    // nothing to remove; an upgraded device may carry the old device-specific
-    // WPA-PSK setting, which this drops rather than leaving it configured
-    // alongside (or instead of) the open profile below.
-    command(nmcli, {"connection", "modify", connection, "remove", "802-11-wireless-security"});
+    // A fresh connection never has a security setting, so there is nothing to
+    // remove. An upgraded device may carry the old device-specific WPA-PSK
+    // setting, which is dropped rather than left configured alongside (or
+    // instead of) the open profile below. But the owner can also protect the
+    // setup AP from the setup page (rapid-wifi writes a WPA key onto this same
+    // profile), and this runs on every boot: dropping the key unconditionally
+    // silently turned the AP back to open after any reboot. The legacy scheme
+    // named its network "rapid-" plus six hex digits, which is never a valid
+    // current SSID, so a profile that already carries a current-scheme SSID
+    // has only ever been given a key by the owner and keeps it. If the profile
+    // cannot be read, fall back to the previous behavior.
+    bool keep_owner_key = false;
+    if (exists) {
+      try {
+        const auto current_ssid = trimmed(capture(nmcli, {"-g", "802-11-wireless.ssid", "connection", "show", connection}));
+        const auto key_management = trimmed(capture(nmcli, {"-g", "802-11-wireless-security.key-mgmt", "connection", "show", connection}));
+        keep_owner_key = valid_ssid(current_ssid) && !key_management.empty();
+      } catch (const std::exception &) {
+      }
+    }
+    if (!keep_owner_key)
+      command(nmcli, {"connection", "modify", connection, "remove", "802-11-wireless-security"});
     // The SSID is set on every run, not just on `connection add`: an upgraded
     // device already has a profile, and the old scheme's name differed (a
     // device-specific "rapid-<hex>"), so the open profile must be renamed to

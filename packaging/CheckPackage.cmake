@@ -21,6 +21,7 @@ foreach(path IN ITEMS
     "./usr/lib/rapid/rapid-display-recovery"
     "./usr/lib/rapid/rapid-wifi"
     "./usr/lib/rapid/rapid-account"
+    "./usr/lib/rapid/rapid-owner-reset"
     "./usr/lib/rapid/rapid-network-mode"
     "./usr/share/rapid/setup.html"
     "./usr/share/rapid/samba/telemetry.conf"
@@ -36,6 +37,8 @@ foreach(path IN ITEMS
     "./usr/lib/systemd/system/rapid-wifi.path"
     "./usr/lib/systemd/system/rapid-account.service"
     "./usr/lib/systemd/system/rapid-account.path"
+    "./usr/lib/systemd/system/rapid-owner-reset.service"
+    "./usr/lib/systemd/system/rapid-owner-reset.path"
     "./usr/lib/tmpfiles.d/rapid.conf"
     "./usr/lib/sysusers.d/rapid.conf"
     "./usr/lib/systemd/system/rapid-network-mode.service")
@@ -74,6 +77,8 @@ read_service("./usr/lib/systemd/system/rapid.service" runtime_service)
 read_service("./usr/lib/systemd/system/rapid-apply.service" apply_service)
 read_service("./usr/lib/systemd/system/rapid-account.service" account_service)
 read_service("./usr/lib/systemd/system/rapid-account.path" account_path)
+read_service("./usr/lib/systemd/system/rapid-owner-reset.service" owner_reset_service)
+read_service("./usr/lib/systemd/system/rapid-owner-reset.path" owner_reset_path)
 read_service("./usr/lib/systemd/system/rapid-wifi.service" wifi_service)
 read_service("./usr/lib/systemd/system/rapid-display-recovery.service" display_recovery_service)
 read_service("./usr/lib/rapid/rapid-panel" panel_script)
@@ -297,11 +302,45 @@ if(NOT account_exec STREQUAL "ExecStart=/usr/lib/rapid/rapid-account --request-f
   message(FATAL_ERROR "Device access must be applied by the sandboxed root rapid-account helper from its fixed request file")
 endif()
 if(NOT setup_exec MATCHES " --account-request-file /run/rapid-apply/account-request[.]json --account-result-file /run/rapid-apply/account-result[.]json" OR
-   setup_exec MATCHES "password" OR account_exec MATCHES "password" OR
-   NOT setup_service MATCHES "${nl}LimitCORE=0${nl}" OR
-   NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid${nl}")
+    setup_exec MATCHES "password" OR account_exec MATCHES "password" OR
+    NOT setup_service MATCHES "${nl}LimitCORE=0${nl}" OR
+    NOT setup_service MATCHES "${nl}ReadWritePaths=/run/rapid${nl}")
   message(FATAL_ERROR "The setup service must queue device access through rapid-account without secrets on a command line or in core dumps")
 endif()
+# #44: the physical owner reset runs as a sandboxed root helper from the same
+# shared queue, ordered after the setup server that owns it. It clears only the
+# owner password and reissues the enrollment token; the result carries status
+# only, so no secret may appear on its command line.
+string(REGEX MATCH "ExecStart=[^${nl}]*" owner_reset_exec "${owner_reset_service}")
+foreach(line IN ITEMS "User=root" "ProtectSystem=strict" "ProtectHome=true" "LimitCORE=0")
+  string(FIND "${owner_reset_service}" "${nl}${line}${nl}" position)
+  if(position EQUAL -1)
+    message(FATAL_ERROR "rapid-owner-reset.service must keep '${line}'")
+  endif()
+endforeach()
+if(owner_reset_service MATCHES "${nl}RuntimeDirectory=rapid-apply${nl}")
+  message(FATAL_ERROR "rapid-owner-reset.service must not declare RuntimeDirectory=rapid-apply; rapid-setup.service is the single lifecycle owner of the shared queue")
+endif()
+if(NOT owner_reset_service MATCHES "${nl}Requires=rapid-setup[.]service${nl}")
+  message(FATAL_ERROR "rapid-owner-reset.service must require rapid-setup.service so the shared queue exists before its mount namespace")
+endif()
+if(NOT owner_reset_service MATCHES "${nl}After=rapid-setup[.]service${nl}")
+  message(FATAL_ERROR "rapid-owner-reset.service must be ordered After=rapid-setup.service, the owner of the shared queue")
+endif()
+if(NOT owner_reset_service MATCHES "${nl}Group=rapid${nl}")
+  message(FATAL_ERROR "rapid-owner-reset.service must run in the rapid group so shared /run/rapid-apply ownership stays usable")
+endif()
+if(NOT owner_reset_exec STREQUAL "ExecStart=/usr/lib/rapid/rapid-owner-reset --request-file /run/rapid-apply/owner-reset-request.json --result-file /run/rapid-apply/owner-reset-result.json --state-directory /var/lib/rapid-setup --status-file /run/rapid/firstboot.json" OR
+    owner_reset_service MATCHES "${nl}User=rapid${nl}" OR owner_reset_exec MATCHES "password|token" OR
+    NOT owner_reset_path MATCHES "${nl}PathExists=/run/rapid-apply/owner-reset-request[.]json${nl}" OR
+    NOT owner_reset_path MATCHES "${nl}Unit=rapid-owner-reset[.]service${nl}")
+  message(FATAL_ERROR "Owner reset must be applied by the sandboxed root rapid-owner-reset helper from its fixed request file")
+endif()
+assert_writable_path("${owner_reset_service}" "rapid-owner-reset.service" "/run/rapid-apply/owner-reset-request.json")
+assert_writable_path("${owner_reset_service}" "rapid-owner-reset.service" "/run/rapid-apply/owner-reset-result.json")
+assert_writable_path("${owner_reset_service}" "rapid-owner-reset.service" "/var/lib/rapid-setup/enrollment.token")
+assert_writable_path("${owner_reset_service}" "rapid-owner-reset.service" "/var/lib/rapid-setup/setup.db")
+assert_writable_path("${owner_reset_service}" "rapid-owner-reset.service" "/run/rapid/firstboot.json")
 if(NOT setup_exec MATCHES " --ssid-file /run/rapid/network-ssid( |$)")
   message(FATAL_ERROR "The setup service must publish the setup AP name chosen by rapid-provision")
 endif()

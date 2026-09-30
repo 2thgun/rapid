@@ -18,9 +18,9 @@ class QWebSocket;
 
 // Presentation-only smoothing of the normalised steering display value
 // (steering-display-motion.md). The Qt panel receives the newest runtime
-// snapshot over a ~30 Hz WebSocket push, and the raw channel is neither sparse
+// snapshot over a 50 Hz WebSocket push, and the raw channel is neither sparse
 // nor quantised, so binding the wheel straight to it steps between positions.
-// This first-order lag bridges the ~33 ms gaps without touching telemetry:
+// This first-order lag bridges the 20 ms gaps without touching telemetry:
 //   * no queued animation: every tick moves the displayed value toward the
 //     latest target, so a newer sample replaces the old target and the lag
 //     stays bounded however fast updates arrive;
@@ -28,8 +28,8 @@ class QWebSocket;
 //   * reconnect/stale handling: the first valid value, and any jump larger
 //     than kSnapThreshold, snap to the target instead of sweeping the wheel.
 // Documented budget: with kTimeConstantSeconds = 0.018 a sustained ramp lags
-// ~18 ms (under one 30 Hz frame, preserving the responsiveness the receive-path
-// work removed) and a step settles to 95% in ~54 ms.
+// ~18 ms (just under one 50 Hz frame, preserving the responsiveness the
+// receive-path work removed) and a step settles to 95% in ~54 ms.
 class SteeringSmoother {
  public:
   static constexpr double kTimeConstantSeconds = 0.018;
@@ -138,6 +138,10 @@ class DashboardModel final : public QObject {
   Q_PROPERTY(QVariantList graphSamples READ graphSamples NOTIFY changed)
   Q_PROPERTY(bool displayConfirmPending READ displayConfirmPending NOTIFY changed)
   Q_PROPERTY(bool displayConfirmSent READ displayConfirmSent NOTIFY changed)
+  // #44: the outcome of the physical owner reset (empty when idle). The new
+  // activation token itself is not here: it reaches the panel through the
+  // first-boot status document, exactly as at first boot.
+  Q_PROPERTY(QString ownerResetStatus READ ownerResetStatus NOTIFY changed)
   Q_PROPERTY(QString calibrationStage READ calibrationStage NOTIFY changed)
   Q_PROPERTY(QString calibrationMessage READ calibrationMessage NOTIFY changed)
   Q_PROPERTY(QPointF calibrationTarget READ calibrationTarget NOTIFY changed)
@@ -183,6 +187,7 @@ public:
   QVariantList graphSamples() const { return graph_samples_; }
   bool displayConfirmPending() const { return display_confirm_pending_; }
   bool displayConfirmSent() const { return display_confirm_sent_; }
+  QString ownerResetStatus() const { return owner_reset_status_; }
   // Empty when idle; otherwise capture, applying, verify, done or failed.
   QString calibrationStage() const { return calibration_stage_; }
   QString calibrationMessage() const { return calibration_message_; }
@@ -207,6 +212,11 @@ public:
   Q_INVOKABLE bool cancelPairingWindow();
   Q_INVOKABLE bool approvePairing();
   Q_INVOKABLE bool confirmDisplay();
+  // #44: queue the physical owner reset. The QML holds the button for three
+  // seconds before this runs; the request travels the same /run/rapid-apply
+  // queue as the setup page's privileged actions and the root rapid-owner-reset
+  // helper consumes it. Returns whether the request was queued.
+  Q_INVOKABLE bool resetOwnerAccount();
   Q_INVOKABLE void startCalibration();
   Q_INVOKABLE void calibrationTap(double x, double y);
 
@@ -235,6 +245,9 @@ private:
   void pollDisplayConfirmation();
   void pollDisplayRotation();
   void pollSteeringLock();
+  // #44: polls the root helper's result file (status only; the new activation
+  // token is published through the first-boot status document).
+  void pollOwnerReset();
   // The sim's own lock-to-lock from the wire, or 0 when absent/invalid.
   int simSteeringLockDeg() const;
   // Maps a normalized tap from the rotated scene's local coordinates to the
@@ -290,6 +303,7 @@ private:
   bool display_confirm_pending_ = false;
   bool display_confirm_sent_ = false;
   qint64 display_confirm_revision_ = -1;
+  QString owner_reset_status_;
   QString calibration_stage_;
   QString calibration_message_;
   QList<QPointF> calibration_taps_;

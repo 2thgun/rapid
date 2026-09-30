@@ -35,6 +35,9 @@ target_compile_options(rapid-wifi PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(rapid-account src/account_main.cpp)
 target_link_libraries(rapid-account PRIVATE rapid_native rapid_account_policy)
 target_compile_options(rapid-account PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(rapid-owner-reset src/owner_reset_main.cpp)
+target_link_libraries(rapid-owner-reset PRIVATE rapid_native)
+target_compile_options(rapid-owner-reset PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(rapid-display-recovery src/display_recovery_main.cpp)
 target_link_libraries(rapid-display-recovery PRIVATE rapid_native)
 target_compile_options(rapid-display-recovery PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -49,6 +52,15 @@ if(BUILD_TESTING)
   target_link_libraries(rapid-account-tests PRIVATE rapid_setup_auth)
   target_compile_options(rapid-account-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   add_test(NAME rapid-account-tests COMMAND rapid-account-tests $<TARGET_FILE:rapid-account>)
+  # #44: the physical owner reset. The root helper against a fixture state
+  # directory (owner cleared, token reissued, status published, request
+  # consumed, identity/paired PCs/settings untouched) and the setup server's
+  # runtime re-read of the token file that reopens enrollment without a
+  # restart, including the fail-closed cases.
+  add_executable(rapid-owner-reset-tests tests/owner_reset_tests.cpp)
+  target_link_libraries(rapid-owner-reset-tests PRIVATE rapid_setup_auth)
+  target_compile_options(rapid-owner-reset-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME rapid-owner-reset-tests COMMAND rapid-owner-reset-tests $<TARGET_FILE:rapid-owner-reset>)
   # #28: the setup page's OpenSSH key encoding, loaded straight out of
   # assets/setup.html and checked against fixed Ed25519/ECDSA vectors with node.
   find_program(NODE_EXECUTABLE node REQUIRED)

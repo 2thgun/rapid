@@ -57,4 +57,4 @@ mmdebstrap:
       # owner's device password and starts it.
       printf '\ninclude = /usr/share/rapid/samba/telemetry.conf\n' >> "$root/etc/samba/smb.conf"
       chroot "$root" systemctl disable smbd nmbd wsdd2
-      chroot "$root" systemctl enable rapid-firstboot rapid-provision rapid rapid-display rapid-log-status rapid-setup rapid-network-mode rapid-apply.path rapid-wifi.path rapid-account.path
+      chroot "$root" systemctl enable rapid-firstboot rapid-provision rapid rapid-display rapid-log-status rapid-setup rapid-network-mode rapid-apply.path rapid-wifi.path rapid-account.path rapid-owner-reset.path

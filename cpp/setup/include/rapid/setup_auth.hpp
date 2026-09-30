@@ -5,7 +5,10 @@
 
 namespace rapid::native {
 class SetupAuth {
-  struct Session { double expires; std::string csrf; };
+  // owner: a digest of the owner credential the session was created for. The
+  // physical owner reset (#44) clears that credential from another process, so
+  // a session must notice it is gone rather than outlive it.
+  struct Session { double expires; std::string csrf; std::string owner; };
   SetupStore &store_;
   std::function<double()> clock_;
   std::mutex mutex_;
@@ -32,6 +35,9 @@ class SetupAuth {
   std::deque<double> account_attempts_;
   // Setup AP name chosen by rapid-provision for this boot (#22).
   fs::path network_ssid_file_;
+  // #44: the enrollment token file, re-read while no owner is enrolled so the
+  // physical owner reset reopens enrollment without a restart.
+  fs::path enrollment_token_file_;
   // #10: the companion artifact served by the unauthenticated
   // /companion/download route. Empty when nothing suitable was installed, so
   // the setup page never offers a download that cannot be served.
@@ -39,6 +45,10 @@ class SetupAuth {
   std::string companion_sha256_;
   std::string companion_filename_;
   void expire(double time);
+  // #44: while no owner is enrolled the token file is the live source of the
+  // enrollment token, so a physical reset reopens enrollment. Fail-closed: an
+  // unreadable or invalid file leaves the current token unchanged.
+  void reopen_enrollment();
   Response handle_account(const Request &request, const std::string &path,
                           const std::string &csrf, double time);
 
@@ -67,6 +77,15 @@ public:
   // half-installed package can never advertise a download. Its SHA-256 is
   // computed once here and republished in GET /api/v1/setup.
   void set_companion_artifact(fs::path artifact);
+  // #44: the enrollment token file the physical owner reset rewrites. Set
+  // once at startup; while no owner is enrolled the file is re-read on each
+  // request so a reset reopens enrollment without a service restart.
+  void set_enrollment_token_file(fs::path token_file);
   Response handle(const Request &request);
 };
+
+// Reads and strictly validates the enrollment token file: a private, regular,
+// service-owned file holding 64 lowercase hexadecimal characters. Throws when
+// the file is missing, linked, foreign-owned or malformed.
+std::string validated_enrollment_token(const fs::path &path);
 } // namespace rapid::native
