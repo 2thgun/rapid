@@ -103,4 +103,42 @@ if ! grep -qF "raPId package version 0.9.9~dev.42+abcdef0" "$work/output"; then
 fi
 echo "ok: an explicit version rescues a source archive"
 
+# #73: packaging/expected-version.sh, which CI uses to check that the Windows
+# companion and the Pi package name the same build, must agree with
+# RapidVersion.cmake for an untagged commit and for a tag, and must refuse a
+# shallow clone (whose commit count is wrong) instead of reporting it.
+expected_script="$source_root/packaging/expected-version.sh"
+test -f "$expected_script"
+cp "$expected_script" "$repo/packaging/"
+git -C "$repo" tag -d v0.9.9 > /dev/null
+count=$(git -C "$repo" rev-list --count HEAD)
+sha=$(git -C "$repo" rev-parse --short=7 HEAD)
+expect_version "0.9.9~dev.$count+$sha"
+if [ "$(sh "$repo/packaging/expected-version.sh")" != "0.9.9~dev.$count+$sha" ]; then
+  echo "FAIL: expected-version.sh disagrees with RapidVersion.cmake for an untagged commit" >&2
+  exit 1
+fi
+git -C "$repo" tag v0.9.9
+if [ "$(sh "$repo/packaging/expected-version.sh")" != "0.9.9" ]; then
+  echo "FAIL: expected-version.sh disagrees with RapidVersion.cmake for a tag" >&2
+  exit 1
+fi
+git -C "$repo" tag -d v0.9.9 > /dev/null
+echo "ok: expected-version.sh agrees with RapidVersion.cmake"
+shallow="$work/shallow"
+git clone -q --depth 1 "file://$repo" "$shallow"
+mkdir -p "$shallow/packaging"
+cp "$version_cmake" "$expected_script" "$shallow/packaging/"
+if sh "$shallow/packaging/expected-version.sh" > "$work/output" 2>&1; then
+  cat "$work/output"
+  echo "FAIL: expected-version.sh accepted a shallow clone" >&2
+  exit 1
+fi
+if ! grep -qF "shallow" "$work/output"; then
+  cat "$work/output"
+  echo "FAIL: a shallow clone was rejected for the wrong reason" >&2
+  exit 1
+fi
+echo "ok: expected-version.sh rejects a shallow clone"
+
 echo "version derivation tests passed"
