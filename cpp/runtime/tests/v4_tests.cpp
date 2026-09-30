@@ -1,8 +1,11 @@
 #include "rapid/native.hpp"
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <unistd.h>
 #include <openssl/hmac.h>
 #include <thread>
 
@@ -32,6 +35,38 @@ void resign(std::string &bytes, char key_byte = '\x11') {
           "sign test packet");
   bytes.replace(bytes.size() - 32, 32, reinterpret_cast<char *>(hash), 32);
 }
+// Runs fn with stderr redirected to a file and returns what it logged (#74):
+// log() writes to std::cerr, so this is how a test sees a runtime log line.
+std::string capture_log(const std::function<void()> &fn) {
+  const auto path = fs::temp_directory_path() / ("rapid-v4-log-" + unique_id());
+  std::fflush(stderr);
+  const int saved = dup(fileno(stderr));
+  require(saved >= 0 && std::freopen(path.c_str(), "w", stderr) != nullptr,
+          "redirect stderr");
+  try {
+    fn();
+  } catch (...) {
+    std::fflush(stderr);
+    dup2(saved, fileno(stderr));
+    ::close(saved);
+    throw;
+  }
+  std::fflush(stderr);
+  dup2(saved, fileno(stderr));
+  ::close(saved);
+  clearerr(stderr);
+  auto text = read_file(path);
+  std::error_code ignored;
+  fs::remove(path, ignored);
+  return text;
+}
+std::size_t count_of(const std::string &text, const std::string &needle) {
+  std::size_t n = 0;
+  for (auto at = text.find(needle); at != std::string::npos;
+       at = text.find(needle, at + needle.size()))
+    ++n;
+  return n;
+}
 int main(int argc, char **argv) {
   try {
     require(argc == 3, "assets and Windows fixture paths required");
@@ -57,6 +92,49 @@ int main(int argc, char **argv) {
                lap_valid_true = fixture(argv[2], "lap-valid-true.hex"),
                lap_valid_false = fixture(argv[2], "lap-valid-false.hex"),
                lap_valid_unknown = fixture(argv[2], "lap-valid-unknown.hex");
+    // #74: a rejected packet's reason must reach the log, or a burst of
+    // packets_invalid in the field cannot be attributed. The reason is logged
+    // when first seen and then at most once per interval per reason, so a
+    // sustained burst cannot flood the journal, and never with packet bytes.
+    {
+      auto quiet = c;
+      quiet.database = root / "state-log.db";
+      quiet.invalid_log_interval_seconds = 0.4;
+      Runtime r(quiet);
+      auto no_metadata_yet = telemetry;  // valid signature, but the run was never announced
+      const auto first = capture_log([&] {
+        for (int i = 0; i < 200; ++i)
+          require(!r.receive(no_metadata_yet, "127.0.0.1"), "telemetry before metadata rejected");
+      });
+      require(r.snapshot()["packets_invalid"] == 200, "every rejected packet is still counted");
+      require(count_of(first, "v4 packet rejected as invalid: v4 metadata required before active data") == 1,
+              "#74: a burst of identical rejections logs its reason once");
+      require(first.find("since the last report") == std::string::npos,
+              "#74: the first report carries no repeat count");
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      const auto later = capture_log([&] {
+        for (int i = 0; i < 50; ++i) (void)r.receive(no_metadata_yet, "127.0.0.1");
+      });
+      require(count_of(later, "v4 packet rejected as invalid: v4 metadata required before active data") == 1 &&
+                  later.find("(200 since the last report, 201 total)") != std::string::npos,
+              "#74: after the interval the reason is reported again with how many were suppressed");
+      // A different check is a different reason and is reported on its own.
+      auto old_schema = metadata;
+      old_schema[12] = 1;
+      resign(old_schema);  // validly signed, so it reaches the header checks
+      const auto other = capture_log([&] { (void)r.receive(old_schema, "127.0.0.1"); });
+      require(other.find("v4 packet rejected as invalid: invalid v4 header/schema") != std::string::npos &&
+                  other.find("v4 metadata required") == std::string::npos,
+              "#74: a different rejection reason is logged separately");
+      // Authentication failures and replays keep their own counters and are not
+      // reported as invalid packets.
+      auto corrupt = metadata;
+      corrupt.back() ^= 1;
+      const auto auth = capture_log([&] { (void)r.receive(corrupt, "127.0.0.1"); });
+      require(auth.find("rejected as invalid") == std::string::npos &&
+                  r.snapshot()["packets_auth_failed"] == 1,
+              "#74: a bad HMAC is counted as an authentication failure, not logged as invalid");
+    }
     {
       Runtime r(c);
       // The retired v3 JSON transport must be gone, not quietly accepted: a

@@ -61,6 +61,7 @@ last completed checks, not a guarantee of current device state.
 - An upgraded device now gets the open `rapid-setup` access point profile
   created and its SSID published even when the owner is already configured, so
   Access Point mode works after an upgrade from the old secured-profile scheme.
+- The Pi now logs why it rejected a v4 packet as invalid (for example a pedal or RPM out of range, or telemetry that arrived before its metadata). Each distinct reason is logged once and then at most every 10 s with how many were rejected in between, so a burst of `packets_invalid` in the field can be traced to the check that failed without flooding the journal (#74).
 - The setup page's SSH keys are now their own category, separate from the
   device password/PIN: enrolled keys can be listed, added, edited (comment) and
   removed through the same authenticated `/api/v1/account` endpoint and
