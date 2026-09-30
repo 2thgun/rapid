@@ -80,6 +80,7 @@ last completed checks, not a guarantee of current device state.
   upgrade rather than a downgrade and no longer needs `--allow-downgrades`. A
   build with no git metadata and no explicit `-DRAPID_PACKAGE_VERSION` now fails
   loudly instead of producing an untraceable `0.9.9~dev+unknown` package.
+- Removed `display/rapid-kiosk`, the launcher for the old Chromium kiosk that nothing has used since the Qt panel became the only dashboard (#68). The panel's own launcher, `packaging/rapid-panel`, already keeps the screen awake.
 - `/run/rapid` now has a single lifecycle owner (`rapid-firstboot.service`), so
   stopping or restarting `rapid-provision.service` no longer deletes the shared
   directory while `rapid-setup.service` and `rapid.service` still need it.
