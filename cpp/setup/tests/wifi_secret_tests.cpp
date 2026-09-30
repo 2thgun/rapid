@@ -314,6 +314,47 @@ void malformed_request_scenario(const fs::path &base, const std::string &helper)
   const auto found = files_containing(flow.root, password.substr(0, password.size() / 2));
   require(found.empty(), "no artifact -- including rapid-wifi's own error log -- quotes the cut request");
 }
+
+// GLib keyfile values lose their leading whitespace when parsed, so a value
+// that starts or ends with a space has to be written as \s. Real
+// NetworkManager 1.46 turned an SSID or passphrase of "  a b  " into "a b  "
+// with the raw form, so such a network could never connect. NetworkManager
+// itself writes \s, so it must also be read back as a space (a literal "\s"
+// would show in the list and be corrupted when the setup AP is rewritten).
+void keyfile_whitespace_scenario(const fs::path &base, const std::string &helper) {
+  {
+    Flow flow(base / "whitespace-save", helper);
+    atomic_file(flow.request_file(), Json{{"action", "save"}, {"revision", 1},
+                                          {"ssid", "  Cafe Net  "}, {"password", "  pass word  "}}.dump());
+    require(flow.run() == 0, "rapid-wifi saves a network whose SSID and passphrase have edge spaces");
+    const auto keyfile = read_file(flow.connection_file());
+    require(keyfile.find("ssid=\\s\\sCafe Net\\s\\s\n") != std::string::npos,
+            "leading and trailing SSID spaces are written as \\s, interior spaces stay literal");
+    require(keyfile.find("psk=\\s\\spass word\\s\\s\n") != std::string::npos,
+            "leading and trailing passphrase spaces are written as \\s");
+  }
+  {
+    Flow flow(base / "whitespace-list", helper);
+    write_text(flow.connections / "cafe.nmconnection",
+               "[connection]\nid=cafe\ntype=wifi\n\n[wifi]\nssid=\\s\\sCafe Net\\s\n\n"
+               "[wifi-security]\nkey-mgmt=wpa-psk\npsk=secret-password\n");
+    atomic_file(flow.request_file(), Json{{"action", "list"}}.dump());
+    require(flow.run() == 0, "rapid-wifi lists a saved network with edge spaces");
+    const auto listed = Json::parse(read_file(flow.result_file()))["connections"];
+    require(listed.size() == 1 && listed[0]["ssid"] == "  Cafe Net ",
+            "an SSID NetworkManager wrote with \\s is listed with real spaces");
+  }
+  {
+    Flow flow(base / "whitespace-ap", helper);
+    write_text(flow.connections / "rapid-setup.nmconnection",
+               "[connection]\nid=rapid-setup\nuuid=44444444-4444-4444-4444-444444444444\ntype=wifi\n\n"
+               "[wifi]\nmode=ap\nssid=\\sOpen\n\n[ipv4]\nmethod=shared\nipv4.addresses=192.168.1.64/24\n");
+    atomic_file(flow.request_file(), Json{{"action", "setup_ap"}, {"password", "Setup-Ap-Passphrase"}}.dump());
+    require(flow.run() == 0, "rapid-wifi rewrites a setup AP whose SSID starts with a space");
+    require(read_file(flow.connections / "rapid-setup.nmconnection").find("ssid=\\sOpen\n") != std::string::npos,
+            "the rewritten setup AP keeps its SSID exactly (no doubled backslash)");
+  }
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -333,6 +374,8 @@ int main(int argc, char **argv) {
     std::cout << "ok: a saved connection is removed through the helper and the setup access point is refused\n";
     setup_ap_scenario(root.path, helper);
     std::cout << "ok: the setup-AP password is applied and cleared on the provisioner-owned profile\n";
+    keyfile_whitespace_scenario(root.path, helper);
+    std::cout << "ok: edge spaces in an SSID or passphrase survive the keyfile round trip\n";
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "FAIL: " << error.what() << std::endl;

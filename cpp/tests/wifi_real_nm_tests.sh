@@ -74,6 +74,27 @@ if [ "$observed" != "$ssid" ]; then
 fi
 echo "ok: real NetworkManager loaded the profile and parsed the SSID '$ssid' back unchanged"
 
+# GLib drops leading whitespace from keyfile values, so an SSID or passphrase
+# that starts or ends with a space must be written as \s. With the raw form real
+# NetworkManager 1.46 stored "  Cafe Net  " as "Cafe Net  ", and the passphrase
+# the same way, so that network could never connect.
+edge_ssid='  Cafe Net  '
+edge_password='  pass word  '
+printf '%s\n' '{"action":"save","revision":2,"ssid":"  Cafe Net  ","password":"  pass word  "}' >"$request"
+"$helper" --request-file "$request" --result-file "$result" >/dev/null 2>&1 || true
+nmcli connection load "$keyfile" >/dev/null 2>&1
+observed=$(nmcli -t -f 802-11-wireless.ssid connection show rapid-home 2>/dev/null | head -n 1 | cut -d: -f2-)
+if [ "$observed" != "$edge_ssid" ]; then
+  echo "FAIL: NetworkManager parsed the edge-space SSID as '$observed', expected '$edge_ssid'" >&2
+  exit 1
+fi
+observed=$(nmcli -s -t -f 802-11-wireless-security.psk connection show rapid-home 2>/dev/null | head -n 1 | cut -d: -f2-)
+if [ "$observed" != "$edge_password" ]; then
+  echo "FAIL: NetworkManager parsed the edge-space passphrase as '$observed', expected '$edge_password'" >&2
+  exit 1
+fi
+echo "ok: real NetworkManager kept the leading and trailing spaces of an SSID and a passphrase"
+
 # Activation needs a wifi device and a real network; only a physical Pi has
 # them. Where one exists, bring the profile up and confirm it activates.
 if nmcli -t -f TYPE device status 2>/dev/null | grep -q '^802-11-wireless$'; then
