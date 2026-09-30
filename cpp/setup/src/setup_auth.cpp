@@ -61,13 +61,19 @@ std::string network_ssid(const fs::path &path) {
     return {};
   }
 }
-// Waits for the rapid-wifi helper to rewrite the result file, then returns
-// its parsed content. This class's mutex serializes every request, so
-// deleting the result file before queueing makes "it reappeared" a reliable
-// signal that this request's helper run finished.
-std::optional<Json> wait_for_wifi_result(const fs::path &result_file, double timeout) {
+// Queues one request for the rapid-wifi helper and waits for it to rewrite the
+// result file, then returns the parsed result. This class's mutex serializes
+// every request, so deleting the old result *before* the request is queued makes
+// "it reappeared" a reliable signal that this request's helper run finished.
+// Deleting it afterwards (as this once did) raced with a fast helper: the fresh
+// result could be written first and then removed, leaving the endpoint to wait
+// out its whole timeout for a result that had already arrived.
+std::optional<Json> wifi_request_and_wait(const fs::path &request_file,
+                                          const fs::path &result_file,
+                                          const Json &request, double timeout) {
   std::error_code error;
   fs::remove(result_file, error);
+  atomic_file(request_file, request.dump());
   const double deadline = monotonic() + timeout;
   while (monotonic() < deadline) {
     if (fs::is_regular_file(result_file, error)) {
@@ -350,7 +356,7 @@ Response SetupAuth::handle(const Request &request) {
     if (sessions_.size() >= 16)
       return reply(429, {{"detail", "too many active sessions"}});
     const auto token = unique_id() + unique_id(), csrf = unique_id() + unique_id();
-    sessions_.emplace(hash_text(token), Session{clock_() + 1800, csrf});
+    sessions_.emplace(hash_text(token), Session{clock_() + 1800, csrf, hash_text(hash)});
     auto response = reply(200, {{"authenticated", true}, {"csrf_token", csrf}, {"expires_in", 1800}});
     response.headers.emplace_back("Set-Cookie", "rapid_setup=" + token +
         "; Path=/; HttpOnly; SameSite=Strict; Max-Age=1800" + (secure_transport_ ? "; Secure" : ""));
@@ -360,6 +366,17 @@ Response SetupAuth::handle(const Request &request) {
   const auto session = sessions_.find(hash_text(token));
   if (token.empty() || session == sessions_.end())
     return reply(401, {{"detail", "sign in required"}});
+  // A session belongs to the owner credential it was created for. After the
+  // physical owner reset (#44) that credential is gone, and it may later be
+  // replaced by a different owner's; either way the session ends here instead
+  // of staying authorized for the rest of its 30 minutes.
+  {
+    const auto current_owner = store_.owner_hash();
+    if (current_owner.empty() || hash_text(current_owner) != session->second.owner) {
+      sessions_.erase(session);
+      return reply(401, {{"detail", "sign in required"}});
+    }
+  }
   if (path == "/api/v1/account")
     return handle_account(request, path, session->second.csrf, time);
   if (pairing_ && secure_transport_ && path == "/api/v1/pairing/window" && request.method == "POST") {
@@ -555,8 +572,7 @@ Response SetupAuth::handle(const Request &request) {
     if (wifi_request_file_.empty() || wifi_result_file_.empty())
       return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
     try {
-      atomic_file(wifi_request_file_, Json{{"action", "list"}}.dump());
-      auto result = wait_for_wifi_result(wifi_result_file_, 30);
+      auto result = wifi_request_and_wait(wifi_request_file_, wifi_result_file_, Json{{"action", "list"}}, 30);
       if (!result) return reply(503, {{"detail", "the Wi-Fi list timed out"}});
       return reply(200, *result);
     } catch (const std::exception &) {
@@ -584,8 +600,8 @@ Response SetupAuth::handle(const Request &request) {
         return reply(400, {{"detail", "invalid connection name"}});
       if (wifi_request_file_.empty()) return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
       try {
-        atomic_file(wifi_request_file_, Json{{"action", "remove"}, {"name", name}}.dump());
-        auto result = wait_for_wifi_result(wifi_result_file_, 30);
+        auto result = wifi_request_and_wait(wifi_request_file_, wifi_result_file_,
+                                            Json{{"action", "remove"}, {"name", name}}, 30);
         if (!result) return reply(503, {{"detail", "the Wi-Fi removal timed out"}});
         return reply(200, *result);
       } catch (const std::exception &) {
@@ -600,8 +616,8 @@ Response SetupAuth::handle(const Request &request) {
         return reply(400, {{"detail", "invalid setup network password"}});
       if (wifi_request_file_.empty()) return reply(503, {{"detail", "Wi-Fi management is unavailable"}});
       try {
-        atomic_file(wifi_request_file_, Json{{"action", "setup_ap"}, {"password", password}}.dump());
-        auto result = wait_for_wifi_result(wifi_result_file_, 30);
+        auto result = wifi_request_and_wait(wifi_request_file_, wifi_result_file_,
+                                            Json{{"action", "setup_ap"}, {"password", password}}, 30);
         if (!result) return reply(503, {{"detail", "the setup network password timed out"}});
         return reply(200, *result);
       } catch (const std::exception &) {

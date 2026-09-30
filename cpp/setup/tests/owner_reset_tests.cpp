@@ -37,6 +37,11 @@ Request request(const std::string &path, const std::string &method = "GET", cons
 }
 // A well-formed stored hash shape; the helper never sees a password.
 const char *kOwnerHash = "$argon2id$fixturehashfixturehashfixturehash";
+std::string cookie(const Response &response) {
+  for (const auto &[name, value] : response.headers)
+    if (name == "Set-Cookie") return value.substr(0, value.find(';'));
+  throw std::runtime_error("missing session cookie");
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -225,6 +230,43 @@ int main(int argc, char **argv) {
       const auto public_setup = Json::parse(auth.handle(request("/api/v1/setup")).body);
       require(public_setup["capabilities"]["browser_owner_enrollment"] == false,
               "an enrolled device cannot reopen enrollment from the token file alone");
+    }
+    // A session that was signed in before the physical reset must not outlive
+    // it. The reset exists to revoke the previous owner's access (a forgotten
+    // or leaked password), but the root helper edits the database from another
+    // process, so a session held in the setup server's memory has to notice
+    // that the credential it was created for is gone -- and must not carry
+    // over to whoever enrolls next.
+    {
+      SetupStore sessions_store(root.path / "sessions");
+      double time = 0;
+      SetupAuth auth(sessions_store, 8002, [&] { return time; }, {}, "127.0.0.1");
+      require(auth.enroll("first-owner-password"), "the first owner enrolls");
+      const auto login = auth.handle(request("/api/v1/auth/login", "POST",
+                                             {{"password", "first-owner-password"}}));
+      require(login.status == 200, "the first owner signs in");
+      auto settings = request("/api/v1/settings");
+      settings.headers["cookie"] = cookie(login);
+      require(auth.handle(settings).status == 200, "the signed-in session works before the reset");
+
+      // What the root helper does (clear_owner in owner_reset_main.cpp).
+      {
+        Database database(root.path / "sessions" / "setup.db");
+        database.exec("DELETE FROM setup_owner WHERE id=1");
+      }
+      require(auth.handle(settings).status == 401,
+              "a session from before the owner reset is rejected");
+
+      require(auth.enroll("second-owner-password"), "a new owner enrolls after the reset");
+      require(auth.handle(settings).status == 401,
+              "the old session does not carry over to the new owner");
+      const auto second = auth.handle(request("/api/v1/auth/login", "POST",
+                                              {{"password", "second-owner-password"}}));
+      require(second.status == 200, "the new owner signs in");
+      auto second_settings = request("/api/v1/settings");
+      second_settings.headers["cookie"] = cookie(second);
+      require(auth.handle(second_settings).status == 200 && auth.handle(settings).status == 401,
+              "the new owner's own session works while the old one stays rejected");
     }
     std::cout << "owner reset helper and enrollment re-read tests passed\n";
     return 0;

@@ -220,6 +220,10 @@ request=$1
 result=$2
 while [ ! -f "$request" ]; do sleep 0.05; done
 action=$(sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$request" | head -n 1)
+# Like the real helper, consume the request as soon as it is read. Without
+# this a mock started for the next action found the previous, stale request
+# and answered that one instead.
+rm -f "$request"
 case "$action" in
   list) printf '{"connections":[{"name":"rapid-home","ssid":"Home","secured":true,"owned":false}]}\n' > "$result" ;;
   remove) printf '{"removed":true}\n' > "$result" ;;
