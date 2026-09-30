@@ -96,6 +96,7 @@ last completed checks, not a guarantee of current device state.
   the setup page address and a Start/Restart setup service button. Its setup
   card (SSID, address, TLS fingerprint) also shows in Access Point mode on an
   already-enrolled device, without the activation token.
+- A password set on the setup access point from the setup page is no longer removed at every boot. The boot-time provisioner used to strip the WPA setting unconditionally, so the network went back to open after any reboot; only the old device-specific secured profile is now cleaned up.
 - Added the 0.9.9 release pipeline: the package version derives from a git tag
   (`0.9.9`, or `0.9.9~dev.<commit-count>+<sha>` untagged), hosted ARM64 CI builds
   and verifies the `.deb` with `-Werror`, and a `v*` tag assembles a flashable
