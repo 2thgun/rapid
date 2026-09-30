@@ -12,9 +12,12 @@
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTimer>
+#include <QWebSocket>
+#include <QWebSocketServer>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <iostream>
 
 // Loopback-only fixture: never sends UDP or writes a production recording.
@@ -643,5 +646,50 @@ int main(int argc, char **argv) {
   spin(700);
   require(restarted.ownerResetStatus().isEmpty(),
           "#44: a result from before the panel started is not shown");
+  // The ?mode=state WebSocket push sends diffed frames ({"seq":N,"state":
+  // {changed keys}}); the panel merges each into its live state. This was
+  // never exercised from the Qt side, and merging a frame crashed the panel
+  // (a dangling iterator over a temporary QJsonObject). Serve real frames over
+  // a real WebSocket and check the state after each.
+  {
+    QWebSocketServer frames("test", QWebSocketServer::NonSecureMode);
+    require(frames.listen(QHostAddress::LocalHost, 0), "the frame server listens");
+    QWebSocket *pushed_to = nullptr;
+    QObject::connect(&frames, &QWebSocketServer::newConnection, &app, [&] {
+      pushed_to = frames.nextPendingConnection();
+      pushed_to->sendTextMessage(QString::fromUtf8(QJsonDocument(QJsonObject{
+          {"seq", 0}, {"state", QJsonObject{{"throttle", 0.5}, {"brake", 0.25}, {"session_id", "ws-test"},
+                                            {"companion_connected", true}}}}).toJson(QJsonDocument::Compact)));
+    });
+    DashboardModel pushed(QUrl("http://127.0.0.1:" + QString::number(frames.serverPort())));
+    const auto wait_for = [&](const std::function<bool()> &done) {
+      QElapsedTimer wait; wait.start();
+      while (!done() && wait.elapsed() < 8000) QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+      return done();
+    };
+    require(wait_for([&] { return pushed.value("throttle").toDouble() == 0.5; }),
+            "the first pushed frame is merged into the live state");
+    require(pushed.value("brake").toDouble() == 0.25 && pushed.value("session_id").toString() == "ws-test" &&
+                pushed.livePushActive(),
+            "every key of the first frame is present and the push is marked active");
+    // A later frame carries only what changed; the rest must survive.
+    require(pushed_to != nullptr, "the panel is connected to the frame server");
+    pushed_to->sendTextMessage(QString::fromUtf8(QJsonDocument(QJsonObject{
+        {"seq", 1}, {"state", QJsonObject{{"throttle", 0.75}}}}).toJson(QJsonDocument::Compact)));
+    require(wait_for([&] { return pushed.value("throttle").toDouble() == 0.75; }),
+            "a later diffed frame updates the changed key");
+    require(pushed.value("brake").toDouble() == 0.25 && pushed.value("session_id").toString() == "ws-test",
+            "keys a diffed frame does not mention keep their value");
+    // A frame that is not an object, or has no state, changes nothing and must
+    // not crash.
+    pushed_to->sendTextMessage("[1,2,3]");
+    pushed_to->sendTextMessage("{\"seq\":2}");
+    pushed_to->sendTextMessage("{\"seq\":3,\"state\":5}");
+    pushed_to->sendTextMessage(QString::fromUtf8(QJsonDocument(QJsonObject{
+        {"seq", 4}, {"state", QJsonObject{{"brake", 0.5}}}}).toJson(QJsonDocument::Compact)));
+    require(wait_for([&] { return pushed.value("brake").toDouble() == 0.5; }) &&
+                pushed.value("throttle").toDouble() == 0.75,
+            "malformed frames are ignored and the next good frame still applies");
+  }
   std::cout << "Qt model polling, deduplication, null, gap and calibration checks passed\n";
 }
