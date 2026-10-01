@@ -5,6 +5,11 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The Windows companion no longer reads past the end of a simulator's shared
+  memory. A page shorter than the companion expects (a newer or older sim build,
+  or a header field that is wrong while the sim loads) read other memory or could
+  crash the companion in the middle of a session; those reads now return empty
+  values.
 - iRacing recordings now name the right session, driver and car. The companion
   read the first session, driver and car in iRacing's session file, so a race
   showed as practice (and the move from practice to qualifying to the race was
