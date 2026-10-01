@@ -40,6 +40,14 @@ Window {
         const ms = Math.abs(Number(v))
         return (v > 0 ? "+" : v < 0 ? "-" : "") + Math.floor(ms/60000) + ":" + String(Math.floor(ms/1000)%60).padStart(2,"0") + "." + String(ms%1000).padStart(3,"0")
     }
+    // How much faster the ideal lap (sum of the best sectors) is than the best
+    // real lap, shown as a negative time like the delta; blank until both exist.
+    function gain() {
+        const best = raw("best_lap_ms"), ideal = raw("optimal_lap_ms")
+        if (best == null || ideal == null) return "—"
+        const ms = Math.max(0, Math.round(Number(best) - Number(ideal)))
+        return (ms > 0 ? "-" : "") + Math.floor(ms/60000) + ":" + String(Math.floor(ms/1000)%60).padStart(2,"0") + "." + String(ms%1000).padStart(3,"0")
+    }
     function sector(n) { return time("sector_" + n + "_ms") + (raw("sector_" + n + "_delta_ms") == null ? "" : " (" + delta("sector_" + n + "_delta_ms") + ")") }
     function pair(a, b, suffix) { return numeric(a,1) + " / " + numeric(b,1) + (suffix || "") }
     function gear() { const v = raw("gear"); return v == null ? "—" : v === -1 ? "R" : v === 0 ? "N" : String(v) }
@@ -94,10 +102,11 @@ Window {
         required property string title
         required property var entries
         property int columns: 2
+        property int rowGap: 9
         Label { x: 8; y: 8; width: parent.width-16; text: parent.title }
         Grid {
             x: 8; y: 31; width: parent.width-16
-            columns: parent.columns; columnSpacing: 6; rowSpacing: 9
+            columns: parent.columns; columnSpacing: 6; rowSpacing: parent.rowGap
             Repeater {
                 model: parent.parent.entries
                 Metric {
@@ -232,8 +241,8 @@ Window {
             }
             Row {
                 visible: root.page === 1; spacing: 6
-                MetricCard { width: 190; height: body.height; title: "LIVE TIMING"
-                    entries: [["CURRENT",root.time("current_lap_ms")],["LAST",root.time("completed_lap_ms")],["BEST",root.time("best_lap_ms")],["DELTA",root.delta("delta_ms")],["S1",root.sector(1)],["S2",root.sector(2)],["S3",root.sector(3)],["LAP",root.text("lap_number")]]
+                MetricCard { width: 190; height: body.height; rowGap: 6; title: "LIVE TIMING"
+                    entries: [["CURRENT",root.time("current_lap_ms")],["LAST",root.time("completed_lap_ms")],["BEST",root.time("best_lap_ms")],["DELTA",root.delta("delta_ms")],["S1",root.sector(1)],["S2",root.sector(2)],["S3",root.sector(3)],["LAP",root.text("lap_number")],["IDEAL",root.time("optimal_lap_ms")],["GAIN",root.gain()]]
                 }
                 MetricCard { width: 146; height: body.height; columns: 1; title: "SESSION"
                     entries: [["TRACK",root.text("track_name")],["CAR",root.text("car_model")],["DRIVER",root.text("driver_name")],["POSITION",root.raw("lap_position") == null ? "—" : Math.round(root.number("lap_position")*(root.number("lap_position")>1 ? 1 : 100))+"%"]]
