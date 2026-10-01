@@ -553,6 +553,60 @@ int main(int argc, char **argv) {
     recorder.wait_idle();
     require(recorder.status()["last_bundle_path"].is_string(),
             "failed publication succeeds on retry");
+    {
+      // Lost packets must leave the recorded timeline intact. The LD file has
+      // no timestamps: sample n is at n / rate. A telemetry packet that never
+      // arrives used to leave a hole that every later sample slid across, so
+      // data near the end of a session sat early by the total time lost.
+      // Sequence gaps count lost packets of any kind, and control packets
+      // (heartbeats) share the sequence with telemetry, so a gap alone does
+      // not say how many samples are missing; the sender's timestamps do.
+      Config lossy = c;
+      lossy.database = root / "loss.db";
+      lossy.telemetry = root / "loss-telemetry";
+      lossy.queue = root / "loss-queue.db";
+      Runtime loss(lossy);
+      Wire wire(v4_run_id());
+      require(loss.receive(wire.metadata(), "127.0.0.1"), "loss metadata");
+      int delivered = 0, generated = 0;
+      const auto sample = [&](bool deliver) {
+        const auto packet = wire.telemetry(1, 1000 + generated * 20.0);
+        ++generated;
+        if (!deliver) return;
+        require(loss.receive(packet, "127.0.0.1"), "loss sample accepted");
+        ++delivered;
+      };
+      for (int i = 0; i < 20; ++i) sample(true);
+      // A lost heartbeat shares the sequence but is not a sample; it is sent
+      // between samples, so no sample time is spent on it.
+      (void)wire.stream.metadata(wire.time_us, "Spa", "GT3", "Test driver", "Race", "900");
+      for (int i = 0; i < 20; ++i) sample(true);
+      // Five samples lost in a row, then a heartbeat that arrives (so the gap
+      // is split across two received packets), then one more lost on its own.
+      for (int i = 0; i < 5; ++i) sample(false);
+      require(loss.receive(wire.stream.metadata(wire.time_us, "Spa", "GT3", "Test driver", "Race", "900"),
+                           "127.0.0.1"),
+              "heartbeat after a burst accepted");
+      for (int i = 0; i < 20; ++i) sample(true);
+      sample(false);
+      for (int i = 0; i < 20; ++i) sample(true);
+      require(loss.receive(wire.stream.status(3, wire.time_us), "127.0.0.1"), "loss run ended");
+      Json bundle;
+      for (int i = 0; i < 200 && !bundle.is_string(); ++i) {
+        bundle = loss.snapshot()["last_bundle_path"];
+        if (!bundle.is_string())
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      require(bundle.is_string(), "loss recording published");
+      const auto manifest = Json::parse(read_file(fs::path(bundle.get<std::string>()) / "manifest.json"));
+      require(delivered == generated - 6, "the fixture lost six samples");
+      require(manifest["quality"]["missing_packets"] == 6 && manifest["quality"]["substituted_samples"] == 6 &&
+                  manifest["quality"]["unfilled_missing_packets"] == 0,
+              "six lost samples are counted and filled, the lost heartbeat is not");
+      require(manifest["quality"]["recorded_samples"] == generated &&
+                  manifest["quality"]["received_samples"] == delivered,
+              "every sample slot is on the timeline: recorded equals sent, received equals delivered");
+    }
     std::cout << "Native runtime: v4 validation, source pinning, replay, state, "
                  "broker, LD, lap, hashes, crash recovery and publication "
                  "retry passed\nEvidence: "

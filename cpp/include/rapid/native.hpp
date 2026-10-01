@@ -207,6 +207,11 @@ class Runtime {
   int timing_lap_ = -1, best_lap_ = 0;
   std::vector<int> splits_;
   std::vector<std::string> paired_keys_;
+  // Packets lost since the last telemetry sample (any packet type) and that
+  // sample's sender timestamp, used to place lost samples on the recording's
+  // timeline.
+  std::uint64_t pending_lost_ = 0;
+  double last_sample_us_ = -1;
   int best_sectors_[3]{};
   // The ideal lap: the best of each sector over laps the simulator did not
   // flag invalid, and the sector times of the lap being driven.
