@@ -5,6 +5,13 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Lost telemetry packets no longer shift the recording. The Pi's `.ld` file has
+  no timestamps (sample n is at n divided by the rate), so each lost sample made
+  everything after it sit early, by the total time lost by the end of a session.
+  The Pi now keeps each lost sample's slot on the timeline by repeating the
+  last sample, and counts them in the manifest (`missing_packets`,
+  `substituted_samples`). A lost heartbeat, or a late sample with nothing lost,
+  adds nothing.
 - The live view now runs at 50 Hz end to end: the Pi's WebSocket push ticks at
   20 ms (was a magic 33 ms), the Qt panel's data update path follows the push,
   and the Windows companion's default `sample_rate` is a permanent 50 Hz
