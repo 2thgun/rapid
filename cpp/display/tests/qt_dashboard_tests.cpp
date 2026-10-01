@@ -690,6 +690,8 @@ int main(int argc, char **argv) {
     require(wait_for([&] { return pushed.value("brake").toDouble() == 0.5; }) &&
                 pushed.value("throttle").toDouble() == 0.75,
             "malformed frames are ignored and the next good frame still applies");
+    // nextPendingConnection() hands over ownership of the accepted socket.
+    delete pushed_to;
   }
   std::cout << "Qt model polling, deduplication, null, gap and calibration checks passed\n";
 }
