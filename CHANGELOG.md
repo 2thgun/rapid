@@ -10,6 +10,10 @@ last completed checks, not a guarantee of current device state.
   or a header field that is wrong while the sim loads) read other memory or could
   crash the companion in the middle of a session; those reads now return empty
   values.
+- The first sector time (S1) no longer reads a few milliseconds after a line
+  crossing on AC1. AC1 restarts the lap timer a sample before the track position
+  wraps, and that sample was taken as the first-third split; the bogus S1 also
+  became the best S1 and made the ideal lap tens of seconds short.
 - Lost telemetry packets no longer shift the recording. The Pi's `.ld` file has
   no timestamps (sample n is at n divided by the rate), so each lost sample made
   everything after it sit early, by the total time lost by the end of a session.

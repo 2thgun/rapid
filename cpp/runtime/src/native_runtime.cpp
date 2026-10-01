@@ -167,8 +167,16 @@ void Runtime::sectors(Json &f) {
     splits_.clear();
     std::fill(std::begin(lap_sectors_), std::end(lap_sectors_), 0);
   }
-  if (has_position && splits_.size() < 2 &&
-      position >= double(splits_.size() + 1) / 3) {
+  // A split is the sample that crosses a third of the lap, not any sample past
+  // it. AC1 ticks the lap number and restarts the lap timer a sample before the
+  // track position wraps, so the first sample of a new lap can still read the
+  // end of the previous one; taken as "past the first third" it recorded a
+  // first sector of a few milliseconds. The window is generous (a quarter of a
+  // lap is many seconds of missing telemetry) and a lap joined past it simply
+  // has no sectors.
+  if (const double threshold = double(splits_.size() + 1) / 3;
+      has_position && splits_.size() < 2 && position >= threshold &&
+      position < threshold + 0.25) {
     int duration = int(time) - (splits_.empty() ? 0 : splits_.back());
     if (duration > 0) {
       record(splits_.size(), duration);
