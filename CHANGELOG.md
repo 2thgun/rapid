@@ -5,6 +5,13 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- iRacing recordings now name the right session, driver and car. The companion
+  read the first session, driver and car in iRacing's session file, so a race
+  showed as practice (and the move from practice to qualifying to the race was
+  not noticed) and the driver and car could be the pace car. It now follows
+  iRacing's current session number and your own car.
+- A session restart in AC or ACC is no longer missed when the simulator writes
+  to its shared memory during the exact sample that shows the restart.
 - The first sector time (S1) no longer reads a few milliseconds after a line
   crossing on AC1. AC1 restarts the lap timer a sample before the track position
   wraps, and that sample was taken as the first-third split; the bogus S1 also
