@@ -9,6 +9,13 @@ last completed checks, not a guarantee of current device state.
   crossing on AC1. AC1 restarts the lap timer a sample before the track position
   wraps, and that sample was taken as the first-third split; the bogus S1 also
   became the best S1 and made the ideal lap tens of seconds short.
+- Lost telemetry packets no longer shift the recording. The Pi's `.ld` file has
+  no timestamps (sample n is at n divided by the rate), so each lost sample made
+  everything after it sit early, by the total time lost by the end of a session.
+  The Pi now keeps each lost sample's slot on the timeline by repeating the
+  last sample, and counts them in the manifest (`missing_packets`,
+  `substituted_samples`). A lost heartbeat, or a late sample with nothing lost,
+  adds nothing.
 - The panel's Timing page now shows the ideal lap (IDEAL), the sum of the best
   three sectors, and GAIN, how much faster that is than the best real lap. A
   sector only counts from a lap the simulator did not flag invalid and from a
