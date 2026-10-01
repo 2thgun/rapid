@@ -12,6 +12,12 @@ last completed checks, not a guarantee of current device state.
   last sample, and counts them in the manifest (`missing_packets`,
   `substituted_samples`). A lost heartbeat, or a late sample with nothing lost,
   adds nothing.
+- The panel's Timing page now shows the ideal lap (IDEAL), the sum of the best
+  three sectors, and GAIN, how much faster that is than the best real lap. A
+  sector only counts from a lap the simulator did not flag invalid and from a
+  lap after the first one seen, and a new session starts over. The live state
+  also carries `best_sector_1_ms` to `best_sector_3_ms` and `optimal_lap_ms`.
+  Sectors are the existing thirds of the lap, as on the S1 to S3 lines.
 - The live view now runs at 50 Hz end to end: the Pi's WebSocket push ticks at
   20 ms (was a magic 33 ms), the Qt panel's data update path follows the push,
   and the Windows companion's default `sample_rate` is a permanent 50 Hz

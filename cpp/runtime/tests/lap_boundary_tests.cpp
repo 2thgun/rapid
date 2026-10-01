@@ -338,6 +338,107 @@ void test_lap_validity_manifest(const fs::path &root) {
           "a lap with no lap-valid signal stays unknown, never invented");
 }
 
+// The ideal lap: the sum of the best three sector times. A sector only counts
+// from a lap the simulator did not flag invalid, because a cut lap has
+// impossibly fast sectors that would make the ideal lap unbeatable.
+struct SectorLap {
+  int s1, s2, s3;
+};
+// One lap of samples, as (position %, current_lap_ms). The sample at 34% is
+// where sector 1 closes and the one at 67% is where sector 2 closes. The first
+// sample of the next lap (lap number + 1) carries the finished lap's time and
+// validity.
+void drive_lap(Runtime &runtime, DeltaStream &delta, int lap, SectorLap t) {
+  const std::pair<double, double> samples[] = {
+      {2.0, 500},
+      {10.0, t.s1 / 3.0},
+      {20.0, t.s1 * 2.0 / 3.0},
+      {34.0, t.s1},
+      {50.0, t.s1 + t.s2 / 2.0},
+      {67.0, t.s1 + t.s2},
+      {85.0, t.s1 + t.s2 + t.s3 / 2.0},
+      {95.0, t.s1 + t.s2 + t.s3 * 0.9},
+      {96.0, t.s1 + t.s2 + t.s3 * 0.93},
+      {98.0, t.s1 + t.s2 + t.s3 * 0.97},
+  };
+  for (const auto &[position, time] : samples)
+    require(runtime.receive(delta.frame(lap, std::round(time), position),
+                            "127.0.0.1"),
+            "sample accepted");
+}
+void cross_line(Runtime &runtime, DeltaStream &delta, int next_lap,
+                int completed_ms, int lap_valid) {
+  // drive_lap sends ten samples, more than the boundary's ten-sample cooldown;
+  // this is the sample that closes the lap.
+  require(runtime.receive(delta.frame(next_lap, 300, 2.0, 0, false, lap_valid,
+                                      completed_ms),
+                          "127.0.0.1"),
+          "lap-closing sample accepted");
+}
+
+void test_ideal_lap(const fs::path &assets, const fs::path &root) {
+  Config c;
+  c.assets = assets;
+  c.database = root / "ideal.db";
+  c.telemetry = root / "ideal-telemetry";
+  c.queue = root / "ideal-queue.db";
+  c.companion_key = std::string(32, '\x11');
+  Runtime runtime(c);
+  DeltaStream delta(rapid::test::v4_run_id());
+  require(runtime.receive(delta.metadata(), "127.0.0.1"), "ideal metadata");
+  const auto state = [&] { return runtime.snapshot(); };
+  const char *best[] = {"best_sector_1_ms", "best_sector_2_ms",
+                        "best_sector_3_ms"};
+
+  require(state()["optimal_lap_ms"].is_null() && state()[best[0]].is_null(),
+          "no ideal lap before any lap is timed");
+  // Lap 1 is the first lap the panel sees, possibly joined mid-lap: it never
+  // counts toward the ideal lap.
+  drive_lap(runtime, delta, 1, {20000, 20000, 20000});
+  cross_line(runtime, delta, 2, 60000, -1);
+  require(state()["optimal_lap_ms"].is_null(),
+          "the first, possibly partial, lap does not set the ideal lap");
+
+  // Lap 2: validity unknown (AC1 provides none) counts.
+  drive_lap(runtime, delta, 2, {30000, 31000, 30000});
+  cross_line(runtime, delta, 3, 91000, -1);
+  require(state()[best[0]] == 30000 && state()[best[1]] == 31000 &&
+              state()[best[2]] == 30000,
+          "the best sectors after a lap of unknown validity");
+  require(state()["optimal_lap_ms"] == 91000,
+          "the ideal lap is the sum of the best sectors");
+
+  // Lap 3: valid, faster in sectors 1 and 3, slower in 2. Each sector keeps
+  // its own best, so the ideal lap beats every real lap.
+  drive_lap(runtime, delta, 3, {29000, 32000, 29500});
+  cross_line(runtime, delta, 4, 90500, 1);
+  require(state()[best[0]] == 29000 && state()[best[1]] == 31000 &&
+              state()[best[2]] == 29500 && state()["optimal_lap_ms"] == 89500,
+          "each sector keeps its own best across laps");
+  require(state()["best_lap_ms"] == 90500, "the best real lap is unchanged");
+
+  // Lap 4: flagged invalid, with impossible sectors (a cut). The live sector
+  // times still show, but nothing from this lap enters the ideal lap.
+  drive_lap(runtime, delta, 4, {25000, 25000, 25000});
+  require(state()["sector_1_ms"] == 25000 && state()["sector_2_ms"] == 25000,
+          "the live sector times still show an invalid lap");
+  cross_line(runtime, delta, 5, 75000, 0);
+  require(state()[best[0]] == 29000 && state()[best[1]] == 31000 &&
+              state()[best[2]] == 29500 && state()["optimal_lap_ms"] == 89500,
+          "an invalid lap never enters the ideal lap");
+
+  // A new session starts over.
+  DeltaStream next(rapid::test::v4_run_id());
+  require(runtime.receive(next.metadata(), "127.0.0.1"), "second run metadata");
+  // The runtime switches session on the new run's first telemetry sample.
+  require(runtime.receive(next.frame(1, 1000, 5.0), "127.0.0.1"),
+          "second run sample");
+  require(state()["optimal_lap_ms"].is_null() && state()[best[0]].is_null() &&
+              state()[best[1]].is_null() && state()[best[2]].is_null(),
+          "a new session clears the best sectors and the ideal lap");
+  runtime.finish();
+}
+
 int main(int argc, char **argv) {
   try {
     if (argc != 3)
@@ -357,6 +458,7 @@ int main(int argc, char **argv) {
     test_acc_delta_untouched(assets, root);
     test_delta_presence(assets, root);
     test_lap_validity_manifest(root);
+    test_ideal_lap(assets, root);
 
     std::cout << "Lap boundary: unit rules, real-recording regression "
                  "fixtures, ACC delta passthrough, delta presence and the "
