@@ -462,17 +462,22 @@ void test_sectors_when_position_wraps_late(const fs::path &assets,
   drive_lap(runtime, delta, 1, {20000, 20000, 20000});
   cross_line(runtime, delta, 2, 60000, -1);
   drive_lap(runtime, delta, 2, {30000, 31000, 30000});
-  // The crossing into lap 3, the AC1 way: lap number 3, timer restarted, but
-  // the position still at the end of lap 2.
-  require(runtime.receive(delta.frame(3, 5, 99.8, 0, false, -1, 91000),
+  // The crossing into lap 3 as the owner's recordings show it (session
+  // 38f740e4: the start line sits at about 99.6% of the track position): the
+  // lap number ticks and the timer is at a few milliseconds, but the position
+  // reads ~99.6% and only wraps to 0 about 0.66 s (33 samples) later.
+  require(runtime.receive(delta.frame(3, 22, 99.627, 0, false, -1, 91000),
                           "127.0.0.1"),
           "late-wrap crossing sample accepted");
-  require(state()["sector_1_ms"] != 5 && state()["sector_1_ms"] != 0 &&
-              state()["sector_1_ms"] == 30000,
-          "a position that has not wrapped yet is not a first-sector split");
-  // Lap 3 then runs normally, wrapping a sample late.
-  require(runtime.receive(delta.frame(3, 25, 2.0), "127.0.0.1"),
-          "late-wrap position sample accepted");
+  require(state()["sector_1_ms"] == 30000 && state()["sector_2_ms"] == 31000,
+          "a position that has not wrapped yet is not a sector split");
+  for (int k = 1; k <= 33; ++k)
+    require(runtime.receive(delta.frame(3, 22 + 20 * k, 99.627 + 0.011 * k),
+                            "127.0.0.1"),
+            "position still near the end of the lap accepted");
+  require(state()["sector_1_ms"] == 30000 && state()["sector_2_ms"] == 31000,
+          "no split while the position has not wrapped");
+  // Lap 3 then runs normally from the wrap on.
   drive_lap(runtime, delta, 3, {29000, 32000, 29500});
   cross_line(runtime, delta, 4, 90500, 1);
   require(state()["best_sector_1_ms"] == 29000 &&
