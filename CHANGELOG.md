@@ -5,6 +5,11 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The Windows companion no longer reads past the end of a simulator's shared
+  memory. A page shorter than the companion expects (a newer or older sim build,
+  or a header field that is wrong while the sim loads) read other memory or could
+  crash the companion in the middle of a session; those reads now return empty
+  values.
 - The panel's Timing page now shows the ideal lap (IDEAL), the sum of the best
   three sectors, and GAIN, how much faster that is than the best real lap. A
   sector only counts from a lap the simulator did not flag invalid and from a

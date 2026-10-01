@@ -1352,6 +1352,7 @@ public:
             close();
             handle_ = std::exchange(other.handle_, nullptr);
             data_ = std::exchange(other.data_, nullptr);
+            size_ = std::exchange(other.size_, 0);
         }
         return *this;
     }
@@ -1362,9 +1363,17 @@ public:
         handle_ = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
         if (!handle_) return false;
         data_ = static_cast<const std::byte*>(MapViewOfFile(handle_, FILE_MAP_READ, 0, 0, 0));
-        if (!data_) {
+        // The view's size (rounded up to whole pages), so a fixed offset that
+        // lies past the end of a shorter page reads as zero instead of
+        // faulting or returning another mapping's memory.
+        MEMORY_BASIC_INFORMATION info{};
+        if (data_ && VirtualQuery(data_, &info, sizeof(info)) != 0) size_ = info.RegionSize;
+        if (!data_ || size_ == 0) {
+            if (data_) UnmapViewOfFile(data_);
             CloseHandle(handle_);
             handle_ = nullptr;
+            data_ = nullptr;
+            size_ = 0;
             return false;
         }
         return true;
@@ -1375,6 +1384,7 @@ public:
         if (handle_) CloseHandle(handle_);
         data_ = nullptr;
         handle_ = nullptr;
+        size_ = 0;
     }
 
     explicit operator bool() const { return data_ != nullptr; }
@@ -1382,11 +1392,14 @@ public:
     template <typename T>
     T read(std::size_t offset) const {
         T value{};
+        if (!data_ || offset > size_ || sizeof(T) > size_ - offset) return value;
         std::memcpy(&value, data_ + offset, sizeof(T));
         return value;
     }
 
     std::string ascii(std::size_t offset, std::size_t length) const {
+        if (!data_ || offset >= size_) return {};
+        length = std::min(length, size_ - offset);
         const auto* begin = reinterpret_cast<const char*>(data_ + offset);
         std::size_t used = 0;
         while (used < length && begin[used] != '\0') ++used;
@@ -1394,6 +1407,8 @@ public:
     }
 
     std::string wide(std::size_t offset, std::size_t characters) const {
+        if (!data_ || offset >= size_) return {};
+        characters = std::min(characters, (size_ - offset) / sizeof(wchar_t));
         const auto* begin = reinterpret_cast<const wchar_t*>(data_ + offset);
         std::size_t used = 0;
         while (used < characters && begin[used] != L'\0') ++used;
@@ -1403,6 +1418,7 @@ public:
 private:
     HANDLE handle_ = nullptr;
     const std::byte* data_ = nullptr;
+    std::size_t size_ = 0;
 };
 
 enum class Game { none, acc, ac, ace, iracing };
@@ -2976,7 +2992,33 @@ private:
     T* data_;
 };
 
+// A simulator's shared-memory page can be shorter than the layout this adapter
+// was written against (a newer or older build, or a header field that is
+// garbage while the sim is loading). Reads are by fixed offset, so an offset
+// past the mapped view used to be an access violation that killed the
+// companion in the middle of a session. Out-of-range reads now return zero or
+// empty.
+void mapping_bounds_check() {
+    struct Small { std::int32_t head[25]; };
+    const auto name = L"Local\\raPIdBoundsSelfTest_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
+                      std::to_wstring(GetTickCount64());
+    TestMapping<Small> small(name);
+    for (int i = 0; i < 25; ++i) small.value().head[i] = 100 + i;
+    Mapping view;
+    require(view.open(name.c_str()), "bounds-check mapping opens");
+    require(view.read<std::int32_t>(0) == 100 && view.read<std::int32_t>(96) == 124,
+            "in-range reads still read the page");
+    require(view.read<std::int32_t>(std::size_t{1} << 22) == 0 && view.read<float>(std::size_t{1} << 24) == 0.0f,
+            "a read far past the view returns zero instead of faulting");
+    require(view.ascii(std::size_t{1} << 22, 33).empty() && view.wide(std::size_t{1} << 22, 33).empty(),
+            "a text read far past the view is empty instead of faulting");
+    require(view.ascii(0, std::size_t{1} << 30).size() <= 8192 && view.wide(0, std::size_t{1} << 28).size() <= 16384,
+            "a text read longer than the view stops at its end");
+    require(view.read<std::int32_t>(~std::size_t{0} - 1) == 0, "an offset that overflows the view is rejected");
+}
+
 std::pair<Frame, Metadata> run() {
+    mapping_bounds_check();
     require(game_for_executable(L"acs.exe") == Game::ac &&
             game_for_executable(L"ACS_X86.EXE") == Game::ac, "AC process detection");
     require(game_for_executable(L"Content Manager.exe") == Game::none &&
