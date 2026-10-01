@@ -439,6 +439,58 @@ void test_ideal_lap(const fs::path &assets, const fs::path &root) {
   runtime.finish();
 }
 
+// AC1 reports a physical line crossing in two steps a sample apart: the lap
+// number ticks (and the lap timer restarts) while the track position still
+// reads the end of the lap, then the position wraps. The first sample of the
+// new lap therefore has a position past a third of the lap, and the sector
+// split used to fire on it: a "first sector" of a few milliseconds, which then
+// set the best first sector, made every later S1 delta huge, and made the ideal
+// lap tens of seconds short.
+void test_sectors_when_position_wraps_late(const fs::path &assets,
+                                           const fs::path &root) {
+  Config c;
+  c.assets = assets;
+  c.database = root / "late-wrap.db";
+  c.telemetry = root / "late-wrap-telemetry";
+  c.queue = root / "late-wrap-queue.db";
+  c.companion_key = std::string(32, '\x11');
+  Runtime runtime(c);
+  DeltaStream delta(rapid::test::v4_run_id());
+  require(runtime.receive(delta.metadata(), "127.0.0.1"), "late-wrap metadata");
+  const auto state = [&] { return runtime.snapshot(); };
+
+  drive_lap(runtime, delta, 1, {20000, 20000, 20000});
+  cross_line(runtime, delta, 2, 60000, -1);
+  drive_lap(runtime, delta, 2, {30000, 31000, 30000});
+  // The crossing into lap 3 as the owner's recordings show it (session
+  // 38f740e4: the start line sits at about 99.6% of the track position): the
+  // lap number ticks and the timer is at a few milliseconds, but the position
+  // reads ~99.6% and only wraps to 0 about 0.66 s (33 samples) later.
+  require(runtime.receive(delta.frame(3, 22, 99.627, 0, false, -1, 91000),
+                          "127.0.0.1"),
+          "late-wrap crossing sample accepted");
+  require(state()["sector_1_ms"] == 30000 && state()["sector_2_ms"] == 31000,
+          "a position that has not wrapped yet is not a sector split");
+  for (int k = 1; k <= 33; ++k)
+    require(runtime.receive(delta.frame(3, 22 + 20 * k, 99.627 + 0.011 * k),
+                            "127.0.0.1"),
+            "position still near the end of the lap accepted");
+  require(state()["sector_1_ms"] == 30000 && state()["sector_2_ms"] == 31000,
+          "no split while the position has not wrapped");
+  // Lap 3 then runs normally from the wrap on.
+  drive_lap(runtime, delta, 3, {29000, 32000, 29500});
+  cross_line(runtime, delta, 4, 90500, 1);
+  require(state()["best_sector_1_ms"] == 29000 &&
+              state()["best_sector_2_ms"] == 31000 &&
+              state()["best_sector_3_ms"] == 29500 &&
+              state()["optimal_lap_ms"] == 89500,
+          "the ideal lap is built from real sectors after a late wrap");
+  require(state()["sector_1_ms"] == 29000 && state()["sector_2_ms"] == 32000 &&
+              state()["sector_3_ms"] == 29500,
+          "the live sector times of the lap after a late wrap are its own");
+  runtime.finish();
+}
+
 int main(int argc, char **argv) {
   try {
     if (argc != 3)
@@ -459,6 +511,7 @@ int main(int argc, char **argv) {
     test_delta_presence(assets, root);
     test_lap_validity_manifest(root);
     test_ideal_lap(assets, root);
+    test_sectors_when_position_wraps_late(assets, root);
 
     std::cout << "Lap boundary: unit rules, real-recording regression "
                  "fixtures, ACC delta passthrough, delta presence and the "
