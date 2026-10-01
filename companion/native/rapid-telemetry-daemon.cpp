@@ -3002,8 +3002,8 @@ void mapping_bounds_check() {
     struct Small { std::int32_t head[25]; };
     const auto name = L"Local\\raPIdBoundsSelfTest_" + std::to_wstring(GetCurrentProcessId()) + L"_" +
                       std::to_wstring(GetTickCount64());
-    TestMapping<Small> small(name);
-    for (int i = 0; i < 25; ++i) small.value().head[i] = 100 + i;
+    TestMapping<Small> page(name);
+    for (int i = 0; i < 25; ++i) page.value().head[i] = 100 + i;
     Mapping view;
     require(view.open(name.c_str()), "bounds-check mapping opens");
     require(view.read<std::int32_t>(0) == 100 && view.read<std::int32_t>(96) == 124,
