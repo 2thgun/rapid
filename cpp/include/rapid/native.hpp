@@ -208,6 +208,10 @@ class Runtime {
   std::vector<int> splits_;
   std::vector<std::string> paired_keys_;
   int best_sectors_[3]{};
+  // The ideal lap: the best of each sector over laps the simulator did not
+  // flag invalid, and the sector times of the lap being driven.
+  int best_valid_sectors_[3]{};
+  int lap_sectors_[3]{};
   std::deque<std::pair<std::uint64_t, Json>> events_;
   // Per-stream (v4 run ID) sender-lag baseline (#17): the minimum observed
   // (pi_receive_monotonic - sender_monotonic) offset for the current stream,

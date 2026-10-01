@@ -38,8 +38,9 @@ const std::set<std::string> &live_channels() {
     for (const auto *key :
          {"abs_activity", "completed_lap_ms", "delta_ms", "best_lap_ms",
           "sector_1_ms", "sector_2_ms", "sector_3_ms", "sector_1_delta_ms",
-          "sector_2_delta_ms", "sector_3_delta_ms", "track_name", "car_model",
-          "driver_name"})
+          "sector_2_delta_ms", "sector_3_delta_ms", "best_sector_1_ms",
+          "best_sector_2_ms", "best_sector_3_ms", "optimal_lap_ms",
+          "track_name", "car_model", "driver_name"})
       result.insert(key);
     return result;
   }();
@@ -116,6 +117,7 @@ void Runtime::sectors(Json &f) {
   auto record = [&](int index, int duration) {
     if (duration <= 0)
       return;
+    lap_sectors_[index] = duration;
     auto key = "sector_" + std::to_string(index + 1);
     f[key + "_ms"] = duration;
     f[key + "_delta_ms"] =
@@ -140,9 +142,30 @@ void Runtime::sectors(Json &f) {
       if (!best_lap_ || complete < best_lap_)
         best_lap_ = complete;
       f["best_lap_ms"] = best_lap_;
+      // The ideal lap is the sum of the best sectors. Only a lap with all
+      // three sectors timed counts, and not one the simulator flagged
+      // invalid (a cut lap has impossibly fast sectors). Unknown validity,
+      // which AC1 always reports, counts. lap_valid on this sample is the
+      // completed lap's.
+      const bool invalid = f.contains("lap_valid") &&
+                           f["lap_valid"].is_boolean() &&
+                           !f["lap_valid"].get<bool>();
+      if (!invalid && lap_sectors_[0] > 0 && lap_sectors_[1] > 0 &&
+          lap_sectors_[2] > 0) {
+        for (int index = 0; index < 3; ++index)
+          if (!best_valid_sectors_[index] ||
+              lap_sectors_[index] < best_valid_sectors_[index])
+            best_valid_sectors_[index] = lap_sectors_[index];
+        for (int index = 0; index < 3; ++index)
+          f["best_sector_" + std::to_string(index + 1) + "_ms"] =
+              best_valid_sectors_[index];
+        f["optimal_lap_ms"] = best_valid_sectors_[0] + best_valid_sectors_[1] +
+                              best_valid_sectors_[2];
+      }
     }
     timing_lap_ = lap;
     splits_.clear();
+    std::fill(std::begin(lap_sectors_), std::end(lap_sectors_), 0);
   }
   if (has_position && splits_.size() < 2 &&
       position >= double(splits_.size() + 1) / 3) {
@@ -451,13 +474,18 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       best_lap_ = 0;
       splits_.clear();
       std::fill(std::begin(best_sectors_), std::end(best_sectors_), 0);
+      std::fill(std::begin(best_valid_sectors_), std::end(best_valid_sectors_),
+                0);
+      std::fill(std::begin(lap_sectors_), std::end(lap_sectors_), 0);
       // A new session starts with a fresh lap boundary; delta_ms stays null
       // until the companion says the new session's simulator provides one.
       lap_boundary_ = LapBoundary{};
       for (auto *key :
            {"best_lap_ms", "sector_1_ms", "sector_2_ms", "sector_3_ms",
             "sector_1_delta_ms", "sector_2_delta_ms", "sector_3_delta_ms",
-            "delta_ms", "steering_lock_deg", "steering_angle_deg"})
+            "best_sector_1_ms", "best_sector_2_ms", "best_sector_3_ms",
+            "optimal_lap_ms", "delta_ms", "steering_lock_deg",
+            "steering_angle_deg"})
         state_[key] = nullptr;
       // The stale lock is cleared above; a metadata packet carries the new
       // session's lock and re-applies it here (#47), so a car/session change
