@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The first sector time (S1) no longer reads a few milliseconds after a line
+  crossing on AC1. AC1 restarts the lap timer a sample before the track position
+  wraps, and that sample was taken as the first-third split; the bogus S1 also
+  became the best S1 and made the ideal lap tens of seconds short.
 - The panel's Timing page now shows the ideal lap (IDEAL), the sum of the best
   three sectors, and GAIN, how much faster that is than the best real lap. A
   sector only counts from a lap the simulator did not flag invalid and from a
