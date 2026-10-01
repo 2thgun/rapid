@@ -312,6 +312,9 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
     auto daemon = string(m, "state");
     auto session = string(m, "session_id", string(m, "run_id"));
     auto identity = sim + "/" + session;
+    // Lost packets of any type between two samples; the sample that follows
+    // works out how many of them were samples (see below).
+    pending_lost_ += static_cast<std::uint64_t>(number(m, "_wire_gap"));
     if (session.empty())
       identity += "/" + string(m, "track_name") + "/" + string(m, "car_model") +
                   "/" + string(m, "session_name");
@@ -469,6 +472,8 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
     if (identity != session_) {
       session_ = identity;
       sequence_ = -1;
+      pending_lost_ = 0;
+      last_sample_us_ = -1;
       direct_steering_angle_deg_ = false;
       timing_lap_ = -1;
       best_lap_ = 0;
@@ -528,6 +533,26 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
     state_["session_name"] = m.value("session_name", Json());
     record_lag(m);
     m.erase("_received_monotonic");
+    // The recording has no timestamps (sample n is at n / rate), so a sample
+    // that never arrived must still take its slot or everything after it slides
+    // early. The sequence counts every lost packet, samples and heartbeats
+    // alike, and the sender's clock says how many sample slots passed; a slot
+    // is only treated as lost when both agree. Scheduling jitter alone (a late
+    // sample, with no packet lost) therefore never adds a sample, and a lost
+    // heartbeat never does either.
+    {
+      const double rate = std::max(1.0, number(m, "sample_rate_hz", 10));
+      const double at_us = number(m, "monotonic_us", -1);
+      std::uint64_t missing = 0;
+      if (last_sample_us_ >= 0 && at_us > last_sample_us_) {
+        const auto slots = static_cast<std::int64_t>(
+            std::llround((at_us - last_sample_us_) / (1000000.0 / rate)));
+        if (slots > 1) missing = static_cast<std::uint64_t>(slots - 1);
+      }
+      m["_packet_gap"] = std::min(pending_lost_, missing);
+      pending_lost_ = 0;
+      last_sample_us_ = at_us;
+    }
     m["telemetry"] = frame;
     try {
       // CPU work and the handoff to the recorder's writer thread only
@@ -628,6 +653,8 @@ void Runtime::expire() {
     state_["session_ended_at"] = now();
     last_packet_ = 0;
     last_sample_ = 0;
+    pending_lost_ = 0;
+    last_sample_us_ = -1;
     if (!state_.value("acc_connected", false))
       state_["simulator"] = nullptr;
     source_ = config_.companion_host;
@@ -649,6 +676,8 @@ void Runtime::expire() {
       last_recording_packet_ = 0;
       last_recording_heartbeat_ = 0;
       sequence_ = -1;
+      pending_lost_ = 0;
+      last_sample_us_ = -1;
       session_.clear();
     }
   }
