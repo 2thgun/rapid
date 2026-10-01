@@ -43,6 +43,15 @@ if (qmlSource.includes('PWR') || qmlSource.includes('power_status_available') ||
 if (!qmlSource.includes('dashboard.livePushActive')) {
   throw new Error('Main.qml must surface dashboard.livePushActive (#43)');
 }
+// The Timing page shows the ideal lap (sum of the best sectors) and how much
+// faster it is than the best real lap, and the card still fits five rows.
+if (!qmlSource.includes('["IDEAL",root.time("optimal_lap_ms")]') ||
+    !qmlSource.includes('["GAIN",root.gain()]') ||
+    !qmlSource.includes('function gain()') ||
+    !qmlSource.includes('property int rowGap: 9') ||
+    !/title: "LIVE TIMING"[\s\S]{0,40}rowGap: 6|rowGap: 6[\s\S]{0,40}title: "LIVE TIMING"/.test(qmlSource)) {
+  throw new Error('Main.qml Timing page must show IDEAL and GAIN in a card with tighter rows');
+}
 // #61: the settings page carries a real pairing entry, not a placeholder: it
 // shows the address and the short fingerprint to type into a first-run
 // companion and can arm/cancel the on-device pairing window.
