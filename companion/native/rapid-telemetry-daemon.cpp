@@ -42,6 +42,8 @@
 #include <utility>
 #include <vector>
 
+#include "iracing_yaml.hpp"
+
 #ifndef BCRYPT_ECDH_ALGORITHM
 #define BCRYPT_ECDH_ALGORITHM L"ECDH"
 #endif
@@ -1648,9 +1650,10 @@ public:
         v[lap_number] = graphics_.read<std::int32_t>(132) + 1;
         const int lap_now = static_cast<int>(v[lap_number]);
         // A lap counter that goes backwards is a session restart (a real lap
-        // boundary only ever increments it), not a new lap (#53).
-        session_restarted_ = last_lap_number_ >= 0 && lap_now < last_lap_number_;
-        last_lap_number_ = lap_now;
+        // boundary only ever increments it), not a new lap (#53). It is only
+        // recorded once the sample is known to be intact: a torn sample is
+        // discarded, and the restart it showed must still be seen by the next one.
+        const bool restarted = last_lap_number_ >= 0 && lap_now < last_lap_number_;
         if (game_ == Game::acc) {
             // ACC's graphics page carries the same documented isValidLap,
             // iDeltaLapTime and iBestTime fields as the ACC UDP lap struct;
@@ -1678,6 +1681,8 @@ public:
         MemoryBarrier();
         if (before != physics_.read<std::int32_t>(0) ||
             graphics_before != graphics_.read<std::int32_t>(0) || !live()) return false;
+        session_restarted_ = restarted;
+        last_lap_number_ = lap_now;
         last_packet_id_ = before;
         return true;
     }
@@ -1854,15 +1859,33 @@ public:
         if (yaml_length > 0 && yaml_length < 10 * 1024 * 1024 && yaml_offset >= 0) {
             yaml = mapping_.ascii(static_cast<std::size_t>(yaml_offset), static_cast<std::size_t>(yaml_length));
         }
-        metadata.driver = yaml_value(yaml, "UserName");
-        metadata.vehicle = yaml_value(yaml, "CarScreenName");
-        metadata.venue = yaml_value(yaml, "TrackDisplayName");
-        metadata.session = yaml_value(yaml, "SessionType");
+        // The YAML lists every car and every session of the event, so the
+        // player's own entries are picked by DriverInfo.DriverCarIdx and the
+        // telemetry's SessionNum. The first "UserName" is often the pace car
+        // and the first "SessionType" is the weekend's first session, so a
+        // race would be recorded as practice and a session change missed. A
+        // YAML or telemetry without those fields keeps the first-match values.
+        namespace yaml_lookup = rapid::iracing_yaml;
+        std::string driver, vehicle, session;
+        const auto car_index = yaml_lookup::first_value(yaml, "DriverCarIdx");
+        if (!car_index.empty()) {
+            const auto drivers = yaml_lookup::section(yaml, "Drivers");
+            driver = yaml_lookup::item_value(drivers, "CarIdx", car_index, "UserName");
+            vehicle = yaml_lookup::item_value(drivers, "CarIdx", car_index, "CarScreenName");
+        }
+        const double session_number = number(buffer_offset(), "SessionNum", -1.0);
+        if (session_number >= 0.0)
+            session = yaml_lookup::item_value(yaml_lookup::section(yaml, "Sessions"), "SessionNum",
+                                              std::to_string(static_cast<int>(session_number)), "SessionType");
+        metadata.driver = driver.empty() ? yaml_lookup::first_value(yaml, "UserName") : driver;
+        metadata.vehicle = vehicle.empty() ? yaml_lookup::first_value(yaml, "CarScreenName") : vehicle;
+        metadata.venue = yaml_lookup::first_value(yaml, "TrackDisplayName");
+        metadata.session = session.empty() ? yaml_lookup::first_value(yaml, "SessionType") : session;
         if (metadata.session.empty()) metadata.session = "iRacing";
         // DriverInfo.DriverCarSteerWheelRange is iRacing's documented session-level
         // full lock-to-lock steering range in degrees for the selected car (#18);
         // re-read with the rest of the session YAML so a car change updates it (#15).
-        metadata.steering_lock_deg = parse_degrees(yaml_value(yaml, "DriverCarSteerWheelRange"));
+        metadata.steering_lock_deg = parse_degrees(yaml_lookup::first_value(yaml, "DriverCarSteerWheelRange"));
     }
 
     bool live() override {
@@ -1940,13 +1963,6 @@ public:
     }
 
 private:
-    static std::string trim(std::string value) {
-        const auto first = value.find_first_not_of(" \t\r\n\"'");
-        const auto last = value.find_last_not_of(" \t\r\n\"'");
-        if (first == std::string::npos) return {};
-        return value.substr(first, last - first + 1);
-    }
-
     // A malformed or absent value means "unknown" (0.0), not a parse error:
     // the caller always has a normalisation fallback.
     static double parse_degrees(const std::string& value) {
@@ -1958,22 +1974,6 @@ private:
         } catch (...) {
             return 0.0;
         }
-    }
-
-    static std::string yaml_value(const std::string& yaml, const std::string& name) {
-        std::size_t at = 0;
-        while (at < yaml.size()) {
-            const auto end = yaml.find('\n', at);
-            auto line = yaml.substr(at, end == std::string::npos ? std::string::npos : end - at);
-            const auto first = line.find_first_not_of(" \t");
-            if (first != std::string::npos && line.compare(first, name.size(), name) == 0) {
-                const auto colon = line.find(':', first + name.size());
-                if (colon != std::string::npos) return trim(line.substr(colon + 1));
-            }
-            if (end == std::string::npos) break;
-            at = end + 1;
-        }
-        return {};
     }
 
     int buffer_offset() const {
@@ -3112,6 +3112,43 @@ std::pair<Frame, Metadata> run() {
     require(adapter->read(frame) && !adapter->session_restarted() &&
                 frame.value[lap_number] == 2,
             "the session restart flag clears on the following sample");
+    // A sample the simulator tore by writing during the read is discarded, and
+    // the restart it showed must not go with it: the lap counter is only
+    // compared once, so the next intact sample would see no drop and two
+    // same-type sessions would merge (#53). A writer thread keeps changing the
+    // packet counter so reads tear, like the real simulator's updates do.
+    {
+        bool provoked = false;
+        for (int attempt = 0; attempt < 50 && !provoked; ++attempt) {
+            g.completed_laps = 4;
+            p.packet_id += 1;
+            require(adapter->read(frame) && frame.value[lap_number] == 5, "lap counter set up for the torn-read check");
+            std::atomic<bool> writing{true}, running{false};
+            std::thread writer([&] {
+                while (writing) {
+                    std::atomic_ref<std::int32_t>(p.packet_id).fetch_add(1, std::memory_order_relaxed);
+                    running = true;
+                }
+            });
+            // Reads before the writer runs would return false only because the
+            // packet counter has not changed, which is not a torn sample.
+            while (!running) std::this_thread::yield();
+            g.completed_laps = 0;
+            bool torn = false;
+            for (int i = 0; i < 200000 && !torn; ++i) torn = !adapter->read(frame);
+            writing = false;
+            writer.join();
+            if (!torn) continue;
+            provoked = true;
+            p.packet_id += 1;
+            require(adapter->read(frame) && adapter->session_restarted() && frame.value[lap_number] == 1,
+                    "a restart seen in a torn sample is still reported by the next intact one (#53)");
+        }
+        require(provoked, "the torn-read check could provoke a torn sample");
+        g.completed_laps = 2;
+        p.packet_id += 1;
+        require(adapter->read(frame) && !adapter->session_restarted(), "the restart flag clears after the torn-read check");
+    }
     g.completed_laps = 2;
     // A car/track change mid-session (e.g. a garage visit while paused) must
     // be visible to a later refresh_metadata() call so the run loop can end

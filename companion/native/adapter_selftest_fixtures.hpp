@@ -716,6 +716,57 @@ void iracing() {
     require(adapter_c->read(frame_c) && close_enough(frame_c.value[steering_angle], .2),
             "iRacing steering falls back to the 450 deg default half-lock");
 
+    // A real event lists every session and every car. The player's own car is
+    // DriverInfo.DriverCarIdx (CarIdx 0 here is the pace car) and the current
+    // session is the telemetry's SessionNum; reading the first of each made a
+    // race look like practice and named the pace car as the driver.
+    const std::string event_yaml =
+        "WeekendInfo:\n"
+        " TrackDisplayName: Test Track 4\n"
+        "SessionInfo:\n"
+        " Sessions:\n"
+        " - SessionNum: 0\n"
+        "   SessionType: Practice\n"
+        "   ResultsPositions:\n"
+        "   - Position: 1\n"
+        "     CarIdx: 3\n"
+        " - SessionNum: 1\n"
+        "   SessionType: Lone Qualify\n"
+        " - SessionNum: 2\n"
+        "   SessionType: Race\n"
+        "DriverInfo:\n"
+        " DriverCarIdx: 3\n"
+        " Drivers:\n"
+        " - CarIdx: 0\n"
+        "   UserName: Pace Car\n"
+        "   CarScreenName: Safety Pace Car\n"
+        " - CarIdx: 3\n"
+        "   UserName: Event Driver\n"
+        "   CarScreenNameShort: BMW\n"
+        "   CarScreenName: BMW M4 GT3\n";
+    const auto name_d = name + L"_d";
+    assetto_self_test::TestMapping<Bytes> mapping_d(name_d);
+    auto& data_d = mapping_d.value();
+    iracing_header(data_d, 2);
+    iracing_variable(data_d, 0, 1, 0, "IsOnTrack");
+    iracing_variable(data_d, 1, 2, 4, "SessionNum");
+    iracing_yaml(data_d, event_yaml);
+    put<unsigned char>(data_d, kIracingBuffer + 0, 1);
+    put<std::int32_t>(data_d, kIracingBuffer + 4, 2);
+    auto adapter_d = IracingAdapter::open(name_d.c_str());
+    require(bool(adapter_d) && adapter_d->metadata.session == "Race" &&
+                adapter_d->metadata.driver == "Event Driver" && adapter_d->metadata.vehicle == "BMW M4 GT3" &&
+                adapter_d->metadata.venue == "Test Track 4",
+            "iRacing reads the current session and the player's own driver and car from a multi-car event");
+    put<std::int32_t>(data_d, kIracingBuffer + 4, 0);
+    adapter_d->refresh_metadata();
+    require(adapter_d->metadata.session == "Practice",
+            "iRacing follows SessionNum from one session of the event to the next");
+    put<std::int32_t>(data_d, kIracingBuffer + 4, 9);
+    adapter_d->refresh_metadata();
+    require(adapter_d->metadata.session == "Practice",
+            "iRacing falls back to the first session when SessionNum matches none");
+
     std::cout << "iRacing adapter self-test passed: controls, metadata, laps, pause/replay (not-ended), "
                  "disconnect, mid-session session/car/track change, steering normalisation and lock "
                  "fallback (live SteeringWheelAngleMax, session DriverCarSteerWheelRange, 450 deg default)\n";
