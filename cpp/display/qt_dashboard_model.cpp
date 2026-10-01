@@ -262,8 +262,12 @@ void DashboardModel::consumeLiveMessage(const QString &message) {
   // full snapshot and replaces it wholesale in consumeLive().
   const auto state = object.value("state");
   if (!state.isObject()) return;
+  // Iterate one named object: begin() and end() of two temporaries, as this
+  // once did, are iterators into objects that no longer exist and crashed the
+  // panel on the first pushed frame.
+  const auto changed = state.toObject();
   auto merged = state_;
-  for (auto it = state.toObject().begin(); it != state.toObject().end(); ++it)
+  for (auto it = changed.begin(); it != changed.end(); ++it)
     merged[it.key()] = it.value().toVariant();
   applyLiveState(merged);
 }
