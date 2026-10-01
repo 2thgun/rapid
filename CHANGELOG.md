@@ -5,6 +5,13 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- iRacing recordings now name the right session, driver and car. The companion
+  read the first session, driver and car in iRacing's session file, so a race
+  showed as practice (and the move from practice to qualifying to the race was
+  not noticed) and the driver and car could be the pace car. It now follows
+  iRacing's current session number and your own car.
+- A session restart in AC or ACC is no longer missed when the simulator writes
+  to its shared memory during the exact sample that shows the restart.
 - The live view now runs at 50 Hz end to end: the Pi's WebSocket push ticks at
   20 ms (was a magic 33 ms), the Qt panel's data update path follows the push,
   and the Windows companion's default `sample_rate` is a permanent 50 Hz
