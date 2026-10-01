@@ -134,6 +134,25 @@ jobs:
           name: rapid-linux-preview-arm64
           path: build/packages/*.deb
           if-no-files-found: error
+  # AddressSanitizer and UBSan over the whole suite, with the Qt display tests.
+  # The panel once segfaulted on its first pushed frame (a loop over iterators
+  # into two destroyed temporaries) while every ordinary build passed; this is
+  # the job that reports that class of bug at the line, and the only one that
+  # runs the Qt model's WebSocket path under instrumentation.
+  cpp-native-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y libsystemd-dev pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev libboost-system-dev libtomlplusplus-dev libargon2-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript qt6-websockets-dev
+      - run: cmake -S cpp -B build/cpp -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" -DRAPID_BUILD_LOG_STATUS=ON -DRAPID_BUILD_QT_DISPLAY=ON
+      - run: cmake --build build/cpp
+      - run: ctest --test-dir build/cpp --output-on-failure
+        env:
+          QT_QPA_PLATFORM: offscreen
+          UBSAN_OPTIONS: print_stacktrace=1
   windows-companion:
     needs: pairing-pi-seals-fixture
     runs-on: windows-latest
