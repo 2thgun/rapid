@@ -22,6 +22,7 @@
 #include "rapid/lap_boundary.hpp"
 #include "rapid/native.hpp"
 #include "v4_stream.hpp"
+#include "../../../companion/native/acc_lap_validity.hpp"
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -119,7 +120,96 @@ void test_lap_boundary_debounces_split_signal() {
           "the wrap close and the following lap_number increment count as one lap");
 }
 
+struct AccBoundary {
+  AccLapTransition reducer;
+  AccLapTransition::Result step(int c, double t, double p, bool has) {
+    AccLapTransition::Observation o;
+    o.counter=c; o.timer=t; o.position=p; o.has_position=has;
+    return reducer.step(o);
+  }
+};
+void test_lap_boundary_debounces_late_counter() {
+  AccBoundary b;
+  b.step(3, 100, .01, true);
+  for (int i = 0; i < 12; ++i)
+    b.step(3, 50000 + i * 4000, .35 + i * .05, true);
+  require(b.step(3, 10, .01, true).closed, "physical ACC wrap closes");
+  for (int i = 1; i <= 20; ++i)
+    require(!b.step(3, 10 + i * 20, .01 + i * .001, true).closed,
+            "new-lap samples do not close");
+  require(!b.step(4, 450, .04, true).closed,
+          "late counter after ten-sample cooldown is still the same physical crossing");
+  for (int i = 0; i < 12; ++i)
+    b.step(4, 50000 + i * 4000, .35 + i * .05, true);
+  require(b.step(5, 10, .01, true).closed,
+          "late-counter debounce must not suppress the following real lap");
+}
+
+void test_lap_boundary_counter_catchup_after_gap() {
+  AccBoundary boundary;
+  boundary.step(3, 50000, .35, true);
+  for (int i = 0; i < 12; ++i)
+    boundary.step(3, 60000 + i * 4000, .4 + i * .05, true);
+  require(boundary.step(3, 5, .01, true).closed, "stale counter physical wrap closes");
+  for (int i = 0; i < 12; ++i)
+    boundary.step(3, 25 + i * 20, .02, true);
+  require(!boundary.step(4, 30000, .35, true).closed,
+          "counter catchup first seen mid-lap after a packet gap cannot close twice");
+  for (int i = 0; i < 12; ++i)
+    boundary.step(4, 60000 + i * 4000, .4 + i * .05, true);
+  require(boundary.step(5, 5, .01, true).closed,
+          "gap catchup attribution must not suppress the following physical lap");
+}
+
+void test_acc_validity_at_physical_wrap() {
+  rapid::AccLapValidity validity;
+  validity.update(3, 50000, .4, false);
+  for (int i = 0; i < 12; ++i)
+    validity.update(3, 60000 + i * 4000, .4 + i * .05, false);
+  validity.update(3, 10, .01, true); // timer/position reset, counter stale
+  require(validity.present && !validity.valid,
+          "ACC physical wrap retains the invalidity before current flag resets");
+  for (int i = 0; i < 20; ++i)
+    validity.update(3, 30 + i * 20, .02, true);
+  validity.update(4, 450, .04, true);
+  require(validity.present && !validity.valid,
+          "late ACC counter cannot overwrite physically completed validity");
+  for (int i = 0; i < 12; ++i)
+    validity.update(4, 60000 + i * 4000, .4 + i * .05, true);
+  validity.update(5, 10, .01, false); // next lap invalid from its first sample
+  require(validity.present && validity.valid,
+          "new lap's invalidity must not leak into the valid completed lap");
+  validity.update(1, 0, .01, true);
+  require(!validity.present, "ACC session restart clears completed validity");
+}
+
 // --- Part A: real-recording regression fixtures ---------------------------
+void test_acc_validity_counter_before_timer_reset() {
+  for (int next_phase : {0, 1, 2}) {
+    rapid::AccLapValidity validity;
+    for (int i = 0; i < 13; ++i)
+      validity.update(3, 179760 + i * 20, .35 + i * .05, false);
+    validity.update(4, 180000, .99, false);
+    require(validity.present && !validity.valid,
+            "counter-first close retains invalid finishing lap");
+    // Phase 0: the flag resets with the timer. Phase 1: the new lap is
+    // genuinely invalid on its first timer sample. Phase 2: flag reset and
+    // early invalidity arrive before the timer reset and must be retained.
+    if (next_phase == 2) {
+      validity.update(4, 180010, .99, true);
+      validity.update(4, 180020, .99, false);
+    }
+    validity.update(4, 5, .01, next_phase != 1);
+    for (int i = 0; i < 13; ++i)
+      validity.update(4, 99760 + i * 20, .35 + i * .05, true);
+    validity.update(5, 5, .01, true);
+    if (next_phase != 2)
+      require(!validity.present, "approved policy: untagged boundary false stays unknown even after later true");
+    else
+      require(validity.present && !validity.valid,
+              "true then false inside an established flag phase retains invalidity");
+  }
+}
 
 Json fixture_message(const std::string &session, int rate, int lap_number,
                      int current_lap_ms, double lap_position_pct) {
@@ -205,6 +295,233 @@ void test_session_4e6de929_six_laps(const fs::path &fixtures, const fs::path &ro
   }
 }
 
+// ACC graphics metadata can arrive after the physical position/timer wrap.
+// This deterministic sequence reproduces the saved 125865 ms being attached
+// to a lap whose current timer ended at 104365 ms. Validity on the wrap packet
+// still describes the previous completed lap too.
+void test_acc_delayed_completed_metadata(const fs::path &root) {
+  Recorder recorder(root / ("acc-delayed-" + unique_id()), "all");
+  auto send = [&](int lap, int timer, double position, int completed, bool valid) {
+    auto m = fixture_message("acc-delayed", 50, lap, timer, position);
+    m["simulator"] = "ACC";
+    m["telemetry"]["completed_lap_ms"] = completed;
+    m["telemetry"]["lap_valid"] = valid;
+    recorder.record(m);
+  };
+  for (int i = 0; i < 12; ++i)
+    send(3, 50000 + i * 4000, 35 + i * 5, 125865, true);
+  send(3, 104365, 99.9, 125865, true);
+  send(3, 4, 0.01, 125865, true); // physical wrap; all lap metadata stale
+  send(4, 24, 0.03, 104372, false); // fresh completed time/validity later
+  recorder.finish();
+  recorder.wait_idle();
+  auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
+  auto manifest = Json::parse(read_file(path / "manifest.json"));
+  require(manifest["laps"].size() == 1, "ACC split crossing closes only one lap");
+  require(manifest["laps"][0]["time_ms"] == 104372,
+          "ACC delayed completed time belongs to the wrapped lap, not its predecessor");
+  require(manifest["laps"][0]["valid"] == false,
+          "ACC delayed invalidity belongs to the wrapped lap, not its predecessor");
+  require(manifest["laps"][0]["end_sample"] == 13,
+          "delayed metadata must not move the physical sample boundary");
+}
+
+void test_acc_unresolved_metadata_uses_sim_timer(const fs::path &root) {
+  Recorder recorder(root / ("acc-unresolved-" + unique_id()), "all");
+  auto send = [&](int timer, double position, int gap = 0) {
+    auto m = fixture_message("acc-unresolved", 50, 5, timer, position);
+    m["simulator"] = "ACC";
+    m["_packet_gap"] = gap;
+    m["telemetry"]["completed_lap_ms"] = 104372;
+    m["telemetry"]["lap_valid"] = true; // held predecessor's validity
+    recorder.record(m);
+  };
+  for (int i = 0; i < 12; ++i)
+    send(50000 + i * 4000, 35 + i * 5);
+  send(109170, 99.9);
+  send(109170, 99.9, 500); // pause/gap changes sample clock, not sim timer
+  send(10, 0.01);
+  send(30, 0.03); // metadata never catches up
+  recorder.finish();
+  recorder.wait_idle();
+  auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
+  auto manifest = Json::parse(read_file(path / "manifest.json"));
+  require(manifest["laps"].size() == 1, "unresolved ACC wrap closes one lap");
+  require(manifest["laps"][0]["time_ms"] == 109170,
+          "unresolved ACC completion uses the sim timer, not stale time or paused sample clock");
+  require(manifest["laps"][0]["valid"].is_null(),
+          "unresolved ACC metadata never borrows the predecessor's validity");
+  require(manifest["laps"][0]["time_source"] == "current_lap_timer",
+          "ACC timer estimate is explicitly identified, not labelled exact");
+}
+
+void test_acc_validity_tracker_to_recorder(const fs::path &root) {
+  for (bool finished_valid : {false, true}) {
+    Recorder recorder(root / ("acc-latch-" + unique_id()), "all");
+    rapid::AccLapValidity validity;
+    auto send = [&](int lap, int timer, double position, int completed, bool current_valid) {
+      validity.update(lap, timer, position / 100.0, current_valid);
+      auto m = fixture_message("acc-latch", 50, lap, timer, position);
+      m["simulator"] = "ACC";
+      m["telemetry"]["completed_lap_ms"] = completed;
+      if (validity.present)
+        m["telemetry"]["lap_valid"] = validity.valid;
+      recorder.record(m);
+    };
+    // Synthetic early-lap observation supplies the validity coverage this
+    // end-to-end full-lap test requires; partial joins are separately unknown.
+    send(3,100,1,125865,finished_valid);
+    for (int i = 0; i < 12; ++i)
+      send(3, 50000 + i * 4000, 35 + i * 5, 125865, finished_valid);
+    send(3, 104365, 99.9, 125865, finished_valid);
+    send(3, 4, .01, 125865, !finished_valid);
+    // The source flag now describes the opposite validity of the new lap.
+    // Graphics completed time arrives before the counter; the counter is
+    // delayed past the old ten-sample debounce period.
+    for (int i = 0; i < 20; ++i)
+      send(3, 24 + i * 20, .03 + i * .01, 104372, !finished_valid);
+    send(4, 444, .24, 104372, !finished_valid);
+    recorder.finish();
+    recorder.wait_idle();
+    auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
+    auto manifest = Json::parse(read_file(path / "manifest.json"));
+    require(manifest["laps"].size() == 1, "late ACC metadata retains one physical segment");
+    require(manifest["laps"][0]["time_ms"] == 104372 &&
+                manifest["laps"][0]["time_source"] == "simulator",
+            "tracker/recorder preserves delayed simulator candidate without generation certification");
+    require(manifest["laps"][0]["valid"] == finished_valid,
+            "tracker/recorder attributes finished validity, not the new lap's flag");
+  }
+}
+
+void test_acc_counter_before_timer_reset(const fs::path &root, double crossing_position=.99, bool next_counter=false) {
+  Recorder recorder(root / ("acc-counter-first-" + unique_id()), "all");
+  auto send = [&](int lap, int timer, double position, int completed) {
+    auto m = fixture_message("acc-counter-first", 50, lap, timer, position);
+    m["simulator"] = "ACC";
+    m["telemetry"]["completed_lap_ms"] = completed;
+    recorder.record(m);
+  };
+  for (int i = 0; i < 13; ++i)
+    send(3, 179760 + i * 20, .35 + i * .05, 120000);
+  send(4, 180000, crossing_position, 180010); // O2 (.99) and N1 (.01)
+  send(4, 5, .01, 180010);
+  for (int i = 0; i < 13; ++i)
+    send(4, 99760 + i * 20, .35 + i * .05, 180010);
+  send(next_counter ? 5 : 4, 5, .01, 180010); // completion still held
+  recorder.finish();
+  recorder.wait_idle();
+  auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
+  auto laps = Json::parse(read_file(path / "manifest.json"))["laps"];
+  require(laps.size() == 2, "counter-first timer sequence closes two physical laps");
+  require(laps[0]["time_ms"] == 180010, "counter-first finished time is retained");
+  require(laps[1]["time_ms"] == 100000 && laps[1]["time_source"] == "current_lap_timer" &&
+              laps[1]["valid"].is_null(),
+          "next ACC lap peak excludes the stale counter-first crossing timer");
+}
+
+void test_acc_held_completion_stays_pending(const fs::path &root) {
+  for (bool fresh_later : {true, false}) {
+    Recorder recorder(root / ("acc-held-" + unique_id()), "all");
+    auto send = [&](int lap, int timer, double position, int completed) {
+      auto m = fixture_message("acc-held", 50, lap, timer, position);
+      m["simulator"] = "ACC";
+      m["telemetry"]["completed_lap_ms"] = completed;
+      m["telemetry"]["lap_valid"] = false;
+      recorder.record(m);
+    };
+    for (int i = 0; i < 13; ++i)
+      send(3, 99260 + i * 20, .35 + i * .05, 100000);
+    send(4, 5, .01, 100000);
+    if (fresh_later)
+      send(4, 25, .02, 99520);
+    recorder.finish();
+    recorder.wait_idle();
+    auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
+    auto laps = Json::parse(read_file(path / "manifest.json"))["laps"];
+    require(laps.size() == 1, "held completion does not add a lap");
+    if (fresh_later) {
+      require(laps[0]["time_ms"] == 99520 && laps[0]["time_source"] == "simulator" &&
+                  laps[0]["valid"] == false,
+              "fresh ACC completion repairs held metadata within the old one-second tolerance");
+    } else {
+      require(laps[0]["time_ms"] == 100000 &&
+                  laps[0]["time_source"] == "held_completed_time" && laps[0]["valid"] == false,
+              "held ACC time stays provisional while the counter's completed-lap validity is retained");
+    }
+  }
+}
+
+void test_acc_provisional_completion_candidates(const fs::path &root) {
+  // Known matching timer/completion pairs from the audited ACC recording,
+  // plus a genuine repeated time. Never replace them with sample durations.
+  const int times[][3] = {{125857, 125865, 90000}, {104365, 104372, 125865},
+                          {175837, 175842, 104372}, {104365, 104372, 104372}};
+  for (const auto &t : times) {
+    Recorder recorder(root / ("acc-exact-" + unique_id()), "all");
+    for (int i = 0; i < 13; ++i) {
+      auto m = fixture_message("acc-exact", 50, 3, t[0] - (12 - i) * 20,
+                               35 + i * 5);
+      m["simulator"] = "ACC";
+      m["telemetry"]["completed_lap_ms"] = t[2];
+      recorder.record(m);
+    }
+    auto crossing = fixture_message("acc-exact", 50, 4, 3, .01);
+    crossing["simulator"] = "ACC";
+    crossing["telemetry"]["completed_lap_ms"] = t[1];
+    crossing["telemetry"]["lap_valid"] = true;
+    recorder.record(crossing);
+    recorder.finish();
+    recorder.wait_idle();
+    auto path = fs::path(recorder.status().at("last_bundle_path").get<std::string>());
+    auto manifest = Json::parse(read_file(path / "manifest.json"));
+    require(manifest["laps"].size() == 1 && manifest["laps"][0]["time_ms"] == t[1],
+            "ACC matching and repeated simulator millisecond values are preserved");
+    require(manifest["laps"][0]["time_status"] == (t[1] == t[2] ? "provisional" : "inferred") &&
+                manifest["laps"][0]["attribution"]["ranking_eligible"] == false,
+            "numeric ACC candidates never gain authoritative ranking from equality or change");
+    if (t[1] == t[2])
+      require(manifest["laps"][0]["time_source"] == "held_completed_time" &&
+                  manifest["laps"][0]["valid"] == true,
+              "repeated time remains provisional without discarding the completed-lap wire validity");
+    else
+      require(manifest["laps"][0]["time_source"] == "simulator" &&
+                  manifest["laps"][0]["valid"] == true,
+              "changed ACC completion remains an inferred candidate, not authoritative");
+  }
+}
+
+void test_acc_recovery_preserves_uncertainty(const fs::path &root) {
+  const auto target=root / ("acc-recovery-" + unique_id());
+  Json durable;
+  {
+    Recorder recorder(target,"all");
+    for(int i=0;i<13;++i) {
+      auto m=fixture_message("acc-recovery",50,3,99260+i*20,35+i*5);
+      m["simulator"]="ACC"; m["telemetry"]["completed_lap_ms"]=100000;
+      recorder.record(m);
+    }
+    auto m=fixture_message("acc-recovery",50,4,5,.01);
+    m["simulator"]="ACC"; m["telemetry"]["completed_lap_ms"]=100000;
+    m["telemetry"]["lap_valid"]=true;
+    recorder.record(m); recorder.set_upload(false); recorder.wait_idle();
+    for(const auto &entry:fs::directory_iterator(target))
+      if(entry.path().filename().string().starts_with(".rapid-spool-"))
+        durable=Json::parse(read_file(entry.path()/"spool.json"));
+    require(durable["laps"][0]["time_status"]=="provisional" &&
+            durable["laps"][0]["validity_status"]=="authoritative" &&
+            durable.contains("acc_attribution"), "checkpoint independently persists time/validity provenance");
+    // No finish: recovery publishes the durable prefix on the next start.
+  }
+  fs::path bundle;
+  Recorder recovery(target,"all",[&](const fs::path &path){bundle=path;});
+  require(!bundle.empty(),"unfinished checkpoint recovered");
+  auto manifest=Json::parse(read_file(bundle/"manifest.json"));
+  require(manifest["laps"]==durable["laps"] && manifest["acc_attribution"]==durable["acc_attribution"],
+          "recovery cannot promote or discard unresolved lap provenance");
+  require(fs::exists(bundle/"full-session.ldx"), "legacy all-lap LDX export remains available after recovery");
+}
+
 // --- Part B: AC1 delta -----------------------------------------------------
 
 // Part B speaks the authenticated v4 wire (the v3 JSON transport is gone).
@@ -256,6 +573,47 @@ struct DeltaStream {
 // the wire and the AC1 synthesis was deleted with #52; what remains to verify
 // is that a present delta (including a real 0) stays a number and an absent one
 // stays null.
+
+// The authenticated flag identifies completed-lap validity independently of
+// lastTime freshness. A held time must remain pending for later repair without
+// discarding true/false (or inventing a value for an absent flag).
+void test_acc_wire_validity_with_held_time(const fs::path &assets, const fs::path &root) {
+  for (int valid : {-1, 0, 1}) {
+    for (bool fresh_later : {false, true}) {
+      const auto name = "acc-wire-held-" + unique_id();
+      Config c;
+      c.assets = assets;
+      c.database = root / (name + ".db");
+      c.telemetry = root / name;
+      c.queue = root / (name + "-queue.db");
+      c.companion_key = std::string(32, '\x11');
+      Runtime runtime(c);
+      DeltaStream delta(rapid::test::v4_run_id());
+      delta.stream.simulator = 1;
+      require(runtime.receive(delta.metadata(), "127.0.0.1"), "held-time ACC metadata accepted");
+      for (int i = 0; i < 13; ++i)
+        require(runtime.receive(delta.frame(3, 99260 + i * 20, 35 + i * 5,
+                                           0, false, valid == 1 ? 0 : 1, 100000),
+                                "127.0.0.1"), "held-time ACC sample accepted");
+      require(runtime.receive(delta.frame(4, 5, .01, 0, false, valid, 100000),
+                              "127.0.0.1"), "held-time ACC crossing accepted");
+      if (fresh_later)
+        require(runtime.receive(delta.frame(4, 25, .02, 0, false, valid, 99520),
+                                "127.0.0.1"), "fresh ACC completion accepted");
+      runtime.finish();
+      auto bundle = runtime.snapshot()["last_bundle_path"].get<std::string>();
+      auto laps = Json::parse(read_file(fs::path(bundle) / "manifest.json"))["laps"];
+      require(laps.size() == 1 && laps[0]["end_sample"] == 13,
+              "held/fresh wire metadata cannot add or move the physical lap boundary");
+      const Json expected = valid < 0 ? Json() : Json(valid != 0);
+      require(laps[0]["valid"] == expected,
+              "authenticated completed-lap validity is independent of held lastTime");
+      require(laps[0]["time_ms"] == (fresh_later ? 99520 : 100000) &&
+                  laps[0]["time_source"] == (fresh_later ? "simulator" : "held_completed_time"),
+              "wire validity must not finalize held time or prevent a fresh repair");
+    }
+  }
+}
 
 void test_acc_delta_untouched(const fs::path &assets, const fs::path &root) {
   Config c;
@@ -439,6 +797,23 @@ void test_ideal_lap(const fs::path &assets, const fs::path &root) {
   runtime.finish();
 }
 
+void test_acc_uncertain_live_rankings(const fs::path &assets, const fs::path &root) {
+  Config c;
+  c.assets=assets; c.database=root / "acc-rank.db";
+  c.telemetry=root / "acc-rank"; c.queue=root / "acc-rank-queue.db";
+  c.companion_key=std::string(32, '\x11');
+  Runtime runtime(c);
+  DeltaStream delta(rapid::test::v4_run_id()); delta.stream.simulator=1;
+  require(runtime.receive(delta.metadata(), "127.0.0.1"), "ACC ranking metadata");
+  drive_lap(runtime,delta,1,{20000,20000,20000}); cross_line(runtime,delta,2,60000,1);
+  drive_lap(runtime,delta,2,{30000,31000,30000}); cross_line(runtime,delta,3,60000,1);
+  auto state=runtime.snapshot();
+  require(state["best_lap_ms"].is_null() && state["optimal_lap_ms"].is_null() &&
+          state["best_sector_3_ms"].is_null(),
+          "uncertain ACC held completion cannot enter live best or IDEAL");
+  runtime.finish();
+}
+
 // AC1 reports a physical line crossing in two steps a sample apart: the lap
 // number ticks (and the lap timer restarts) while the track position still
 // reads the end of the lap, then the position wraps. The first sample of the
@@ -501,12 +876,26 @@ int main(int argc, char **argv) {
         fs::temp_directory_path() / ("rapid-lap-boundary-tests-" + unique_id());
     fs::create_directories(root);
 
+    test_acc_uncertain_live_rankings(assets, root);
+    test_acc_wire_validity_with_held_time(assets, root);
     test_lap_boundary_number_increment();
     test_lap_boundary_wrap_without_number_increment();
     test_lap_boundary_reversal_does_not_double_close();
     test_lap_boundary_debounces_split_signal();
+    test_lap_boundary_debounces_late_counter();
+    test_lap_boundary_counter_catchup_after_gap();
+    test_acc_validity_at_physical_wrap();
+    test_acc_validity_counter_before_timer_reset();
     test_session_c28a_lap6_wrap(fixtures, root);
     test_session_4e6de929_six_laps(fixtures, root);
+    test_acc_delayed_completed_metadata(root);
+    test_acc_unresolved_metadata_uses_sim_timer(root);
+    test_acc_validity_tracker_to_recorder(root);
+    test_acc_held_completion_stays_pending(root);
+    test_acc_counter_before_timer_reset(root);
+    test_acc_counter_before_timer_reset(root,.01,true);
+    test_acc_provisional_completion_candidates(root);
+    test_acc_recovery_preserves_uncertainty(root);
     test_acc_delta_untouched(assets, root);
     test_delta_presence(assets, root);
     test_lap_validity_manifest(root);

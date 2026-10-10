@@ -154,14 +154,16 @@ std::string lap_name(const Json &lap) {
       << ".ld";
   return out.str();
 }
-void write_ldx(const fs::path &path, const Json &laps, int rate) {
+void write_ldx(const fs::path &path, const Json &laps, int rate, bool acc) {
   std::set<std::size_t> beacons;
   Json fastest;
   for (const auto &lap : laps) {
     beacons.insert(lap.at("start_sample").get<std::size_t>());
     beacons.insert(lap.at("end_sample").get<std::size_t>());
-    if (fastest.is_null() ||
-        number(lap, "time_ms") < number(fastest, "time_ms"))
+    const bool eligible = !acc || (lap.contains("attribution") &&
+        lap["attribution"].value("ranking_eligible", false));
+    if (eligible && (fastest.is_null() ||
+        number(lap, "time_ms") < number(fastest, "time_ms")))
       fastest = lap;
   }
   std::ostringstream out;
@@ -480,6 +482,8 @@ void Recorder::start(const Json &message) {
   lap_boundary_ = LapBoundary{};
   lap_start_ = 0;
   next_lap_number_ = 1;
+  acc_transition_ = AccLapTransition{};
+  acc_segments_.clear();
   last_frame_ = nullptr;
   checkpoint();
   log("Recording native telemetry session");
@@ -589,35 +593,84 @@ void Recorder::record(const Json &message) {
   // the sim's own counter, because that counter is exactly what sometimes
   // fails to tick (session-c28a1574...: lap_number stays 6 for the whole
   // file, so "lap - 1" would collide across separate laps).
-  auto boundary =
-      lap_boundary_.step(lap, lap_time_ms, lap_position, has_position);
-  if (boundary.closed && count > lap_start_) {
-    int completed = int(
-        number(message, "completed_lap_ms", number(frame, "completed_lap_ms")));
-    bool derived = completed <= 0;
-    if (derived) {
-      // The sim gave no completed time for this lap -- observed for 4 of the
-      // 5 lap_number increments in session-4e6de929 -- so derive it from the
-      // recorder's own sample clock instead of dropping the lap.
-      completed = int(std::lround(double(count - lap_start_) * 1000.0 / rate));
-    }
-    if (completed > 0) {
-      Json valid = message.value("lap_valid", frame.value("lap_valid", Json()));
-      if (!valid.is_boolean() || derived)
-        valid = nullptr;
-      Json segment = {{"number", next_lap_number_},
-                      {"start_sample", lap_start_},
-                      {"end_sample", count},
-                      {"time_ms", completed},
-                      {"valid", valid}};
+  const bool acc = string(checkpoint_["metadata"], "simulator") == "ACC";
+  const int supplied_completed = int(number(message, "completed_lap_ms", number(frame, "completed_lap_ms")));
+  const Json supplied_valid = message.value("lap_valid", frame.value("lap_valid", Json()));
+  bool closed = false;
+  if (acc) {
+    AccLapTransition::Observation observation;
+    observation.counter=lap; observation.timer=lap_time_ms;
+    observation.has_counter=frame.contains("lap_number") && frame["lap_number"].is_number();
+    observation.has_timer=(message.contains("current_lap_ms") && message["current_lap_ms"].is_number()) ||
+        (frame.contains("current_lap_ms") && frame["current_lap_ms"].is_number());
+    observation.position=lap_position; observation.has_position=has_position;
+    observation.gap=gap>0; observation.completed=supplied_completed;
+    if (supplied_valid.is_boolean()) observation.completed_valid = supplied_valid.get<bool>();
+    const auto result = acc_transition_.step(observation);
+    closed = result.closed;
+    if (result.restarted) lap_start_ = count;
+    if (closed && count > lap_start_) {
+      const auto *event = acc_transition_.find(result.id);
+      Json segment = {{"number", next_lap_number_++}, {"start_sample", lap_start_},
+                      {"end_sample", count}, {"time_ms", 0}, {"valid", nullptr}};
+      acc_segments_[{event->epoch, event->id}] = checkpoint_["laps"].size();
       checkpoint_["laps"].push_back(segment);
-      checkpoint();
-      log("Lap " + std::to_string(next_lap_number_) + " recorded");
-      ++next_lap_number_;
+      log("Lap " + std::to_string(next_lap_number_ - 1) + " recorded");
+    }
+    for (const auto &event : acc_transition_.events) {
+      auto found = acc_segments_.find({event.epoch, event.id});
+      if (found == acc_segments_.end()) continue;
+      auto &segment = checkpoint_["laps"][found->second];
+      const bool has_timer = event.time.value > 0;
+      segment["time_ms"] = has_timer ? int(std::lround(event.time.value)) :
+          int(std::lround((number(segment, "end_sample") - number(segment, "start_sample")) * 1000.0 / rate));
+      segment["time_source"] = has_timer ? event.time.source : "sample_clock";
+      segment["time_status"] = AccLapTransition::status_name(has_timer ? event.time.status : AccLapTransition::Status::provisional);
+      segment["valid"] = event.validity.status == AccLapTransition::Status::unknown ? Json() : Json(event.validity.value != 0);
+      segment["validity_status"] = AccLapTransition::status_name(event.validity.status);
+      segment["validity_source"] = event.validity.source;
+      segment["completed_time_candidate"] = event.time_candidate.value > 0 ? Json(event.time_candidate.value) : Json();
+      segment["completed_time_candidate_status"] = AccLapTransition::status_name(event.time_candidate.status);
+      segment["attribution"] = {{"session_epoch", event.epoch}, {"lap_id", event.id},
+          {"first_observation", event.first}, {"last_observation", event.last},
+          {"position_wrap", event.position_wrap}, {"timer_reset", event.timer_reset},
+          {"counter_acknowledged", event.counter_seen}, {"counter", event.counter},
+          {"estimated_boundary", event.estimated_boundary}, {"mapping_ambiguous", event.mapping_ambiguous},
+          {"time_observation", event.time.observation}, {"validity_observation", event.validity.observation},
+          {"ranking_eligible", AccLapTransition::rankable(event)}};
+    }
+    checkpoint_["acc_attribution"] = {{"session_epoch", acc_transition_.epoch},
+        {"active_lap_id", acc_transition_.lap_id}, {"observation", acc_transition_.sequence},
+        {"timer_peak", acc_transition_.peak},
+        {"timer_epoch", acc_transition_.timer_phase == AccLapTransition::Timer::wait_reset ? "wait_reset" : "established"},
+        {"counter_debt", acc_transition_.counter_debt},
+        {"missing_completions", acc_transition_.missing_completions},
+        {"expired_records", acc_transition_.expired_records},
+        {"expired_counter_debt", acc_transition_.expired_counter_debt}};
+    // The manifest owns completed history; only retained reconciliation
+    // records need an in-memory segment mapping.
+    for (auto it=acc_segments_.begin();it!=acc_segments_.end();) {
+      if (it->first.first != acc_transition_.epoch || !acc_transition_.find(it->first.second))
+        it=acc_segments_.erase(it);
+      else ++it;
+    }
+  } else {
+    auto boundary = lap_boundary_.step(lap, lap_time_ms, lap_position, has_position);
+    closed = boundary.closed;
+    if (closed && count > lap_start_) {
+      int completed = supplied_completed;
+      const bool derived = completed <= 0;
+      if (derived) completed = int(std::lround(double(count - lap_start_) * 1000.0 / rate));
+      Json valid = supplied_valid;
+      if (!valid.is_boolean() || derived) valid = nullptr;
+      if (completed > 0) {
+        checkpoint_["laps"].push_back({{"number", next_lap_number_}, {"start_sample", lap_start_},
+            {"end_sample", count}, {"time_ms", completed}, {"valid", valid}});
+        log("Lap " + std::to_string(next_lap_number_++) + " recorded");
+      }
     }
   }
-  if (boundary.closed)
-    lap_start_ = count;
+  if (closed) { lap_start_ = count; checkpoint(); }
   write_frame(frame, false);
   last_frame_ = frame;
   if (checkpoint_["sample_count"].get<std::size_t>() % rate == 0)
@@ -636,7 +689,7 @@ fs::path Recorder::publish(const fs::path &spool, Json state,
   int rate = state.at("sample_rate_hz");
   const auto &m = state.at("metadata");
   write_ld(spool, staging / "full-session.ld", state, 0, count);
-  write_ldx(staging / "full-session.ldx", state.at("laps"), rate);
+  write_ldx(staging / "full-session.ldx", state.at("laps"), rate, string(m, "simulator") == "ACC");
   Json artifacts = Json::array();
   auto add = [&](std::string id, std::string role, const fs::path &rel,
                  Json lap = nullptr) {
@@ -679,6 +732,7 @@ fs::path Recorder::publish(const fs::path &spool, Json state,
                    {"quality", quality},
                    {"laps", state.at("laps")},
                    {"artifacts", artifacts}};
+  if (state.contains("acc_attribution")) manifest["acc_attribution"] = state["acc_attribution"];
   atomic_file(staging / "manifest.json", manifest.dump(2) + "\n");
   sync_file(staging);
   fs::rename(staging, destination);

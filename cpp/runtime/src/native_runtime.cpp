@@ -110,7 +110,8 @@ Runtime::Runtime(Config config)
       }
   }
 }
-void Runtime::sectors(Json &f) {
+void Runtime::sectors(Json &f, int gap) {
+  const bool acc = string(state_, "simulator") == "ACC";
   int lap = number(f, "lap_number", -1);
   double time = number(f, "current_lap_ms");
   int complete = number(f, "completed_lap_ms");
@@ -134,12 +135,39 @@ void Runtime::sectors(Json &f) {
   }
   // Same debounced boundary rule as the recorder (lap_boundary.hpp, #16), so
   // timing and recording close a lap on the same sample (#20).
-  auto boundary = lap_boundary_.step(lap, time, position, has_position);
-  if (boundary.closed) {
+  bool closed = false, eligible = !acc, timer_owned = true;
+  if (acc) {
+    AccLapTransition::Observation o;
+    o.counter=lap; o.timer=time; o.position=position; o.has_position=has_position;
+    o.has_counter=f.contains("lap_number") && f["lap_number"].is_number();
+    o.has_timer=f.contains("current_lap_ms") && f["current_lap_ms"].is_number();
+    o.gap=gap>0; o.completed=complete;
+    if (f.contains("lap_valid") && f["lap_valid"].is_boolean()) o.completed_valid=f["lap_valid"].get<bool>();
+    const auto r=acc_timing_.step(o);
+    closed=r.closed;
+    timer_owned=o.has_timer && acc_timing_.timer_phase == AccLapTransition::Timer::established;
+    if (closed) {
+      const auto &event=*acc_timing_.find(r.id);
+      eligible=AccLapTransition::rankable(event);
+      // There is no trustworthy generation for held ACC completion time.
+      // Do not synthesize a misleading exact sector 3 from that candidate.
+      if (!eligible) { complete=0; f["sector_3_ms"]=nullptr; f["sector_3_delta_ms"]=nullptr; }
+    }
+    if (r.restarted) {
+      for (const auto *key : {"sector_1_ms", "sector_2_ms", "sector_3_ms",
+                              "sector_1_delta_ms", "sector_2_delta_ms", "sector_3_delta_ms"})
+        f[key]=nullptr;
+    }
+    if (r.restarted || acc_timing_.phase == AccLapTransition::Phase::discontinuity) {
+      timing_lap_=-1; splits_.clear();
+      std::fill(std::begin(lap_sectors_),std::end(lap_sectors_),0);
+    }
+  } else closed=lap_boundary_.step(lap,time,position,has_position).closed;
+  if (closed) {
     if (timing_lap_ >= 0 && complete > 0) {
       if (splits_.size() == 2)
         record(2, complete - splits_.back());
-      if (!best_lap_ || complete < best_lap_)
+      if (eligible && (!best_lap_ || complete < best_lap_))
         best_lap_ = complete;
       f["best_lap_ms"] = best_lap_;
       // The ideal lap is the sum of the best sectors. Only a lap with all
@@ -150,7 +178,7 @@ void Runtime::sectors(Json &f) {
       const bool invalid = f.contains("lap_valid") &&
                            f["lap_valid"].is_boolean() &&
                            !f["lap_valid"].get<bool>();
-      if (!invalid && lap_sectors_[0] > 0 && lap_sectors_[1] > 0 &&
+      if (eligible && !invalid && lap_sectors_[0] > 0 && lap_sectors_[1] > 0 &&
           lap_sectors_[2] > 0) {
         for (int index = 0; index < 3; ++index)
           if (!best_valid_sectors_[index] ||
@@ -175,7 +203,7 @@ void Runtime::sectors(Json &f) {
   // lap is many seconds of missing telemetry) and a lap joined past it simply
   // has no sectors.
   if (const double threshold = double(splits_.size() + 1) / 3;
-      has_position && splits_.size() < 2 && position >= threshold &&
+      timer_owned && has_position && splits_.size() < 2 && position >= threshold &&
       position < threshold + 0.25) {
     int duration = int(time) - (splits_.empty() ? 0 : splits_.back());
     if (duration > 0) {
@@ -493,6 +521,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       // A new session starts with a fresh lap boundary; delta_ms stays null
       // until the companion says the new session's simulator provides one.
       lap_boundary_ = LapBoundary{};
+      acc_timing_ = AccLapTransition{};
       for (auto *key :
            {"best_lap_ms", "sector_1_ms", "sector_2_ms", "sector_3_ms",
             "sector_1_delta_ms", "sector_2_delta_ms", "sector_3_delta_ms",
@@ -523,7 +552,20 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
         recording_steering_lock_deg_ > 0.0)
       frame["steering_angle_deg"] =
           frame["steering_angle"].get<double>() * recording_steering_lock_deg_ / 2.0;
-    sectors(frame);
+    {
+      const double rate = std::max(1.0, number(m, "sample_rate_hz", 10));
+      const double at_us = number(m, "monotonic_us", -1);
+      std::uint64_t missing = 0;
+      if (last_sample_us_ >= 0 && at_us > last_sample_us_) {
+        const auto slots = static_cast<std::int64_t>(
+            std::llround((at_us - last_sample_us_) / (1000000.0 / rate)));
+        if (slots > 1) missing = static_cast<std::uint64_t>(slots - 1);
+      }
+      m["_packet_gap"] = std::min(pending_lost_, missing);
+      pending_lost_ = 0;
+      last_sample_us_ = at_us;
+    }
+    sectors(frame, int(number(m, "_packet_gap")));
     for (auto it = frame.begin(); it != frame.end(); ++it)
       if (live_channels().contains(it.key()) && state_.contains(it.key()))
         state_[it.key()] = it.value();
@@ -548,19 +590,6 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
     // is only treated as lost when both agree. Scheduling jitter alone (a late
     // sample, with no packet lost) therefore never adds a sample, and a lost
     // heartbeat never does either.
-    {
-      const double rate = std::max(1.0, number(m, "sample_rate_hz", 10));
-      const double at_us = number(m, "monotonic_us", -1);
-      std::uint64_t missing = 0;
-      if (last_sample_us_ >= 0 && at_us > last_sample_us_) {
-        const auto slots = static_cast<std::int64_t>(
-            std::llround((at_us - last_sample_us_) / (1000000.0 / rate)));
-        if (slots > 1) missing = static_cast<std::uint64_t>(slots - 1);
-      }
-      m["_packet_gap"] = std::min(pending_lost_, missing);
-      pending_lost_ = 0;
-      last_sample_us_ = at_us;
-    }
     m["telemetry"] = frame;
     try {
       // CPU work and the handoff to the recorder's writer thread only

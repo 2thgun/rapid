@@ -234,7 +234,7 @@ Json build_frame(std::size_t sample) {
 // a fresh implementation of the layout, and checks it against the expected
 // sample count/rate and the input spool (via expected_stored).
 void check_ld(const std::string &data, std::size_t sample_count,
-              std::size_t global_start, const std::string &label) {
+              std::size_t global_start, const std::string &label, const std::string &simulator) {
   require(u32(data, 0) == 0x40, label + ": header magic");
   auto metadata_pointer = u32(data, 8);
   auto data_pointer = u32(data, 12);
@@ -255,12 +255,12 @@ void check_ld(const std::string &data, std::size_t sample_count,
   require(fixed_str(data, 222, 64) == "GT3 EVO", label + ": vehicle");
   require(fixed_str(data, 350, 64) == "Spa", label + ": venue");
   require(u32(data, 1502) == 0xc81a4, label + ": constant 0xc81a4");
-  require(fixed_str(data, 1572, 64) == "raPId ACC telemetry",
+  require(fixed_str(data, 1572, 64) == "raPId " + simulator + " telemetry",
           label + ": tool string");
   require(std::size_t(event_pointer) == 1762, label + ": header total size");
 
   // Event block.
-  require(fixed_str(data, event_pointer, 64) == "ACC", label + ": event simulator");
+  require(fixed_str(data, event_pointer, 64) == simulator, label + ": event simulator");
   require(fixed_str(data, event_pointer + 64, 64) == "Race",
           label + ": event session");
   require(fixed_str(data, event_pointer + 128, 1024) == "Recorded by raPId",
@@ -321,7 +321,7 @@ void check_ld(const std::string &data, std::size_t sample_count,
 
 // Parses full-session.ldx's beacon markers and summary strings from scratch.
 void check_ldx(const std::string &xml,
-               const std::vector<std::pair<std::size_t, std::size_t>> &laps) {
+               const std::vector<std::pair<std::size_t, std::size_t>> &laps, bool acc) {
   std::set<std::size_t> expected_samples;
   for (auto [start, end] : laps) {
     expected_samples.insert(start);
@@ -345,6 +345,13 @@ void check_ldx(const std::string &xml,
   require(xml.find("Id=\"Total Laps\" Value=\"" +
                     std::to_string(laps.size()) + "\"") != std::string::npos,
           "ldx: total laps");
+  if (acc) {
+    require(xml.find("Id=\"Fastest Lap\"") == std::string::npos &&
+            xml.find("Id=\"Fastest Time\"") == std::string::npos,
+            "ldx: uncertain ACC must not advertise exact fastest");
+    return;
+  }
+  // Legacy other-simulator assertions retained unchanged below.
   // Lap 2 (index 1) is the fastest by construction (kLap2Ms < kLap1Ms).
   require(xml.find("Id=\"Fastest Lap\" Value=\"2\"") != std::string::npos,
           "ldx: fastest lap number");
@@ -361,13 +368,14 @@ void check_ldx(const std::string &xml,
 
 int main() {
   try {
+    for (const char *simulator : {"ACC", "AC"}) {
     auto root = fs::temp_directory_path() / ("rapid-motec-tests-" + unique_id());
     fs::create_directories(root);
     fs::path published;
     {
       Recorder recorder(root, "all", [&](const fs::path &p) { published = p; });
       for (std::size_t s = 0; s < kTotalSamples; ++s)
-        recorder.record(build_frame(s));
+        { auto frame=build_frame(s); frame["simulator"]=simulator; recorder.record(frame); }
       recorder.finish("ended");
     }
     require(!published.empty(), "publish callback fired");
@@ -387,7 +395,7 @@ int main() {
 
     // Full session against the whole input spool.
     auto full = read_file(published / "full-session.ld");
-    check_ld(full, kTotalSamples, 0, "full-session");
+    check_ld(full, kTotalSamples, 0, "full-session", simulator);
 
     // A lap range: lap 2, samples [60, 120), independently of the writer's
     // own bookkeeping -- re-derives the expected slice from the same
@@ -395,16 +403,17 @@ int main() {
     auto lap_path = published / "laps" / "lap-002-unknown.ld";
     require(fs::exists(lap_path), "lap 2 file published");
     auto lap2 = read_file(lap_path);
-    check_ld(lap2, kLap2Samples, kLap1Samples, "lap-002");
+    check_ld(lap2, kLap2Samples, kLap1Samples, "lap-002", simulator);
 
     // Lap 1 too, to cross-check a range that does not start at sample 0.
     auto lap1_path = published / "laps" / "lap-001-unknown.ld";
     require(fs::exists(lap1_path), "lap 1 file published");
     auto lap1 = read_file(lap1_path);
-    check_ld(lap1, kLap1Samples, 0, "lap-001");
+    check_ld(lap1, kLap1Samples, 0, "lap-001", simulator);
 
     auto ldx = read_file(published / "full-session.ldx");
-    check_ldx(ldx, {{0, kLap1Samples}, {kLap1Samples, kLap1Samples + kLap2Samples}});
+    check_ldx(ldx, {{0, kLap1Samples}, {kLap1Samples, kLap1Samples + kLap2Samples}}, std::string(simulator)=="ACC");
+    }
 
     std::cout << "native recorder LD/LDX read-back tests passed" << std::endl;
     return 0;
