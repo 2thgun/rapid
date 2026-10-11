@@ -11,7 +11,7 @@ the first planned release.
   Tyres and Graphs.
 - ACC, Assetto Corsa, Assetto Corsa EVO and iRacing, all through one lightweight Windows
   program (`rapid-telemetry-daemon.exe`) that needs no installation.
-- MoTeC i2 compatible recordings: the whole session plus one file per lap. All
+- MoTeC i2 pro compatible recordings: the whole session plus one file per lap. All
   simulators share the same channel layout.
 - Setup from a browser, with no peripherals needed: the Pi starts its own Wi-Fi
   network, and you claim it, connect it to home Wi-Fi, set the orientation and
@@ -21,18 +21,15 @@ the first planned release.
 - Everything runs locally. No internet or account is needed.
 
 ## Documentation
-
-The [wiki](https://github.com/2thgun/rapid/wiki) is the manual:
-
 - [Getting started](https://github.com/2thgun/rapid/wiki/Getting-Started)
 - [First-time setup](https://github.com/2thgun/rapid/wiki/First-Time-Setup)
 - [Windows companion](https://github.com/2thgun/rapid/wiki/Windows-Companion)
 - [Driving and recording](https://github.com/2thgun/rapid/wiki/Driving-and-Recording)
 - [Troubleshooting](https://github.com/2thgun/rapid/wiki/Troubleshooting)
 - [Architecture](https://github.com/2thgun/rapid/wiki/Architecture),
-  [telemetry protocol](https://github.com/2thgun/rapid/wiki/Telemetry-Protocol),
-  [building](https://github.com/2thgun/rapid/wiki/Building),
-  [testing](https://github.com/2thgun/rapid/wiki/Testing)
+- [telemetry protocol](https://github.com/2thgun/rapid/wiki/Telemetry-Protocol),
+- [building](https://github.com/2thgun/rapid/wiki/Building),
+- [testing](https://github.com/2thgun/rapid/wiki/Testing)
 
 User-visible changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
