@@ -605,6 +605,7 @@ bool Runtime::receive(const std::string &payload, const std::string &host,
       if (it.value().is_number())
         values[it.key()] = it.value();
     Json event = {{"type", "sample"},
+                  {"event_id", std::to_string(next_event_)},
                   {"session_id", m.value("session_id", Json())},
                   {"sequence", m.value("sequence", Json())},
                   {"monotonic_us", m.value("monotonic_us", Json())},
@@ -818,7 +819,8 @@ Json Runtime::events(std::uint64_t &cursor, int history) const {
     items.push_back(first->second);
     cursor = first->first;
   }
-  return {{"events", items}, {"dropped", dropped}};
+  return {{"events", items}, {"dropped", dropped},
+          {"receiver_stream_id", receiver_stream_id_}};
 }
 void Runtime::power() {
   // Firmware property interface, avoiding a child process every second.
