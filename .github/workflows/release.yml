@@ -44,6 +44,7 @@ jobs:
           path: build/pi-seals-pairing-fixture
       - shell: pwsh
         run: ./companion/build-native-daemon.ps1 -Compiler MSVC
+      - run: node cpp/tests/artifact_contract_tests.js
       - run: node cpp/display/tests/qt_display_tests.js
       - shell: pwsh
         run: ./companion/rapid-telemetry-daemon.exe --self-test --output-directory "$env:RUNNER_TEMP/rapid-self-test" --pairing-pi-seals-fixtures "$env:GITHUB_WORKSPACE/build/pi-seals-pairing-fixture"
@@ -65,6 +66,7 @@ jobs:
             companion/START-RAPID.cmd
             companion/start-rapid-daemon.vbs
             companion/install-demo.cmd
+            companion/PAIR.cmd
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

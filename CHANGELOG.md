@@ -5,6 +5,10 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Release companion artifacts now include the pairing launcher. Private demo
+  installers include the current setup and recovery guides, while older kits
+  with `AC1_DEMO_GUIDE.md` remain supported.
+
 - Wi-Fi and setup-access-point password requests are now private from creation
   through atomic publication, even when the setup service has a permissive umask.
 

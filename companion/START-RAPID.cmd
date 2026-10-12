@@ -22,11 +22,17 @@ echo daemon.conf is missing. Copy it from your paired demo package.
 goto failed
 :missing_key
 echo No paired credential is available for this Windows account.
-echo Pair this companion with the Pi; legacy telemetry.key files are supported only for migrated demo kits.
+echo Pair this companion with the Pi, or restore telemetry.key from your private paired demo package.
 goto failed
 :not_writable
 echo This folder is not writable. Extract the package into a folder you can write to.
 :failed
-echo See AC1_DEMO_GUIDE.md for setup and recovery instructions.
+if exist "%~dp0TROUBLESHOOTING.md" (
+    echo See GETTING_STARTED.md and TROUBLESHOOTING.md for setup and recovery instructions.
+) else if exist "%~dp0AC1_DEMO_GUIDE.md" (
+    echo See AC1_DEMO_GUIDE.md for setup and recovery instructions.
+) else (
+    echo See the raPId wiki Getting-Started and Troubleshooting pages for setup and recovery instructions.
+)
 pause
 exit /b 1

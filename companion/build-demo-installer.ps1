@@ -19,11 +19,20 @@ if (-not $OutputPath) {
     $OutputPath = Join-Path $bundle 'raPId-AC1-Demo-Setup.exe'
 }
 $output = [IO.Path]::GetFullPath($OutputPath)
+$guideFiles = @(
+    'GETTING_STARTED.md', 'WINDOWS_COMPANION.md', 'TOUCHSCREEN.md',
+    'DRIVING_AND_RECORDING.md', 'TROUBLESHOOTING.md'
+)
+# Previously prepared kits used one guide. Keep them installable, but require
+# the complete current guide set when the current package marker is present.
+if (-not (Test-Path -LiteralPath (Join-Path $bundle 'GETTING_STARTED.md') -PathType Leaf)) {
+    $guideFiles = @('AC1_DEMO_GUIDE.md')
+}
 $files = @(
     'rapid-telemetry-daemon.exe', 'daemon.conf', 'telemetry.key',
     'start-rapid-daemon.vbs', 'START-RAPID.cmd', 'install-demo.cmd',
-    'START-HERE.txt', 'AC1_DEMO_GUIDE.md'
-)
+    'START-HERE.txt'
+) + $guideFiles
 foreach ($name in $files) {
     if (-not (Test-Path -LiteralPath (Join-Path $bundle $name) -PathType Leaf)) {
         throw "Bundle is missing required installer file: $name"
