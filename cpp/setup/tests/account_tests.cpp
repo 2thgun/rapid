@@ -8,6 +8,7 @@
 #include <crypt.h>
 #include <fcntl.h>
 #include <fstream>
+#include <grp.h>
 #include <iostream>
 #include <openssl/evp.h>
 #include <sys/stat.h>
@@ -23,14 +24,20 @@ void require(bool value, const std::string &message) {
 }
 
 struct TemporaryDirectory {
-  fs::path path = fs::temp_directory_path() / ("rapid-account-tests-" + unique_id());
+  fs::path previous_directory = fs::current_path();
+  fs::path path = fs::absolute(fs::temp_directory_path()) / ("rapid-account-tests-" + unique_id());
   TemporaryDirectory() {
     fs::create_directory(path);
     fs::permissions(path, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
                               fs::perms::others_read | fs::perms::others_exec);
+    // A root runner's TMPDIR can have 0700 ancestors. Relative fixture paths
+    // let the uid-dropped child start at this searchable directory, without
+    // relaxing any ancestor permissions or bypassing the helper's uid drop.
+    fs::current_path(path);
   }
   ~TemporaryDirectory() {
     std::error_code error;
+    fs::current_path(previous_directory, error);
     fs::remove_all(path, error);
   }
 };
@@ -434,8 +441,31 @@ void api_tests(const fs::path &base) {
   fs::remove(request_file);
 }
 
+// The real helper opens the home only after dropping all root credentials.
+// Assert the fixture reaches that operation even under a private TMPDIR.
+void fixture_access_test(const FakeDevice &device) {
+  const auto child = ::fork();
+  require(child >= 0, "fork fixture access check");
+  if (child == 0) {
+    if (::geteuid() == 0 &&
+        (::setgroups(0, nullptr) != 0 || ::setgid(device.gid) != 0 || ::setuid(device.uid) != 0))
+      _exit(10);
+    const int home = ::open((device.root / "home/rapid").c_str(),
+                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (home < 0) _exit(12);
+    ::close(home);
+    _exit(0);
+  }
+  int status = 0;
+  require(::waitpid(child, &status, 0) == child && WIFEXITED(status), "fixture access check exits");
+  require(WEXITSTATUS(status) == 0,
+          "fake home is accessible after dropping to the account uid (child exit " +
+              std::to_string(WEXITSTATUS(status)) + ")");
+}
+
 void helper_tests(const fs::path &base, const std::string &helper) {
   FakeDevice device(base, helper);
+  fixture_access_test(device);
   const std::string password = "Tr4ck-day-at-Spa";
   const auto hash = yescrypt(password);
   const auto id = unique_id();
@@ -600,7 +630,8 @@ void helper_tests(const fs::path &base, const std::string &helper) {
   write_text(victim, "link target content\n");
   if (::geteuid() == 0) require(::chown(victim.c_str(), device.uid, device.gid) == 0, "chown link target");
   fs::create_directories(device.keys().parent_path());
-  fs::create_symlink(victim, device.keys());
+  fs::create_symlink(victim.lexically_relative(device.keys().parent_path()), device.keys());
+  require(fs::canonical(device.keys()) == fs::canonical(victim), "planted key symlink reaches its victim");
   if (::geteuid() == 0)
     require(::lchown(device.keys().parent_path().c_str(), device.uid, device.gid) == 0, "chown .ssh");
   queue({{"request_id", id}, {"authorized_key", ed25519_key(7)}});
@@ -616,7 +647,8 @@ void helper_tests(const fs::path &base, const std::string &helper) {
   require(device.run() == 1 && read_file(root_victim) == "root content\n", "authorized_keys hard link is refused");
   device.reset("rapid:!:19000:0:99999:7:::\n", "/bin/bash");
   fs::remove_all(device.root / "home/rapid");
-  fs::create_directory_symlink(base / "victim-home", device.root / "home/rapid");
+  fs::create_directory_symlink((base / "victim-home").lexically_relative(device.root / "home"),
+                               device.root / "home/rapid");
   fs::create_directories(base / "victim-home");
   queue({{"request_id", id}, {"authorized_key", ed25519_key(7)}});
   require(device.run() == 1 && !fs::exists(base / "victim-home/.ssh"), "home directory symlink is refused");
@@ -645,7 +677,10 @@ void helper_tests(const fs::path &base, const std::string &helper) {
            "/usr/sbin/nologin");
   device.reset("rapid:!:19000:0:99999:7:::\n", "/bin/bash");
   write_text(base / "linked-request.json", Json{{"request_id", id}, {"password_hash", hash}}.dump());
-  fs::create_symlink(base / "linked-request.json", device.request_file());
+  fs::create_symlink((base / "linked-request.json").lexically_relative(device.request_file().parent_path()),
+                     device.request_file());
+  require(fs::canonical(device.request_file()) == fs::canonical(base / "linked-request.json"),
+          "planted request symlink reaches its victim");
   require(device.run() == 1 && !fs::exists(device.log_directory / "chpasswd.input") &&
               fs::exists(base / "linked-request.json"),
           "a symlinked request is refused without following it");
@@ -947,18 +982,20 @@ void ssh_key_enrollment_tests(const fs::path &base) {
 int main(int argc, char **argv) {
   try {
     require(argc == 2, "usage: rapid-account-tests PATH-TO-rapid-account");
+    const auto helper = fs::absolute(argv[1]).string();
     TemporaryDirectory root;
+    const fs::path base = ".";
     policy_tests();
     std::cout << "ok: password, SSH key and hash validation\n";
-    api_tests(root.path);
+    api_tests(base);
     std::cout << "ok: setup API auth, TLS, CSRF, validation and rate limit\n";
-    network_ssid_tests(root.path);
+    network_ssid_tests(base);
     std::cout << "ok: setup status publishes the setup AP name in use\n";
-    ssh_key_enrollment_tests(root.path);
+    ssh_key_enrollment_tests(base);
     std::cout << "ok: browser-generated SSH key enrollment reuses the account endpoint\n";
-    helper_tests(root.path / "helper", fs::absolute(argv[1]).string());
+    helper_tests(base / "helper", helper);
     std::cout << "ok: rapid-account helper against a fake root\n";
-    secret_tests(root.path / "secret", fs::absolute(argv[1]).string());
+    secret_tests(base / "secret", helper);
     std::cout << "ok: plaintext password persists in no artifact\n";
     return 0;
   } catch (const std::exception &error) {
