@@ -5,6 +5,9 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- Wi-Fi and setup-access-point password requests are now private from creation
+  through atomic publication, even when the setup service has a permissive umask.
+
 - ACC recording now keeps lap crossings separate from delayed counter, timer
   and validity updates. Missing fields no longer create a restart or a false lap.
   Saved laps keep timing and validity uncertainty instead of borrowing the

@@ -131,7 +131,8 @@ struct Flow {
 void success_scenario(const fs::path &base, const std::string &helper) {
   Flow flow(base / "success", helper);
   const std::string password = "Unique-" + unique_id().substr(0, 12) + "-Wifi";
-  atomic_file(flow.request_file(), Json{{"action", "save"}, {"revision", 1}, {"ssid", "Home Network"}, {"password", password}}.dump());
+  atomic_file(flow.request_file(), Json{{"action", "save"}, {"revision", 1}, {"ssid", "Home Network"}, {"password", password}}.dump(),
+              fs::perms::owner_read | fs::perms::owner_write);
   require(flow.run() == 0, "rapid-wifi succeeds against a cooperative fake nmcli");
   require(Json::parse(read_file(flow.result_file()))["connected"] == true, "result reports connected");
   require(!fs::exists(flow.request_file()), "request consumed");
@@ -275,7 +276,8 @@ void setup_ap_scenario(const fs::path &base, const std::string &helper) {
       "ipv4.addresses=192.168.1.64/24\n";
   write_text(flow.connections / "rapid-setup.nmconnection", ap);
   const std::string password = "Setup-Ap-Passphrase";
-  atomic_file(flow.request_file(), Json{{"action", "setup_ap"}, {"password", password}}.dump());
+  atomic_file(flow.request_file(), Json{{"action", "setup_ap"}, {"password", password}}.dump(),
+              fs::perms::owner_read | fs::perms::owner_write);
   require(flow.run() == 0, "rapid-wifi applies the setup-AP password");
   const auto result = Json::parse(read_file(flow.result_file()));
   require(result["secured"] == true && result["ssid"] == "rapid", "the setup-AP result reports the secured state");
