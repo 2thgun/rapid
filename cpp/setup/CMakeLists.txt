@@ -46,6 +46,13 @@ if(BUILD_TESTING)
   add_executable(rapid-setup-auth-tests tests/setup_auth_tests.cpp)
   target_link_libraries(rapid-setup-auth-tests PRIVATE rapid_setup_auth)
   add_test(NAME rapid-setup-auth-tests COMMAND rapid-setup-auth-tests)
+  # Real syscall-boundary observations catch permission windows hidden by final-mode checks.
+  add_executable(rapid-wifi-permission-tests tests/wifi_permission_tests.cpp)
+  target_link_libraries(rapid-wifi-permission-tests PRIVATE rapid_setup_auth ${CMAKE_DL_LIBS})
+  target_compile_options(rapid-wifi-permission-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME rapid-wifi-save-permission-tests COMMAND rapid-wifi-permission-tests save)
+  add_test(NAME rapid-wifi-ap-permission-tests COMMAND rapid-wifi-permission-tests setup_ap)
+  set_tests_properties(rapid-wifi-save-permission-tests rapid-wifi-ap-permission-tests PROPERTIES TIMEOUT 10)
   # #23: password/key validation, API auth/CSRF/rate limit, the root helper against a
   # fake root, and secret non-persistence across every produced artifact.
   add_executable(rapid-account-tests tests/account_tests.cpp)

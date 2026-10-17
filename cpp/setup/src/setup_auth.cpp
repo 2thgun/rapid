@@ -73,7 +73,9 @@ std::optional<Json> wifi_request_and_wait(const fs::path &request_file,
                                           const Json &request, double timeout) {
   std::error_code error;
   fs::remove(result_file, error);
-  atomic_file(request_file, request.dump());
+  // The setup-AP request also carries a plaintext passphrase; root can read
+  // the owner-only queue without group/other access.
+  atomic_file(request_file, request.dump(), fs::perms::owner_read | fs::perms::owner_write);
   const double deadline = monotonic() + timeout;
   while (monotonic() < deadline) {
     if (fs::is_regular_file(result_file, error)) {
@@ -651,9 +653,8 @@ Response SetupAuth::handle(const Request &request) {
     try {
       Json queued{{"action", "save"}, {"revision", state.at("revision")}, {"ssid", ssid}, {"password", password}};
       if (!name.empty()) queued["name"] = name;
-      atomic_file(wifi_request_file_, queued.dump());
-      fs::permissions(wifi_request_file_, fs::perms::owner_read | fs::perms::owner_write,
-                      fs::perm_options::replace);
+      atomic_file(wifi_request_file_, queued.dump(),
+                  fs::perms::owner_read | fs::perms::owner_write);
     }
     catch (const std::exception &) { return reply(503, {{"detail", "Wi-Fi application queue is unavailable"}}); }
     return reply(202, {{"revision", state.at("revision")}, {"queued", true}});
