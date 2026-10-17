@@ -5,6 +5,12 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- ACC recording now keeps lap crossings separate from delayed counter, timer
+  and validity updates. Missing fields no longer create a restart or a false lap.
+  Saved laps keep timing and validity uncertainty instead of borrowing the
+  previous lap's values. Exact ACC BEST/IDEAL and LDX fastest-lap labels stay
+  blank until completion ownership can be established; the wire format is unchanged.
+
 - The Windows companion no longer reads past the end of a simulator's shared
   memory. A page shorter than the companion expects (a newer or older sim build,
   or a header field that is wrong while the sim loads) read other memory or could

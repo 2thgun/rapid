@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "iracing_yaml.hpp"
+#include "acc_lap_validity.hpp"
 
 #ifndef BCRYPT_ECDH_ALGORITHM
 #define BCRYPT_ECDH_ALGORITHM L"ECDH"
@@ -1654,6 +1655,7 @@ public:
         // recorded once the sample is known to be intact: a torn sample is
         // discarded, and the restart it showed must still be seen by the next one.
         const bool restarted = last_lap_number_ >= 0 && lap_now < last_lap_number_;
+        const bool sim_lap_valid = game_ == Game::acc && graphics_.read<std::int32_t>(1408) != 0;
         if (game_ == Game::acc) {
             // ACC's graphics page carries the same documented isValidLap,
             // iDeltaLapTime and iBestTime fields as the ACC UDP lap struct;
@@ -1662,9 +1664,6 @@ public:
             // relative to the best lap, so it is only marked present once the
             // simulator exposes one (0 and INT_MAX both mean "no lap time" on
             // these pages).
-            lap_validity_.update(lap_now, graphics_.read<std::int32_t>(1408) != 0);
-            frame.lap_valid_present = lap_validity_.present;
-            frame.lap_valid = lap_validity_.valid;
             const int best_ms = graphics_.read<std::int32_t>(148);
             frame.delta_present =
                 best_ms > 0 && best_ms != std::numeric_limits<int>::max();
@@ -1681,6 +1680,12 @@ public:
         MemoryBarrier();
         if (before != physics_.read<std::int32_t>(0) ||
             graphics_before != graphics_.read<std::int32_t>(0) || !live()) return false;
+        // A rejected/torn read must not mutate the completed-lap latch.
+        if (game_ == Game::acc) {
+            lap_validity_.update(lap_now, v[current_lap_ms], v[lap_position], sim_lap_valid);
+            frame.lap_valid_present = lap_validity_.present;
+            frame.lap_valid = lap_validity_.valid;
+        }
         session_restarted_ = restarted;
         last_lap_number_ = lap_now;
         last_packet_id_ = before;
@@ -1699,7 +1704,7 @@ private:
     Mapping physics_, graphics_, static_;
     Game game_ = Game::none;
     std::optional<int> last_packet_id_;
-    CompletedLapValidity lap_validity_;
+    AccLapValidity lap_validity_;
     std::array<double, 4> tyre_radius_m_{};
     int last_lap_number_ = -1;
     bool session_restarted_ = false;

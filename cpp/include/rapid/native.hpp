@@ -1,4 +1,5 @@
 #pragma once
+#include "rapid/acc_lap_transition.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
@@ -165,6 +166,8 @@ class Recorder {
   LapBoundary lap_boundary_;
   std::size_t lap_start_ = 0;
   int next_lap_number_ = 1;
+  AccLapTransition acc_transition_;
+  std::map<std::pair<std::uint64_t, std::uint64_t>, std::size_t> acc_segments_;
   bool upload_ = false;
   std::unique_ptr<Writer> writer_;
   void start(const Json &message);
@@ -246,7 +249,8 @@ class Runtime {
   // now says explicitly whether a delta exists, and the Pi never invents one.
   LapBoundary lap_boundary_;
   std::uint64_t next_event_ = 1;
-  void sectors(Json &frame);
+  AccLapTransition acc_timing_;
+  void sectors(Json &frame, int gap = 0);
 
 public:
   explicit Runtime(Config config);
