@@ -9,7 +9,10 @@ if not exist "%DESTINATION%\" (
   exit /b 1
 )
 
-for %%F in (rapid-telemetry-daemon.exe daemon.conf telemetry.key start-rapid-daemon.vbs START-RAPID.cmd START-HERE.txt AC1_DEMO_GUIDE.md) do (
+rem Current packages ship wiki guides; older prepared kits ship one demo guide.
+set "GUIDES=GETTING_STARTED.md WINDOWS_COMPANION.md TOUCHSCREEN.md DRIVING_AND_RECORDING.md TROUBLESHOOTING.md"
+if not exist "%~dp0GETTING_STARTED.md" set "GUIDES=AC1_DEMO_GUIDE.md"
+for %%F in (rapid-telemetry-daemon.exe daemon.conf telemetry.key start-rapid-daemon.vbs START-RAPID.cmd START-HERE.txt %GUIDES%) do (
   copy /y "%~dp0%%F" "%DESTINATION%\%%F" >nul
   if errorlevel 1 (
     echo Could not install %%F
