@@ -439,14 +439,39 @@ int main(int argc, char **argv) {
     require(runtime.snapshot()["recording"] == true, "recording state wired");
     require(runtime.snapshot()["recorded_samples"] == 11, "sample count wired");
     std::uint64_t cursor = 0;
-    require(runtime.events(cursor)["events"].size() == 11, "live broker");
-    require(runtime.events(cursor)["events"].empty(), "no repeated events");
+    const auto initial_events = runtime.events(cursor);
+    require(initial_events["events"].size() == 11, "live broker");
+    require(initial_events.contains("receiver_stream_id") &&
+                initial_events["receiver_stream_id"].is_string() &&
+                initial_events["receiver_stream_id"].get<std::string>().size() == 32,
+            "broker history exposes receiver stream identity");
+    const auto stream_id = initial_events["receiver_stream_id"];
+    std::uint64_t expected_event_id = 1;
+    for (const auto &event : initial_events["events"])
+      require(event.contains("event_id") && event["event_id"].is_string() &&
+                  event["event_id"] == std::to_string(expected_event_id++),
+              "broker publishes unique event counter as a decimal string");
+    const auto idle_events = runtime.events(cursor);
+    require(idle_events["events"].empty(), "no repeated events");
+    require(idle_events["receiver_stream_id"] == stream_id,
+            "idle engineering packet retains broker identity");
+    std::uint64_t replay_cursor = 0;
+    require(runtime.events(replay_cursor) == initial_events,
+            "reconnect history preserves packet and event identities");
     {
       Config burst_config = c;
       burst_config.database = root / "burst.db";
       burst_config.telemetry = root / "burst-telemetry";
       burst_config.queue = root / "burst-queue.db";
       Runtime burst(burst_config);
+      std::uint64_t empty_cursor = 0;
+      const auto empty_broker = burst.events(empty_cursor);
+      require(empty_broker["events"].empty() &&
+                  empty_broker["receiver_stream_id"] != stream_id &&
+                  empty_broker["receiver_stream_id"].is_string(),
+              "new broker instance changes stream identity even before its first event");
+      require(burst.events(empty_cursor) == empty_broker,
+              "empty broker identity remains stable");
       Wire burst_wire(v4_run_id());
       burst_wire.stream.rate = 10;
       require(burst.receive(burst_wire.metadata(), "127.0.0.1"), "burst metadata");
@@ -455,6 +480,10 @@ int main(int argc, char **argv) {
                 "burst sample");
       std::uint64_t burst_cursor = 0;
       auto batch = burst.events(burst_cursor, 120);
+      require(batch["receiver_stream_id"] == empty_broker["receiver_stream_id"] &&
+                  batch["events"].front()["event_id"] == "52" &&
+                  batch["events"].back()["event_id"] == "301",
+              "capped history preserves broker identity and unique event counters");
       require(batch["events"].size() == 250 && batch["dropped"] == 51,
               "initial history capped with exact drop count");
       require(batch["events"].front()["sequence"] == 53 &&
@@ -470,6 +499,9 @@ int main(int argc, char **argv) {
       require(burst.receive(burst_wire.telemetry(1, 30100), "127.0.0.1"),
               "incremental sample");
       batch = burst.events(burst_cursor);
+      require(batch["receiver_stream_id"] == empty_broker["receiver_stream_id"] &&
+                  batch["events"].front()["event_id"] == "302",
+              "incremental push keeps broker identity and next event counter");
       require(batch["events"].size() == 1 && batch["dropped"] == 0 &&
                   batch["events"].front()["sequence"] == 303,
               "incremental delivery after catch-up");

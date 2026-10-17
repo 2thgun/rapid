@@ -5,6 +5,15 @@ last completed checks, not a guarantee of current device state.
 
 ## Unreleased
 
+- The engineering viewer now ages and plots its rolling history on the receiver
+  clock, so restarting sender sessions cannot accumulate old samples or move
+  traces off the time axis. Pause still freezes history; reconnect snapshots
+  merge without duplicating samples, and changing the window redraws immediately.
+  Engineering packets now expose a receiver-broker stream ID and stable event
+  IDs: a changed broker clears the old axis/history, while same-broker replay
+  and coincident samples remain safe. Paused viewers defer broker changes until
+  the next resumed packet; legacy packets cannot establish a receiver reboot.
+
 - Release companion artifacts now include the pairing launcher. Private demo
   installers include the current setup and recovery guides, while older kits
   with `AC1_DEMO_GUIDE.md` remain supported.

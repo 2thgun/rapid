@@ -345,8 +345,29 @@ int main(int argc, char **argv) {
     ws.read(buffer);
     auto events = Json::parse(beast::buffers_to_string(buffer.data()));
     require(events["events"].size() == 12, "WebSocket history");
+    require(events.contains("receiver_stream_id") &&
+                events["receiver_stream_id"].is_string() &&
+                events["receiver_stream_id"].get<std::string>().size() == 32,
+            "HTTP WebSocket history exposes broker stream identity");
+    const auto engineering_stream = events["receiver_stream_id"];
+    for (std::size_t i = 0; i < events["events"].size(); ++i)
+      require(events["events"][i]["event_id"] == std::to_string(i + 1),
+              "HTTP history exposes unique broker event IDs");
+    buffer.consume(buffer.size());
+    ws.read(buffer);
+    auto idle = Json::parse(beast::buffers_to_string(buffer.data()));
+    require(idle["receiver_stream_id"] == engineering_stream && idle["events"].empty(),
+            "HTTP idle engineering push retains stream identity");
+    beast::websocket::stream<tcp::socket> replay_ws(io);
+    replay_ws.next_layer().connect({asio::ip::make_address("127.0.0.1"),
+                                    static_cast<unsigned short>(port)});
+    replay_ws.handshake("127.0.0.1", "/api/v1/live?history=30");
+    beast::flat_buffer replay_buffer;
+    replay_ws.read(replay_buffer);
+    require(Json::parse(beast::buffers_to_string(replay_buffer.data())) == events,
+            "HTTP reconnect history preserves stream and event identities");
     boost::system::error_code ec;
-    ws.next_layer().close(ec);
+    replay_ws.next_layer().close(ec);
     // Display clients (Qt panel, browser dashboard) ask for ?mode=state
     // instead: a diffed frame (the changed subset plus a sequence number)
     // pushed at 50 Hz, with no per-client backlog -- the newest state only.
@@ -379,6 +400,21 @@ int main(int argc, char **argv) {
          {rapid::test::ch_throttle, .5f},
          {rapid::test::ch_lap_number, 2.f}});
     sender.send_to(asio::buffer(fast_packet), endpoint);
+    bool engineering_latest = false;
+    for (int i = 0; i < 60 && !engineering_latest; ++i) {
+      buffer.consume(buffer.size());
+      ws.read(buffer);
+      auto latest = Json::parse(beast::buffers_to_string(buffer.data()));
+      require(latest["receiver_stream_id"] == engineering_stream,
+              "HTTP live engineering push retains broker identity");
+      if (!latest["events"].empty()) {
+        require(latest["events"].size() == 1 && latest["events"][0]["event_id"] == "13",
+                "HTTP live engineering event has the next broker ID");
+        engineering_latest = latest["events"][0]["values"]["rpm"] == 9001;
+      }
+    }
+    require(engineering_latest, "HTTP engineering push receives new telemetry");
+    ws.next_layer().close(ec);
     bool pushed_latest = false;
     for (int i = 0; i < 60 && !pushed_latest; ++i) {
       state_buffer.consume(state_buffer.size());

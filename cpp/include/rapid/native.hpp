@@ -248,6 +248,8 @@ class Runtime {
   // synthesis and its position->time traces were removed with #52: the v4 wire
   // now says explicitly whether a delta exists, and the Pi never invents one.
   LapBoundary lap_boundary_;
+  // Public engineering stream identity belongs to this broker, not the sender.
+  const std::string receiver_stream_id_ = unique_id();
   std::uint64_t next_event_ = 1;
   AccLapTransition acc_timing_;
   void sectors(Json &frame, int gap = 0);

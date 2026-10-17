@@ -32,7 +32,7 @@ const presets={
 'Engine / vehicle':['rpm','speed_kmh','g_x','g_y','g_z','wheel_speed_fl','wheel_speed_fr','wheel_speed_rl'],
 'Tyres':['pressure_fl','pressure_fr','pressure_rl','pressure_rr','core_temp_fl','core_temp_fr','core_temp_rl','core_temp_rr'],
 'Suspension':['suspension_fl','suspension_fr','suspension_rl','suspension_rr']};
-const channelNames=[...new Set(Object.values(presets).flat())];let selected=[...presets['Driver inputs']],paused=false,samples=[],lastMono=null;
+const channelNames=[...new Set(Object.values(presets).flat())];let selected=[...presets['Driver inputs']],paused=false,samples=[],lastReceived=null;
 const el=id=>document.getElementById(id), channels=el('channels'), preset=el('preset');
 Object.keys(presets).forEach(name=>preset.add(new Option(name,name)));
 function renderChoices(){channels.innerHTML='';channelNames.forEach(name=>{const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.checked=selected.includes(name);box.onchange=()=>{if(box.checked&&selected.length>=8){box.checked=false;return}selected=box.checked?[...selected,name]:selected.filter(x=>x!==name);draw()};label.append(box,document.createTextNode(' '+name));channels.append(label)})}
@@ -40,7 +40,59 @@ preset.onchange=()=>{selected=[...presets[preset.value]].slice(0,8);renderChoice
 el('pause').onclick=()=>{paused=!paused;el('pause').classList.toggle('active',paused);el('pause').textContent=paused?'Resume':'Pause'};
 el('upload').onchange=async()=>{const response=await fetch('/api/v1/session/upload',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:el('upload').checked})});if(!response.ok)el('upload').checked=!el('upload').checked};
 async function status(){try{const s=await (await fetch('/api/v1/status',{cache:'no-store'})).json();el('sim').textContent=s.simulator||'—';el('session').textContent=s.session_name||s.session_id||'—';el('lap').textContent=s.lap_number??'—';el('rate').textContent=s.sample_rate_hz?`${s.sample_rate_hz} Hz`:'—';el('loss').textContent=s.packets_lost||0;el('upload').checked=!!s.upload_after_session;el('upload-state').textContent=s.upload_state||''}catch(_){}}setInterval(status,1000);status();
-function connect(){const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/v1/live?history=30`);ws.onopen=()=>el('connection').textContent='live';ws.onclose=()=>{el('connection').textContent='reconnecting…';setTimeout(connect,1000)};ws.onmessage=e=>{if(paused)return;const packet=JSON.parse(e.data);for(const item of packet.events||[]){if(item.type==='sample'){lastMono=item.monotonic_us||lastMono;samples.push(item)}}const seconds=Number(el('window').value),cutoff=(lastMono||0)-seconds*1e6;samples=samples.filter(x=>!x.monotonic_us||x.monotonic_us>=cutoff);draw();if(packet.dropped)el('connection').textContent=`live (viewer skipped ${packet.dropped})`}}connect();
-function draw(){const canvas=el('plot'),dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect();canvas.width=Math.max(1,rect.width*dpr);canvas.height=Math.max(1,rect.height*dpr);const c=canvas.getContext('2d');c.scale(dpr,dpr);const w=rect.width,h=rect.height;c.fillStyle='#0d1217';c.fillRect(0,0,w,h);c.strokeStyle='#202b34';c.lineWidth=1;for(let i=1;i<10;i++){const x=w*i/10;c.beginPath();c.moveTo(x,0);c.lineTo(x,h);c.stroke()}selected.forEach((name,index)=>{const vals=samples.map(s=>[s.monotonic_us,s.values[name]]).filter(x=>Number.isFinite(x[1]));if(vals.length<2)return;let lo=Math.min(...vals.map(x=>x[1])),hi=Math.max(...vals.map(x=>x[1]));if(lo===hi){lo-=1;hi+=1}const t0=lastMono-Number(el('window').value)*1e6;c.strokeStyle=colors[index];c.lineWidth=1.4;c.beginPath();let started=false;vals.forEach(([t,v])=>{const x=(t-t0)/(Number(el('window').value)*1e6)*w,y=h-((v-lo)/(hi-lo)*.84+.08)*h;if(!started){c.moveTo(x,y);started=true}else c.lineTo(x,y)});c.stroke()});el('legend').innerHTML=selected.map((n,i)=>`<span><i class="dot" style="background:${colors[i]}"></i>${n}</span>`).join('')}
+// received_monotonic is seconds on the receiver clock, not the sender clock.
+// Only a server stream identity change establishes a new receiver epoch.
+// Browser arrival and backwards timestamps never establish an epoch.
+// Pause ignores packets, including epoch changes, until the next resumed packet.
+// Window changes still trim immediately while paused.
+// Legacy packets have best-effort dedup, but cannot prove receiver restart.
+let receiverStream=null;
+const sampleKeys=new Set(),acceptedKeys=new WeakMap(),sampleKey=(item,stream)=>
+  stream&&typeof item.event_id==='string'&&/^[1-9][0-9]*$/.test(item.event_id)
+    ?JSON.stringify([stream,item.event_id])
+    :JSON.stringify([item.received_monotonic,item.session_id,item.sequence,item.monotonic_us,item.values]);
+function trimHistory(){
+  const cutoff=(lastReceived??0)-Number(el('window').value);
+  samples=samples.filter(item=>{
+    if(item.received_monotonic>=cutoff)return true;
+    // Remove the key chosen on arrival, not one based on the current stream.
+    sampleKeys.delete(acceptedKeys.get(item));
+    return false;
+  });
+}
+el('window').onchange=()=>{trimHistory();draw()};
+let activeSocket=null;
+function connect(){
+  const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/v1/live?history=30`);
+  activeSocket=ws;
+  ws.onopen=()=>{if(ws===activeSocket)el('connection').textContent='live'};
+  ws.onclose=()=>{if(ws!==activeSocket)return;activeSocket=null;el('connection').textContent='reconnecting…';setTimeout(connect,1000)};
+  ws.onmessage=e=>{
+    if(ws!==activeSocket||paused)return;
+    const packet=JSON.parse(e.data);
+    const stream=typeof packet.receiver_stream_id==='string'&&/^[0-9a-f]{32}$/.test(packet.receiver_stream_id)
+      ?packet.receiver_stream_id:null;
+    if(stream&&stream!==receiverStream){
+      samples=[];sampleKeys.clear();lastReceived=null;
+      receiverStream=stream;
+    }
+    for(const item of packet.events||[]){
+      if(item.type==='sample'&&Number.isFinite(item.received_monotonic)){
+        const key=sampleKey(item,stream);
+        if(sampleKeys.has(key))continue; // Reconnect snapshots repeat broker events.
+        sampleKeys.add(key);
+        acceptedKeys.set(item,key);
+        lastReceived=Math.max(lastReceived??item.received_monotonic,item.received_monotonic);
+        samples.push(item);
+      }
+    }
+    trimHistory();
+    // A reconnect can fill an older gap as well as append newer samples.
+    samples.sort((a,b)=>a.received_monotonic-b.received_monotonic);
+    draw();
+    if(packet.dropped)el('connection').textContent=`live (viewer skipped ${packet.dropped})`;
+  };
+}connect();
+function draw(){const canvas=el('plot'),dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect();canvas.width=Math.max(1,rect.width*dpr);canvas.height=Math.max(1,rect.height*dpr);const c=canvas.getContext('2d');c.scale(dpr,dpr);const w=rect.width,h=rect.height;c.fillStyle='#0d1217';c.fillRect(0,0,w,h);c.strokeStyle='#202b34';c.lineWidth=1;for(let i=1;i<10;i++){const x=w*i/10;c.beginPath();c.moveTo(x,0);c.lineTo(x,h);c.stroke()}selected.forEach((name,index)=>{const vals=samples.map(s=>[s.received_monotonic,s.values[name]]).filter(x=>Number.isFinite(x[1]));if(vals.length<2)return;let lo=Math.min(...vals.map(x=>x[1])),hi=Math.max(...vals.map(x=>x[1]));if(lo===hi){lo-=1;hi+=1}const t0=lastReceived-Number(el('window').value);c.strokeStyle=colors[index];c.lineWidth=1.4;c.beginPath();let started=false;vals.forEach(([t,v])=>{const x=(t-t0)/Number(el('window').value)*w,y=h-((v-lo)/(hi-lo)*.84+.08)*h;if(!started){c.moveTo(x,y);started=true}else c.lineTo(x,y)});c.stroke()});el('legend').innerHTML=selected.map((n,i)=>`<span><i class="dot" style="background:${colors[i]}"></i>${n}</span>`).join('')}
 addEventListener('resize',draw);
 </script></body></html>
